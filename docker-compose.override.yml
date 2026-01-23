@@ -1,0 +1,15 @@
+# docker-compose.override.yml
+services:
+  test:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    command: pytest --maxfail=1 --disable-warnings -v --html=/app/test-reports/report.html --self-contained-html
+    volumes:
+      - ./test-reports:/app/test-reports
+    environment:
+      FLASK_ENV: testing
+    env_file:
+      - .env
+    depends_on:
+      - app
