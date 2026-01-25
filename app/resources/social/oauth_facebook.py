@@ -1,5 +1,4 @@
-import os
-import secrets
+import os, json, secrets
 from xmlrpc import client
 from flask.views import MethodView
 import requests
@@ -91,7 +90,7 @@ class FacebookOauthResource(MethodView):
 
         if not code or not state:
             Log.info(f"{log_tag} Missing code/state in callback")
-            return jsonify({"success": False, "message": "Missing required OAuth parameters"}), 400
+            return jsonify({"success": False, "message": "Missing required OAuth parameters"}), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         # Validate state from Redis
         try:
@@ -99,12 +98,12 @@ class FacebookOauthResource(MethodView):
             state_exists = get_redis(state_key)  # redis client
             if not state_exists:
                 Log.info(f"{log_tag} Invalid/expired state: {state}")
-                return jsonify({"success": False, "message": "Invalid or expired OAuth state"}), 400
+                return jsonify({"success": False, "message": "Invalid or expired OAuth state"}), HTTP_STATUS_CODES["BAD_REQUEST"]
             # one-time use
             remove_redis(state_key)
         except Exception as e:
             Log.info(f"{log_tag} Error validating state in Redis: {e}")
-            return jsonify({"success": False, "message": "Could not validate OAuth state"}), 500
+            return jsonify({"success": False, "message": "Could not validate OAuth state"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
         redirect_uri = os.getenv("FACEBOOK_REDIRECT_URI")
         meta_app_id = os.getenv("META_APP_ID")
@@ -112,10 +111,10 @@ class FacebookOauthResource(MethodView):
 
         if not redirect_uri:
             Log.info(f"{log_tag} FACEBOOK_REDIRECT_URI not set")
-            return jsonify({"success": False, "message": "FACEBOOK_REDIRECT_URI not set"}), 500
+            return jsonify({"success": False, "message": "FACEBOOK_REDIRECT_URI not set"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
         if not meta_app_id or not meta_app_secret:
             Log.info(f"{log_tag} META_APP_ID or META_APP_SECRET not set")
-            return jsonify({"success": False, "message": "META_APP_ID or META_APP_SECRET not set"}), 500
+            return jsonify({"success": False, "message": "META_APP_ID or META_APP_SECRET not set"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
         # Exchange code for access token
         token_url = os.getenv("FACEBOOK_GRAPH_OAUTH_ACCESS_TOKEN_URL", "https://graph.facebook.com/v20.0/oauth/access_token")
@@ -133,7 +132,7 @@ class FacebookOauthResource(MethodView):
             Log.info(f"{log_tag} Token exchange request failed: {e}")
             return jsonify({"success": False, "message": "Token exchange failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-        if resp.status_code != 200:
+        if resp.status_code != HTTP_STATUS_CODES["OK"]:
             Log.info(f"{log_tag} Meta token exchange error: {data}")
             return jsonify({
                 "success": False,
@@ -148,17 +147,19 @@ class FacebookOauthResource(MethodView):
             user_access_token = data.get("access_token")
             pages = FacebookAdapter.list_pages(user_access_token)
 
-            data["pages"] = pages
+            # data["pages"] = pages
             
-            return jsonify({
-                "success": True,
-                "message": "OAuth successful",
-                "data": data,
-                "pages": [
-                    {"page_id": p["id"], "name": p.get("name")} for p in pages
-                ]
-            }), HTTP_STATUS_CODES["OK"]
+            # Create a short-lived selection key
+            selection_key = secrets.token_urlsafe(24)
+
+            # Save pages in Redis for 5 minutes
+            redis_key = f"fb_pages:{selection_key}"
+            set_redis_with_expiry(redis_key, 300, json.dumps(pages)) # 5 minutes expiry
             
+            # Redirect to frontend (no token in URL)
+            frontend_url = os.getenv("FRONT_END_BASE_URL")
+            return redirect(f"{frontend_url}/connect/facebook?selection_key={selection_key}")
+ 
         except Exception as e:
             Log.info(f"{log_tag} Failed to fetch user pages: {e}")
             return jsonify({
