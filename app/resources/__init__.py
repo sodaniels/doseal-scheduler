@@ -62,6 +62,7 @@ from .doseal.billpay_resource import blp_billpay
 #socials
 from .social.oauth_facebook import blp_fb_oauth
 from .social.facebook_webhook import blp_fb_webhook
+from .social.facebook_connect_page import blp_fb_connect
 
 
 __all__ = [
@@ -78,6 +79,7 @@ __all__ = [
     #-------------------
     "blp_fb_oauth",
     "blp_fb_webhook",
+    "blp_fb_connect",
     #-------------------
     #ADMIN ROUTES
     #-------------------

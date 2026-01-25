@@ -14,7 +14,11 @@ from ...extensions import db as db_ext
 from ...utils.redis import (
     get_redis, set_redis_with_expiry, remove_redis, set_redis
 )
+from ...constants.service_code import (
+    HTTP_STATUS_CODES,
+)
 from ...resources.doseal.admin.admin_business_resource import token_required
+from ...services.social.adapters.facebook_adapter import FacebookAdapter
 
 
 blp_fb_oauth = Blueprint("fb_oauth", __name__)
@@ -80,7 +84,7 @@ class FacebookOauthResource(MethodView):
                 "error": error,
                 "error_reason": error_reason,
                 "error_description": error_description
-            }), 400
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         code = request.args.get("code")
         state = request.args.get("state")
@@ -114,7 +118,7 @@ class FacebookOauthResource(MethodView):
             return jsonify({"success": False, "message": "META_APP_ID or META_APP_SECRET not set"}), 500
 
         # Exchange code for access token
-        token_url = "https://graph.facebook.com/v20.0/oauth/access_token"
+        token_url = os.getenv("FACEBOOK_GRAPH_OAUTH_ACCESS_TOKEN_URL", "https://graph.facebook.com/v20.0/oauth/access_token")
         payload = {
             "client_id": meta_app_id,
             "client_secret": meta_app_secret,
@@ -127,7 +131,7 @@ class FacebookOauthResource(MethodView):
             data = resp.json()
         except Exception as e:
             Log.info(f"{log_tag} Token exchange request failed: {e}")
-            return jsonify({"success": False, "message": "Token exchange failed"}), 500
+            return jsonify({"success": False, "message": "Token exchange failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
         if resp.status_code != 200:
             Log.info(f"{log_tag} Meta token exchange error: {data}")
@@ -135,12 +139,30 @@ class FacebookOauthResource(MethodView):
                 "success": False,
                 "message": "Token exchange failed",
                 "meta_error": data
-            }), 500
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
         Log.info(f"{log_tag} OAuth successful - token exchanged")
-        return jsonify({
-            "success": True,
-            "message": "OAuth successful",
-            "data": data
-        }), 200 
+        
+        try:
+            # Fetch user pages
+            user_access_token = data.get("access_token")
+            pages = FacebookAdapter.list_pages(user_access_token)
+
+            data["pages"] = pages
+            
+            return jsonify({
+                "success": True,
+                "message": "OAuth successful",
+                "data": data,
+                "pages": [
+                    {"page_id": p["id"], "name": p.get("name")} for p in pages
+                ]
+            }), HTTP_STATUS_CODES["OK"]
+            
+        except Exception as e:
+            Log.info(f"{log_tag} Failed to fetch user pages: {e}")
+            return jsonify({
+                "success": False,
+                "message": "Could not fetch user pages after OAuth"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
    

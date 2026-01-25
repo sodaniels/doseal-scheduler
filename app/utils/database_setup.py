@@ -8,6 +8,8 @@ from ..models.admin.payment import Payment
 from ..models.admin.subscription_model import Subscription
 from ..models.admin.package_model import Package
 from ..models.admin.setup_model import Outlet
+
+from ..models.social.social_account import SocialAccount
 from ..utils.logger import Log
 
 INDEXES_CREATED_FLAG = ".indexes_created"
@@ -45,6 +47,9 @@ def setup_database_indexes():
         Subscription.create_indexes()
         Package.create_indexes()
         Outlet.create_indexes()
+        
+        #social accounts
+        SocialAccount.ensure_indexes()
         
         # Mark as completed
         mark_indexes_created()
