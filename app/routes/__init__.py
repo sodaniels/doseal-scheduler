@@ -63,6 +63,9 @@ from ..resources import (
     blp_subscriber_beneficiary,
     blp_subscriber_transaction,
     blp_billpay,
+    #socials
+    blp_fb_oauth,
+    blp_fb_webhook
 )
 
 
@@ -83,7 +86,7 @@ from app.constants.service_code import ALLOWED_IPS
 
 
 #Subscrivber Routes 
-def register_subscriber_routes(app, api):
+def register_social_routes(app, api):
     blueprints = [
         blp_preauth,
         blp_subscriber_registration,
@@ -92,6 +95,9 @@ def register_subscriber_routes(app, api):
         blp_subscriber_beneficiary,
         blp_subscriber_transaction,
         blp_billpay,
+        blp_fb_oauth,
+        blp_fb_webhook
+        
     ]
 
     for blueprint in blueprints:

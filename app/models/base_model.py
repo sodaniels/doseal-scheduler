@@ -627,85 +627,118 @@ class BaseModel:
 
 
     @classmethod
-    def paginate(cls, query=None, page=None, per_page=None, sort=None):
+    def paginate(
+        cls,
+        query=None,
+        page=None,
+        per_page=None,
+        sort=None,
+        sort_by=None,
+        sort_order=None,
+        stringify_objectids=True,
+    ):
         """
         Generic pagination helper for MongoDB collections.
 
         Args:
             query: dict MongoDB filter
-            page: int page number (1-based). Defaults to 1.
-            per_page: int items per page. Defaults to 50.
+            page: int page number (1-based). Defaults to env DEFAULT_PAGINATION_PAGE or 1.
+            per_page: int items per page. Defaults to env DEFAULT_PAGINATION_PER_PAGE or 50.
             sort:
-                - None -> sort by ("created_at", -1) if field exists
-                - list of (field, direction) tuples, e.g. [("created_at", -1)]
-                - single (field, direction) tuple, e.g. ("created_at", -1)
+                - None -> uses sort_by/sort_order if given, else created_at desc
+                - tuple -> ("field", 1|-1)
+                - list[tuple] -> [("field", 1|-1), ...]
+            sort_by: convenience single field sort (ignored if sort provided)
+            sort_order: 1 (asc) or -1 (desc). Default -1
+            stringify_objectids: convert ObjectId fields to str for JSON safety
 
         Returns:
             dict:
             {
                 "items": [...],
-                "total_count": <int>,
-                "total_pages": <int>,
-                "current_page": <int>,
-                "per_page": <int>,
+                "total_count": int,
+                "total_pages": int,
+                "current_page": int,
+                "per_page": int,
             }
         """
         log_tag = f"[base_model.py][{cls.__name__}][paginate]"
 
-        # Normalise query
         if query is None:
             query = {}
 
-        # Normalise pagination
-        try:
-            page_int = int(page) if page is not None else 1
-        except (TypeError, ValueError):
-            page_int = 1
+        default_page = int(os.getenv("DEFAULT_PAGINATION_PAGE", 1))
+        default_per_page = int(os.getenv("DEFAULT_PAGINATION_PER_PAGE", 50))
 
         try:
-            per_page_int = int(per_page) if per_page is not None else 50
+            page_int = int(page) if page is not None else default_page
         except (TypeError, ValueError):
-            per_page_int = 50
+            page_int = default_page
+
+        try:
+            per_page_int = int(per_page) if per_page is not None else default_per_page
+        except (TypeError, ValueError):
+            per_page_int = default_per_page
 
         if page_int < 1:
             page_int = 1
         if per_page_int <= 0:
-            per_page_int = 50
+            per_page_int = default_per_page
+
+        # Build sort_spec
+        sort_spec = None
+
+        if sort is not None:
+            if isinstance(sort, tuple):
+                sort_spec = [sort]
+            elif isinstance(sort, list):
+                sort_spec = sort
+            else:
+                # Unknown sort type -> fallback
+                sort_spec = [("created_at", -1)]
+        else:
+            if sort_by:
+                so = -1
+                if sort_order in (1, -1):
+                    so = sort_order
+                sort_spec = [(sort_by, so)]
+            else:
+                sort_spec = [("created_at", -1)]
 
         try:
             collection = db.get_collection(cls.collection_name)
 
-            # Total count
             total_count = collection.count_documents(query)
 
-            # Build cursor
             cursor = collection.find(query)
-
-            # Handle sort
-            if sort is None:
-                # Default sort by created_at desc if you use that everywhere
-                sort_spec = [("created_at", -1)]
-            elif isinstance(sort, tuple):
-                sort_spec = [sort]
-            else:
-                # Expect list of tuples
-                sort_spec = sort
 
             if sort_spec:
                 cursor = cursor.sort(sort_spec)
 
-            # Pagination window
             cursor = cursor.skip((page_int - 1) * per_page_int).limit(per_page_int)
 
             items = list(cursor)
 
-            # Compute total_pages
-            if per_page_int > 0:
-                total_pages = (total_count + per_page_int - 1) // per_page_int
-            else:
-                total_pages = 1
+            if stringify_objectids:
+                def _stringify(v):
+                    if isinstance(v, ObjectId):
+                        return str(v)
+                    if isinstance(v, dict):
+                        return {kk: _stringify(vv) for kk, vv in v.items()}
+                    if isinstance(v, list):
+                        return [_stringify(x) for x in v]
+                    return v
 
-            result = {
+                items = [_stringify(doc) for doc in items]
+
+            total_pages = (total_count + per_page_int - 1) // per_page_int if per_page_int else 1
+
+            Log.info(
+                f"{log_tag} query={query} page={page_int} per_page={per_page_int} "
+                f"sort={sort_spec} returned={len(items)} total={total_count}"
+            )
+
+            return {
                 "items": items,
                 "total_count": total_count,
                 "total_pages": total_pages,
@@ -713,14 +746,8 @@ class BaseModel:
                 "per_page": per_page_int,
             }
 
-            Log.info(
-                f"{log_tag} query={query} page={page_int} per_page={per_page_int} "
-                f"returned {len(items)} items (total_count={total_count})"
-            )
-            return result
-
         except Exception as e:
-            Log.error(f"{log_tag} Error: {str(e)}")
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
             return {
                 "items": [],
                 "total_count": 0,
@@ -728,7 +755,6 @@ class BaseModel:
                 "current_page": page_int,
                 "per_page": per_page_int,
             }
-
 
 
 

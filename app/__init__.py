@@ -14,7 +14,7 @@ from .utils.database_setup import setup_database_indexes
 
 from .config import load_config
 from .routes import (
-    register_subscriber_routes,
+    register_social_routes,
     register_admin_routes,
 )
 from .middleware.access_mode import detect_access_mode
@@ -27,7 +27,7 @@ from .middleware.subscription_scheduler import run_scheduled_subscription_activa
 
 
 # instantiate subscribers app
-def create_mto_subscriber_app():
+def create_social_app():
     app = Flask(__name__)
     
     #get actual client IP
@@ -74,7 +74,12 @@ def create_mto_subscriber_app():
     app.before_request(detect_access_mode)
 
     # Register all blueprints using `api.register_blueprint(...)`
-    register_subscriber_routes(app, api)
+    register_social_routes(app, api)
+    
+    @app.get("/health")
+    def health():
+        return {"ok": True}
+
 
     return app
 

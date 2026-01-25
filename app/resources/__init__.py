@@ -59,6 +59,10 @@ from .doseal.subscribers.subscriber_benefiary_resource import blp_subscriber_ben
 from .doseal.subscribers.subscriber_transaction_resource import blp_subscriber_transaction
 from .doseal.billpay_resource import blp_billpay
 
+#socials
+from .social.oauth_facebook import blp_fb_oauth
+from .social.facebook_webhook import blp_fb_webhook
+
 
 __all__ = [
     #-------------------
@@ -69,6 +73,11 @@ __all__ = [
     "blp_subscriber_beneficiary",
     "blp_subscriber_transaction",
     "blp_billpay",
+    #-------------------
+    #SOCIALS ROUTES
+    #-------------------
+    "blp_fb_oauth",
+    "blp_fb_webhook",
     #-------------------
     #ADMIN ROUTES
     #-------------------
