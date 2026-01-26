@@ -10,6 +10,7 @@ from ..models.admin.package_model import Package
 from ..models.admin.setup_model import Outlet
 
 from ..models.social.social_account import SocialAccount
+from ..models.social.scheduled_post import ScheduledPost
 from ..utils.logger import Log
 
 INDEXES_CREATED_FLAG = ".indexes_created"
@@ -50,6 +51,7 @@ def setup_database_indexes():
         
         #social accounts
         SocialAccount.ensure_indexes()
+        ScheduledPost.ensure_indexes()
         
         # Mark as completed
         mark_indexes_created()

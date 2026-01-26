@@ -10,7 +10,7 @@ from flask import request, redirect, jsonify, g
 
 from ...utils.logger import Log
 from ...constants.service_code import HTTP_STATUS_CODES
-from ...resources.doseal.admin.admin_business_resource import token_required
+from ..doseal.admin.admin_business_resource import token_required
 
 from ...utils.redis import (
     get_redis,

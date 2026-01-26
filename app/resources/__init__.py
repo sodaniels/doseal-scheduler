@@ -60,9 +60,10 @@ from .doseal.subscribers.subscriber_transaction_resource import blp_subscriber_t
 from .doseal.billpay_resource import blp_billpay
 
 #socials
-from .social.oauth_facebook import blp_fb_oauth
-from .social.facebook_webhook import blp_fb_webhook
+from .social.oauth_facebook_resource import blp_fb_oauth
+from .social.facebook_webhook_resource import blp_fb_webhook
 from .social.facebook_connect_page import blp_fb_connect
+from .social.scheduled_posts_resource import blp_scheduled_posts
 
 
 __all__ = [
@@ -80,6 +81,7 @@ __all__ = [
     "blp_fb_oauth",
     "blp_fb_webhook",
     "blp_fb_connect",
+    "blp_scheduled_posts",
     #-------------------
     #ADMIN ROUTES
     #-------------------

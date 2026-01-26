@@ -1,85 +1,98 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
-
 from ..base_model import BaseModel
 from ...extensions import db as db_ext
+
 
 class ScheduledPost(BaseModel):
     collection_name = "scheduled_posts"
 
-    STATUS_SCHEDULED = "Scheduled"
-    STATUS_PROCESSING = "Processing"
-    STATUS_POSTED = "Posted"
-    STATUS_FAILED = "Failed"
+    STATUS_DRAFT = "draft"
+    STATUS_SCHEDULED = "scheduled"
+    STATUS_PUBLISHING = "publishing"
+    STATUS_PUBLISHED = "published"
+    STATUS_FAILED = "failed"
+    STATUS_CANCELLED = "cancelled"
 
     def __init__(
         self,
         business_id,
         user__id,
-        caption,
-        platforms,
-        scheduled_for,
-        media=None,
-        link=None,
-        extra=None,
+        content,
+        scheduled_at_utc,
+        destinations,
+        platform="multi",
         status=None,
-        results=None,
+        provider_results=None,
         error=None,
+        created_by=None,
         **kwargs
     ):
-        super().__init__(business_id=business_id, user__id=user__id, **kwargs)
-        self.caption = caption
-        self.platforms = platforms
-        self.scheduled_for = scheduled_for  # datetime (UTC)
-        self.media = media or {"type": "none"}  # {"type":"image|video|none","url":"...","file_path":"..."}
-        self.link = link
-        self.extra = extra or {}
+        super().__init__(business_id=business_id, user__id=user__id, created_by=created_by, **kwargs)
+
+        self.platform = platform  # "facebook" or "multi"
+
+        # post content
+        self.content = content  # {"text": "...", "link": "...", "media": {...optional...}}
+
+        # Always store UTC
+        self.scheduled_at_utc = scheduled_at_utc
+
+        # Where to publish: list of dicts
+        # Example: [{"platform":"facebook","destination_type":"page","destination_id":"123"}]
+        self.destinations = destinations
+
         self.status = status or self.STATUS_SCHEDULED
-        self.results = results or {}
+
+        # results per destination
+        self.provider_results = provider_results or []  # [{"platform":"facebook","destination_id":"..","provider_post_id":"..","raw":{}}]
         self.error = error
 
-        self.created_at = datetime.utcnow()
-        self.updated_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
 
     def to_dict(self):
         return {
             "business_id": self.business_id,
             "user__id": self.user__id,
-            "caption": self.caption,
-            "platforms": self.platforms,
-            "scheduled_for": self.scheduled_for,
-            "media": self.media,
-            "link": self.link,
-            "extra": self.extra,
+            "platform": self.platform,
+
+            "content": self.content,
+            "scheduled_at_utc": self.scheduled_at_utc,
+            "destinations": self.destinations,
+
             "status": self.status,
-            "results": self.results,
+            "provider_results": self.provider_results,
             "error": self.error,
+
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
 
     @classmethod
-    def get_by_id(cls, post_id, business_id):
+    def get_due_posts(cls, limit=50):
+        """Fetch scheduled posts that are due now (UTC)."""
         col = db_ext.get_collection(cls.collection_name)
-        doc = col.find_one({"_id": ObjectId(post_id), "business_id": ObjectId(business_id)})
-        if not doc:
-            return None
-        doc["_id"] = str(doc["_id"])
-        doc["business_id"] = str(doc["business_id"])
-        doc["user__id"] = str(doc["user__id"])
-        return doc
+        now = datetime.now(timezone.utc)
+        return list(col.find({
+            "status": cls.STATUS_SCHEDULED,
+            "scheduled_at_utc": {"$lte": now},
+        }).sort("scheduled_at_utc", 1).limit(limit))
 
     @classmethod
-    def set_status(cls, post_id, business_id, status, results=None, error=None):
-        update_doc = {"status": status, "updated_at": datetime.utcnow()}
-        if results is not None:
-            update_doc["results"] = results
-        if error is not None:
-            update_doc["error"] = error
-
+    def update_status(cls, post_id, business_id, status, **extra):
         col = db_ext.get_collection(cls.collection_name)
+        extra["status"] = status
+        extra["updated_at"] = datetime.now(timezone.utc)
         res = col.update_one(
             {"_id": ObjectId(post_id), "business_id": ObjectId(business_id)},
-            {"$set": update_doc}
+            {"$set": extra}
         )
         return res.modified_count > 0
+
+    @classmethod
+    def ensure_indexes(cls):
+        col = db_ext.get_collection(cls.collection_name)
+        col.create_index([("status", 1), ("scheduled_at_utc", 1)])
+        col.create_index([("business_id", 1), ("user__id", 1), ("created_at", -1)])
+        return True
