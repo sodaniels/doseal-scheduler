@@ -3,6 +3,7 @@ from flask.views import MethodView
 from flask import request, jsonify, g
 from flask_smorest import Blueprint
 
+from ...extensions.queue import scheduler
 from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 from ...models.social.scheduled_post import ScheduledPost
@@ -56,8 +57,23 @@ class CreateScheduledPostResource(MethodView):
         )
 
         post_id = post.save()
-        return jsonify({
-            "success": True,
-            "message": "Post scheduled",
-            "data": {"post_id": post_id}
-        }), HTTP_STATUS_CODES["OK"]
+        
+        if post_id:
+            Log.info(f"[CreateScheduledPostResource] Scheduled post_id={post_id} for business_id={business_id} at {scheduled_at_utc.isoformat()} UTC")
+            job = scheduler.enqueue_at(
+                scheduled_at_utc,
+                "app.services.social.jobs.publish_scheduled_post",
+                post_id,
+            )
+            Log.info(f"[schedule] queued job_id={job.id} at {scheduled_at_utc}")
+            
+            return jsonify({
+                "success": True,
+                "message": "Post scheduled",
+                "data": {"post_id": post_id}
+            }), HTTP_STATUS_CODES["OK"]
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to schedule post"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]

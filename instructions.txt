@@ -2,4 +2,17 @@
 ## pytest --log-cli-level=INFO --html=report.html --self-contained-html
 
 
+#starting the worker dashboard
+rq-dashboard
+http://localhost:9181 #viewing the worker dashboard
+
+# Option 1 — Start multiple worker processes (simple & effective)
+rq worker publish &
+rq worker publish &
+rq worker publish &
+
+
+# Option 3 — Docker / K8s (best long-term)
+docker run myapp rq worker publish
+
 

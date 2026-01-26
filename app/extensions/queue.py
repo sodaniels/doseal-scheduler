@@ -1,11 +1,8 @@
-import os
-from redis import Redis
 from rq import Queue
 from rq_scheduler import Scheduler
+from datetime import timedelta
 
-def get_redis():
-    return Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+from .redis_conn import redis_client
 
-redis_conn = get_redis()
-queue = Queue("social_publish", connection=redis_conn, default_timeout=900)
-scheduler = Scheduler(queue=queue, connection=redis_conn)
+publish_queue = Queue("publish", connection=redis_client)
+scheduler = Scheduler(queue=publish_queue, connection=redis_client)
