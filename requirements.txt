@@ -53,13 +53,15 @@ pytest-html
 # for type checking
 
 
-rq==1.16.2
-rq-scheduler==0.13.1
+rq==2.2.0
+rq-scheduler==0.14.0
+rq-dashboard>=0.7
 google-api-python-client==2.118.0
 google-auth==2.27.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.0
-rq-dashboard
+
+
 
 
 

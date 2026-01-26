@@ -4,15 +4,15 @@ from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
 from ...utils.logger import Log
 
-def publish_scheduled_post(post_id: str):
+def publish_scheduled_post(post_id: str, business_id: str):
     app = create_app()
     with app.app_context():
 
-        post = ScheduledPost.get_by_id(post_id)
+        post = ScheduledPost.get_by_id(post_id, business_id, is_logging_in=True)
         if not post:
             return
 
-        log_tag = f"[jobs.py][publish_scheduled_post][{post_id}]"
+        log_tag = f"[jobs.py][publish_scheduled_post][{business_id}][{post_id}]"
 
         try:
             ScheduledPost.update_status(post_id, post["business_id"], ScheduledPost.STATUS_PUBLISHING)

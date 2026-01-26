@@ -6,13 +6,17 @@
 rq-dashboard
 http://localhost:9181 #viewing the worker dashboard
 
-# Option 1 — Start multiple worker processes (simple & effective)
-rq worker publish &
-rq worker publish &
-rq worker publish &
+# running the job locally
 
+#API server
+#Open new terminal:
+venv/bin/gunicorn wsgi:application -b 0.0.0.0:9090 --reload
 
-# Option 3 — Docker / K8s (best long-term)
-docker run myapp rq worker publish
+#RQ Worker (publishing jobs)
+venv/bin/rq worker publish
+
+#RQ Scheduler
+#Third terminal:
+venv/bin/rqscheduler
 
 

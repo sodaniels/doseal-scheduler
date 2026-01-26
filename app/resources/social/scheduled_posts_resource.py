@@ -64,6 +64,7 @@ class CreateScheduledPostResource(MethodView):
                 scheduled_at_utc,
                 "app.services.social.jobs.publish_scheduled_post",
                 post_id,
+                business_id
             )
             Log.info(f"[schedule] queued job_id={job.id} at {scheduled_at_utc}")
             
