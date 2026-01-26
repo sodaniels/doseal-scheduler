@@ -32,3 +32,23 @@ def upload_image_file(file_storage, folder: str, public_id: str | None = None) -
         "public_id": result.get("public_id"),
         "raw": result
     }
+
+def upload_video_file(file_obj, folder: str, public_id: str):
+    """
+    Uploads a video file to Cloudinary and returns:
+      {"url": <secure_url>, "public_id": <public_id>, "raw": <full response>}
+    """
+    res = cloudinary.uploader.upload(
+        file_obj,
+        folder=folder,
+        public_id=public_id,
+        resource_type="video",
+        overwrite=True,
+        secure=True,
+    )
+
+    return {
+        "url": res.get("secure_url") or res.get("url"),
+        "public_id": res.get("public_id"),
+        "raw": res,
+    }

@@ -52,3 +52,25 @@ class FacebookAdapter:
         if resp.status_code != HTTP_STATUS_CODES["OK"]:
             raise Exception(f"Facebook photo publish failed: {data}")
         return data
+
+
+    @staticmethod
+    def publish_page_video(page_id: str, page_access_token: str, video_url: str, description: str = "") -> dict:
+        """
+        POST /{page_id}/videos with file_url
+        """
+        url = f"{FacebookAdapter.GRAPH_BASE}/{page_id}/videos"
+        payload = {
+            "file_url": video_url,
+            "description": description or "",
+            "access_token": page_access_token,
+        }
+        resp = requests.post(url, data=payload, timeout=120)
+        data = resp.json()
+
+        # Facebook sometimes returns 200 with an "error" object; handle both
+        if resp.status_code != HTTP_STATUS_CODES["OK"] or data.get("error"):
+            raise Exception(f"Facebook video publish failed: {data}")
+
+        # returns {"id": "<video_id>"} (and sometimes other fields)
+        return data

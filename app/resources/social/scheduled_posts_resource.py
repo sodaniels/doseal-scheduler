@@ -12,25 +12,14 @@ from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 from ...models.social.scheduled_post import ScheduledPost
 from ...utils.logger import Log
-from ...utils.media.cloudinary_client import upload_image_file
+from ...utils.media.cloudinary_client import (
+    upload_image_file, upload_video_file
+)
 
 blp_scheduled_posts = Blueprint("scheduled_posts", __name__)
 
 
-def _normalize_image_media(media):
-    """
-    Accepts:
-      - None
-      - dict (single image)
-      - list[dict] (multiple images)
-
-    Returns:
-      - None
-      - dict (single)
-      - list[dict] (multiple)
-
-    Stored fields are the ones you actually need later for publishing + auditing.
-    """
+def _normalize_media(media):
     if not media:
         return None
 
@@ -40,19 +29,26 @@ def _normalize_image_media(media):
 
         asset_id = m.get("asset_id") or m.get("public_id")
         url = m.get("url")
+        asset_type = (m.get("asset_type") or "").lower()
+
         if not asset_id or not url:
             return {}
+
+        if asset_type not in ("image", "video"):
+            # default if missing
+            asset_type = "image"
 
         return {
             "asset_id": asset_id,
             "public_id": m.get("public_id") or asset_id,
             "asset_provider": m.get("asset_provider") or "cloudinary",
-            "asset_type": m.get("asset_type") or "image",
+            "asset_type": asset_type,
             "url": url,
             "width": m.get("width"),
             "height": m.get("height"),
             "format": m.get("format"),
             "bytes": m.get("bytes"),
+            "duration": m.get("duration"),  # video
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -66,7 +62,6 @@ def _normalize_image_media(media):
         return cleaned if cleaned else None
 
     return None
-
 
 @blp_scheduled_posts.route("/social/media/upload-image", methods=["POST"])
 class UploadImageResource(MethodView):
@@ -120,7 +115,59 @@ class UploadImageResource(MethodView):
             Log.info(f"{log_tag} upload failed: {e}")
             return jsonify({"success": False, "message": "upload failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+@blp_scheduled_posts.route("/social/media/upload-video", methods=["POST"])
+class UploadVideoResource(MethodView):
+    @token_required
+    def post(self):
+        log_tag = "[scheduled_posts_resource.py][UploadVideoResource][post]"
+        user = g.get("current_user", {}) or {}
 
+        if "video" not in request.files:
+            return jsonify({"success": False, "message": "video file is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        video = request.files["video"]
+        if not video or video.filename == "":
+            return jsonify({"success": False, "message": "invalid video"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # basic content-type check (can be video/mp4, video/quicktime, etc.)
+        if not (video.mimetype or "").startswith("video/"):
+            return jsonify({"success": False, "message": "file must be a video"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        business_id = str(user.get("business_id"))
+        user_id = str(user.get("_id"))
+        if not business_id or not user_id:
+            return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        folder = f"social/{business_id}/{user_id}"
+        public_id = f"{uuid.uuid4().hex}"
+
+        try:
+            # IMPORTANT: your cloudinary client must support resource_type="video"
+            uploaded = upload_video_file(video, folder=folder, public_id=public_id)
+
+            return jsonify({
+                "success": True,
+                "message": "uploaded",
+                "data": {
+                    "asset_id": uploaded["public_id"],
+                    "public_id": uploaded["public_id"],
+                    "asset_provider": "cloudinary",
+                    "asset_type": "video",
+                    "url": uploaded["url"],
+
+                    # optional metadata
+                    "format": uploaded["raw"].get("format"),
+                    "bytes": uploaded["raw"].get("bytes"),
+                    "duration": uploaded["raw"].get("duration"),
+                    "width": uploaded["raw"].get("width"),
+                    "height": uploaded["raw"].get("height"),
+                }
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.info(f"{log_tag} upload failed: {e}")
+            return jsonify({"success": False, "message": "upload failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+        
 @blp_scheduled_posts.route("/social/scheduled-posts", methods=["POST"])
 class CreateScheduledPostResource(MethodView):
     @token_required
@@ -175,7 +222,7 @@ class CreateScheduledPostResource(MethodView):
         media_in = body.get("media")
         if media_in is None:
             media_in = (body.get("content") or {}).get("media")
-        normalized_media = _normalize_image_media(media_in)
+        normalized_media = _normalize_media(media_in)
 
         # build doc
         post_doc = {
