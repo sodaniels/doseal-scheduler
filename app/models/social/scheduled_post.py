@@ -15,6 +15,7 @@ class ScheduledPost(BaseModel):
     STATUS_PUBLISHING = "publishing"
     STATUS_PUBLISHED = "published"
     STATUS_FAILED = "failed"
+    STATUS_PARTIAL = "partial"
     STATUS_CANCELLED = "cancelled"
 
     def __init__(
@@ -107,25 +108,75 @@ class ScheduledPost(BaseModel):
     def create(cls, doc: dict):
         """
         Insert a scheduled post document into MongoDB.
+
         Expects doc to include:
-          business_id, user__id, content, scheduled_at_utc, destinations
+        business_id, user__id, content, scheduled_at_utc, destinations
         """
+
         col = db_ext.get_collection(cls.collection_name)
         insert_doc = dict(doc or {})
 
+        # --------------------------------------------------
+        # REQUIRED OWNER FIELDS
+        # --------------------------------------------------
         if not insert_doc.get("business_id") or not insert_doc.get("user__id"):
             raise ValueError("business_id and user__id are required")
 
         insert_doc["business_id"] = ObjectId(str(insert_doc["business_id"]))
         insert_doc["user__id"] = ObjectId(str(insert_doc["user__id"]))
 
-        # normalize scheduled time
+        # --------------------------------------------------
+        # SCHEDULE TIME
+        # --------------------------------------------------
         insert_doc["scheduled_at_utc"] = cls._parse_dt(insert_doc.get("scheduled_at_utc"))
         if not insert_doc["scheduled_at_utc"]:
             raise ValueError("scheduled_at_utc is required and must be ISO string or datetime")
 
+        # --------------------------------------------------
+        # NORMALIZE CONTENT / MEDIA
+        # --------------------------------------------------
+        content = insert_doc.get("content") or {}
+        media = content.get("media")
+
+        # normalize to list
+        if isinstance(media, dict):
+            media = [media]
+        elif not isinstance(media, list):
+            media = []
+
+        normalized_media = []
+        for m in media:
+            if not isinstance(m, dict):
+                continue
+
+            asset_type = (m.get("asset_type") or "").lower()
+
+            media_doc = {
+                "asset_id": m.get("asset_id") or m.get("public_id"),
+                "public_id": m.get("public_id"),
+                "asset_provider": m.get("asset_provider") or "cloudinary",
+                "asset_type": asset_type,
+                "url": m.get("url"),
+
+                # metadata (VERY important for reels)
+                "bytes": m.get("bytes"),
+                "duration": m.get("duration"),
+                "format": m.get("format"),
+                "width": m.get("width"),
+                "height": m.get("height"),
+
+                "created_at": m.get("created_at") or datetime.now(timezone.utc),
+            }
+
+            normalized_media.append(media_doc)
+
+        content["media"] = normalized_media or None
+        insert_doc["content"] = content
+
+        # --------------------------------------------------
+        # DEFAULT FIELDS
+        # --------------------------------------------------
         insert_doc.setdefault("platform", "multi")
-        insert_doc.setdefault("content", {})
         insert_doc.setdefault("destinations", [])
         insert_doc.setdefault("status", cls.STATUS_SCHEDULED)
 
@@ -135,6 +186,9 @@ class ScheduledPost(BaseModel):
         insert_doc.setdefault("created_at", now)
         insert_doc.setdefault("updated_at", now)
 
+        # --------------------------------------------------
+        # INSERT
+        # --------------------------------------------------
         res = col.insert_one(insert_doc)
         insert_doc["_id"] = res.inserted_id
 

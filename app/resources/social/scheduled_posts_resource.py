@@ -263,7 +263,65 @@ class UploadImageResource(MethodView):
             Log.info(f"{log_tag} upload failed: {e}")
             return jsonify({"success": False, "message": "upload failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+@blp_scheduled_posts.route("/social/media/upload-video", methods=["POST"])
+class UploadVideoResource(MethodView):
+    @token_required
+    def post(self):
+        log_tag = "[scheduled_posts_resource.py][UploadVideoResource][post]"
+        user = g.get("current_user", {}) or {}
 
+        # IMPORTANT: field name is "video"
+        if "video" not in request.files:
+            return jsonify({"success": False, "message": "video file is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        video = request.files["video"]
+        if not video or video.filename == "":
+            return jsonify({"success": False, "message": "invalid video"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Basic content-type check
+        if not (video.mimetype or "").startswith("video/"):
+            return jsonify({"success": False, "message": "file must be a video"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        business_id = str(user.get("business_id"))
+        user_id = str(user.get("_id"))
+
+        folder = f"social/{business_id}/{user_id}"
+        public_id = f"{uuid.uuid4().hex}"
+
+        try:
+            # lazy import to avoid circulars if any
+            from ...utils.media.cloudinary_client import upload_video_file
+
+            uploaded = upload_video_file(video, folder=folder, public_id=public_id)
+            raw = uploaded.get("raw") or {}
+
+            return jsonify({
+                "success": True,
+                "message": "uploaded",
+                "data": {
+                    # keep consistent with image
+                    "asset_id": uploaded["public_id"],
+                    "public_id": uploaded["public_id"],
+                    "asset_provider": "cloudinary",
+                    "asset_type": "video",
+
+                    "url": uploaded["url"],
+
+                    # REQUIRED for reels flow
+                    "bytes": raw.get("bytes"),
+
+                    # video metadata (Cloudinary usually returns these)
+                    "duration": raw.get("duration"),
+                    "format": raw.get("format"),
+                    "width": raw.get("width"),
+                    "height": raw.get("height"),
+                }
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.info(f"{log_tag} upload failed: {e}")
+            return jsonify({"success": False, "message": "upload failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+        
 # ---------------------------------------------------------
 # Create Scheduled Post API
 # ---------------------------------------------------------

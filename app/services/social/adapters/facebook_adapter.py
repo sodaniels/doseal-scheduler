@@ -99,32 +99,103 @@ class FacebookAdapter:
     # - Some apps must use resumable upload instead of URL-based upload.
     # If URL upload fails in your app, you’ll implement resumable upload next.
     # ----------------------------
+    # -------------------------------
+    # Reels (Page Reels) - FIXED
+    # -------------------------------
     @classmethod
-    def publish_page_reel(cls, page_id: str, page_access_token: str, video_url: str, description: str = "", share_to_feed: bool = True) -> dict:
-        url = f"{cls.GRAPH_BASE}/{page_id}/video_reels"
-        payload = {
-            # commonly supported patterns are "video_url" or "file_url" depending on rollout
-            "video_url": video_url,
-            "description": description or "",
-            "share_to_feed": "true" if share_to_feed else "false",
+    def publish_page_reel(
+        cls,
+        page_id: str,
+        page_access_token: str,
+        video_url: str,
+        description: str = "",
+        file_size_bytes: int | None = None,
+        share_to_feed: bool = False,
+    ) -> dict:
+        """
+        Publishes a Facebook Page REEL using resumable upload (START -> TRANSFER -> FINISH).
+
+        Requirements:
+          - video_url must be publicly reachable
+          - file_size_bytes is strongly recommended (use Cloudinary 'bytes')
+
+        Returns:
+          - FINISH response (contains id in many cases)
+        """
+
+        if not video_url:
+            raise Exception("video_url is required for reels")
+
+        # If you have Cloudinary bytes in your scheduled post, pass it in.
+        if not file_size_bytes:
+            # Some apps can work without it, but Meta often requires it.
+            raise Exception("file_size_bytes is required for reels (use media.bytes from Cloudinary)")
+
+        # --------------------
+        # 1) START
+        # --------------------
+        start_url = f"{cls.GRAPH_BASE}/{page_id}/video_reels"
+        start_payload = {
+            "upload_phase": "start",
+            "file_size": int(file_size_bytes),
             "access_token": page_access_token,
         }
 
-        resp = requests.post(url, data=payload, timeout=300)
-        data = resp.json()
+        r1 = requests.post(start_url, data=start_payload, timeout=60)
+        data1 = r1.json()
+        if r1.status_code != HTTP_STATUS_CODES["OK"]:
+            raise Exception(f"Facebook reels START failed: {data1}")
 
-        if resp.status_code != HTTP_STATUS_CODES["OK"]:
-            # fallback attempt: some setups accept file_url instead of video_url
-            payload.pop("video_url", None)
-            payload["file_url"] = video_url
+        video_id = data1.get("video_id") or data1.get("id")
+        upload_url = data1.get("upload_url")
 
-            resp2 = requests.post(url, data=payload, timeout=300)
-            data2 = resp2.json()
-            if resp2.status_code != HTTP_STATUS_CODES["OK"]:
-                raise Exception(f"Facebook reels publish failed: {data2}")
-            return data2
+        if not video_id or not upload_url:
+            raise Exception(f"Facebook reels START missing video_id/upload_url: {data1}")
 
-        return data
+        # --------------------
+        # 2) TRANSFER
+        # --------------------
+        # Most implementations use upload_url + file_url.
+        # If Meta rejects file_url on your app, you’ll need binary upload (we can add that next).
+        transfer_payload = {
+            "upload_phase": "transfer",
+            "start_offset": 0,
+            "access_token": page_access_token,
+            "video_id": video_id,
+            "file_url": video_url,
+        }
+
+        r2 = requests.post(upload_url, data=transfer_payload, timeout=600)
+        data2 = r2.json() if r2.headers.get("content-type", "").startswith("application/json") else {"raw": r2.text}
+
+        if r2.status_code != HTTP_STATUS_CODES["OK"]:
+            raise Exception(f"Facebook reels TRANSFER failed: {data2}")
+
+        # --------------------
+        # 3) FINISH (publish)
+        # --------------------
+        finish_payload = {
+            "upload_phase": "finish",
+            "video_id": video_id,
+            "video_state": "PUBLISHED",
+            "description": description or "",
+            "access_token": page_access_token,
+        }
+
+        # This flag is the “like Hootsuite” behavior:
+        # - if share_to_feed=True, the reel should also appear in feed
+        finish_payload["share_to_feed"] = "true" if share_to_feed else "false"
+
+        r3 = requests.post(start_url, data=finish_payload, timeout=120)
+        data3 = r3.json()
+
+        if r3.status_code != HTTP_STATUS_CODES["OK"]:
+            raise Exception(f"Facebook reels FINISH failed: {data3}")
+
+        # Return useful identifiers
+        data3["_video_id"] = video_id
+        return data3
+
 
     # ----------------------------
     # Stories (Facebook Page stories)
