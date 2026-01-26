@@ -1,5 +1,3 @@
-# app/services/social/jobs.py
-
 from ...models.social.scheduled_post import ScheduledPost
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
@@ -9,15 +7,6 @@ from .appctx import run_in_app_context
 
 
 def _publish_scheduled_post(post_id: str, business_id: str):
-    """
-    Actual implementation that runs inside Flask app context.
-    Publishes to all destinations for this scheduled post.
-
-    Facebook behavior:
-      - video -> /{page_id}/videos (file_url)
-      - image -> /{page_id}/photos (url)
-      - otherwise -> /{page_id}/feed
-    """
     post = ScheduledPost.get_by_id(post_id, business_id)
     if not post:
         return
@@ -25,35 +14,31 @@ def _publish_scheduled_post(post_id: str, business_id: str):
     log_tag = f"[jobs.py][_publish_scheduled_post][{business_id}][{post_id}]"
 
     try:
-        # Mark as publishing
-        ScheduledPost.update_status(
-            post_id,
-            post["business_id"],
-            ScheduledPost.STATUS_PUBLISHING
-        )
+        ScheduledPost.update_status(post_id, post["business_id"], ScheduledPost.STATUS_PUBLISHING)
 
         results = []
 
         content = post.get("content") or {}
-        text = content.get("text") or ""
+        text = (content.get("text") or "").strip()
         link = content.get("link")
 
-        media = content.get("media") or {}
+        media = content.get("media") or []
+        if isinstance(media, dict):
+            media = [media]
+        first_media = media[0] if media else {}
 
-        # If media stored as list, pick first for Facebook
-        if isinstance(media, list):
-            media = media[0] if media else {}
+        asset_type = (first_media.get("asset_type") or "").lower()
+        media_url = first_media.get("url")
 
-        asset_type = (media.get("asset_type") or "").lower()
-        media_url = media.get("url")
-
-        for dest in (post.get("destinations") or []):
+        for dest in post.get("destinations") or []:
             if dest.get("platform") != "facebook":
                 continue
 
             destination_id = str(dest.get("destination_id") or "")
             if not destination_id:
                 continue
+
+            placement = (dest.get("placement") or "feed").lower()  # feed|reel|story
 
             acct = SocialAccount.get_destination(
                 post["business_id"],
@@ -66,68 +51,93 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
             page_access_token = acct["access_token_plain"]
 
-            # Build caption/description (include link in caption for image/video)
-            caption = (text or "").strip()
+            caption = text or ""
             if link:
                 caption = (caption + "\n\n" + link).strip()
 
-            # ---------- Choose publish method ----------
-            if asset_type == "video" and media_url:
-                resp = FacebookAdapter.publish_page_video(
+            # --- placement routing ---
+            if placement == "story":
+                # Likely unsupported → clear error
+                resp = FacebookAdapter.publish_page_story()
+                results.append({
+                    "platform": "facebook",
+                    "destination_id": destination_id,
+                    "placement": "story",
+                    "provider_post_id": resp.get("id"),
+                    "raw": resp,
+                })
+
+            elif placement == "reel":
+                if asset_type != "video" or not media_url:
+                    raise Exception("Facebook reels require a single video media.url")
+                resp = FacebookAdapter.publish_page_reel(
                     page_id=destination_id,
                     page_access_token=page_access_token,
                     video_url=media_url,
                     description=caption,
+                    share_to_feed=True,
                 )
-
                 results.append({
                     "platform": "facebook",
                     "destination_id": destination_id,
-                    "provider_post_id": resp.get("id"),
-                    "raw": resp,
-                })
-
-            elif asset_type == "image" and media_url:
-                resp = FacebookAdapter.publish_page_photo(
-                    page_id=destination_id,
-                    page_access_token=page_access_token,
-                    image_url=media_url,
-                    caption=caption,
-                )
-
-                provider_post_id = resp.get("post_id") or resp.get("id")
-                results.append({
-                    "platform": "facebook",
-                    "destination_id": destination_id,
-                    "provider_post_id": provider_post_id,
+                    "placement": "reel",
+                    "provider_post_id": resp.get("id") or resp.get("post_id"),
                     "raw": resp,
                 })
 
             else:
-                # Text/link feed post
-                resp = FacebookAdapter.publish_page_feed(
-                    page_id=destination_id,
-                    page_access_token=page_access_token,
-                    message=text,
-                    link=link,
-                )
+                # placement == "feed"
+                if asset_type == "image" and media_url:
+                    resp = FacebookAdapter.publish_page_photo(
+                        page_id=destination_id,
+                        page_access_token=page_access_token,
+                        image_url=media_url,
+                        caption=caption,
+                    )
+                    results.append({
+                        "platform": "facebook",
+                        "destination_id": destination_id,
+                        "placement": "feed",
+                        "provider_post_id": resp.get("post_id") or resp.get("id"),
+                        "raw": resp,
+                    })
 
-                results.append({
-                    "platform": "facebook",
-                    "destination_id": destination_id,
-                    "provider_post_id": resp.get("id"),
-                    "raw": resp,
-                })
+                elif asset_type == "video" and media_url:
+                    resp = FacebookAdapter.publish_page_video(
+                        page_id=destination_id,
+                        page_access_token=page_access_token,
+                        video_url=media_url,
+                        description=caption,
+                    )
+                    results.append({
+                        "platform": "facebook",
+                        "destination_id": destination_id,
+                        "placement": "feed",
+                        "provider_post_id": resp.get("id"),
+                        "raw": resp,
+                    })
 
-        # Mark published
+                else:
+                    resp = FacebookAdapter.publish_page_feed(
+                        page_id=destination_id,
+                        page_access_token=page_access_token,
+                        message=text,
+                        link=link,
+                    )
+                    results.append({
+                        "platform": "facebook",
+                        "destination_id": destination_id,
+                        "placement": "feed",
+                        "provider_post_id": resp.get("id"),
+                        "raw": resp,
+                    })
+
         ScheduledPost.update_status(
             post_id,
             post["business_id"],
             ScheduledPost.STATUS_PUBLISHED,
             provider_results=results,
         )
-
-        return {"success": True, "results": results}
 
     except Exception as e:
         Log.info(f"{log_tag} FAILED {e}")
@@ -141,8 +151,4 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
 
 def publish_scheduled_post(post_id: str, business_id: str):
-    """
-    Entry point for RQ worker.
-    Keep this thin to avoid circular imports.
-    """
     return run_in_app_context(_publish_scheduled_post, post_id, business_id)
