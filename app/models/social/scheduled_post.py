@@ -70,6 +70,48 @@ class ScheduledPost(BaseModel):
         }
 
     @classmethod
+    def create(cls, doc: dict):
+        """
+        Insert a scheduled post document into MongoDB.
+
+        Expects:
+          {
+            business_id,
+            user__id,
+            content,
+            scheduled_at_utc,
+            destinations,
+            status,
+            ...
+          }
+        """
+
+        col = db_ext.get_collection(cls.collection_name)
+
+        insert_doc = dict(doc)
+
+        # Ensure ObjectIds
+        insert_doc["business_id"] = ObjectId(insert_doc["business_id"])
+        insert_doc["user__id"] = ObjectId(insert_doc["user__id"])
+
+        # Normalize datetime
+        if isinstance(insert_doc.get("scheduled_at_utc"), str):
+            insert_doc["scheduled_at_utc"] = datetime.fromisoformat(
+                insert_doc["scheduled_at_utc"].replace("Z", "+00:00")
+            )
+
+        insert_doc.setdefault("created_at", datetime.now(timezone.utc))
+        insert_doc.setdefault("updated_at", datetime.now(timezone.utc))
+
+        res = col.insert_one(insert_doc)
+
+        insert_doc["_id"] = str(res.inserted_id)
+        insert_doc["business_id"] = str(insert_doc["business_id"])
+        insert_doc["user__id"] = str(insert_doc["user__id"])
+
+        return insert_doc
+
+    @classmethod
     def get_due_posts(cls, limit=50):
         """Fetch scheduled posts that are due now (UTC)."""
         col = db_ext.get_collection(cls.collection_name)
