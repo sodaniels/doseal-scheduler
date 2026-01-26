@@ -97,7 +97,7 @@ class FacebookOauthStartResource(MethodView):
             "redirect_uri": redirect_uri,
             "state": state,
             "response_type": "code",
-            "scope": "pages_show_list,pages_read_engagement,pages_manage_posts",
+            "scope": "pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish",
         }
 
         url = "https://www.facebook.com/v20.0/dialog/oauth?" + urlencode(params)
