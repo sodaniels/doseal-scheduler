@@ -36,10 +36,10 @@ PLATFORM_RULES: Dict[str, Dict[str, Any]] = {
     # Instagram: carousel up to 10 (image/video mix allowed depending on API flow; keep rule permissive)
     "instagram": {
         "max_text": 2200,
-        "supports_link": False,  # link not clickable in caption
-        "media": {"max_items": 10, "types": {"image", "video"}, "video_max_items": 1},
+        "supports_link": False,
+        "media": {"max_items": 10, "types": {"image", "video"}},
         "requires_destination_type": {"ig_user"},
-        "requires_media": True,  # in practice, IG posting needs media
+        "placements": {"feed", "reel", "story"}  # optional for later
     },
 
     # X/Twitter: conservative limits
@@ -108,6 +108,9 @@ def _count_media_types(media: List[Dict[str, Any]]) -> Dict[str, int]:
         counts[t] = counts.get(t, 0) + 1
     return counts
 
+def _default_placement(dest: dict) -> str:
+    p = (dest.get("placement") or "").strip().lower()
+    return p or "feed"
 
 # ---------------------------------------------------------------------
 # Schemas
@@ -165,14 +168,22 @@ class DestinationSchema(Schema):
     platform = fields.Str(required=True, validate=validate.OneOf(sorted(list(PLATFORM_RULES.keys()))))
     destination_type = fields.Str(required=True)
     destination_id = fields.Str(required=True)
+    destination_name = fields.Str(required=False, allow_none=True)
     
     placement = fields.Str(
         required=False,
         load_default="feed",
         validate=validate.OneOf(["feed", "reel", "story"])
     )
-
-    destination_name = fields.Str(required=False, allow_none=True)
+    
+    @pre_load
+    def normalize(self, in_data, **kwargs):
+        if isinstance(in_data, dict):
+            if in_data.get("platform"):
+                in_data["platform"] = str(in_data["platform"]).strip().lower()
+            if in_data.get("placement"):
+                in_data["placement"] = str(in_data["placement"]).strip().lower()
+        return in_data
 
 
 class ScheduledPostContentSchema(Schema):
@@ -267,6 +278,7 @@ class CreateScheduledPostSchema(Schema):
         in_data["content"] = content
         return in_data
 
+    
     @validates_schema
     def validate_all(self, data, **kwargs):
 
@@ -305,34 +317,44 @@ class CreateScheduledPostSchema(Schema):
 
         # must contain text or media
         if not text and not parsed_media:
-            raise ValidationError({
-                "content": ["Provide at least one of text or media"]
-            })
+            raise ValidationError({"content": ["Provide at least one of text or media"]})
 
         # link validation
         if link and not _is_url(link):
-            raise ValidationError({
-                "content": {"link": ["Invalid URL"]}
-            })
+            raise ValidationError({"content": {"link": ["Invalid URL"]}})
 
         # ------------------------------
         # destinations fan-out validation
         # ------------------------------
         destinations = data.get("destinations") or []
-
         dest_errors = []
+        manual_required = []  # <-- collect "manual publish needed" destinations here
+
+        # Precompute media counts (useful for twitter etc later)
+        media_counts = _count_media_types(parsed_media)
+        video_count = media_counts.get("video", 0)
 
         for idx, dest in enumerate(destinations):
 
-            platform = dest.get("platform")
-            placement = dest.get("placement", "feed")
+            platform = (dest.get("platform") or "").lower().strip()
+            placement = _default_placement(dest)
+            dest["placement"] = placement  # normalize for storage
 
             rule = PLATFORM_RULES.get(platform)
             if not rule:
-                dest_errors.append({
-                    str(idx): {"platform": ["Unsupported platform"]}
-                })
+                dest_errors.append({str(idx): {"platform": ["Unsupported platform"]}})
                 continue
+
+            # ------------------------------
+            # enforce allowed placements
+            # ------------------------------
+            allowed_placements = set(rule.get("placements") or {"feed"})
+            if placement not in allowed_placements:
+                dest_errors.append({
+                    str(idx): {
+                        "placement": [f"{platform} placement must be one of {sorted(allowed_placements)}"]
+                    }
+                })
 
             # ------------------------------
             # destination type enforcement
@@ -341,10 +363,16 @@ class CreateScheduledPostSchema(Schema):
             if allowed_types and dest.get("destination_type") not in allowed_types:
                 dest_errors.append({
                     str(idx): {
-                        "destination_type": [
-                            f"{platform} requires destination_type in {sorted(allowed_types)}"
-                        ]
+                        "destination_type": [f"{platform} requires destination_type in {sorted(allowed_types)}"]
                     }
+                })
+
+            # ------------------------------
+            # required media for some platforms
+            # ------------------------------
+            if rule.get("requires_media") and not parsed_media:
+                dest_errors.append({
+                    str(idx): {"content.media": [f"{platform} requires at least 1 media item."]}
                 })
 
             # ------------------------------
@@ -353,11 +381,7 @@ class CreateScheduledPostSchema(Schema):
             max_text = rule.get("max_text")
             if max_text and text and len(text) > max_text:
                 dest_errors.append({
-                    str(idx): {
-                        "content.text": [
-                            f"Too long for {platform}. Max {max_text} chars."
-                        ]
-                    }
+                    str(idx): {"content.text": [f"Too long for {platform}. Max {max_text} chars."]}
                 })
 
             # ------------------------------
@@ -365,103 +389,91 @@ class CreateScheduledPostSchema(Schema):
             # ------------------------------
             if link and not rule.get("supports_link", True):
                 dest_errors.append({
-                    str(idx): {
-                        "content.link": [
-                            f"{platform} does not support clickable links here."
-                        ]
-                    }
+                    str(idx): {"content.link": [f"{platform} does not support clickable links here."]}
                 })
 
             # ------------------------------
-            # MEDIA RULES
+            # MEDIA RULES (generic)
             # ------------------------------
             media_rule = rule.get("media") or {}
-            max_items = media_rule.get("max_items") or 0
-            allowed_types = set(media_rule.get("types") or [])
+            max_items = int(media_rule.get("max_items") or 0)
+            allowed_media_types = set(media_rule.get("types") or [])
+            video_max_items = int(media_rule.get("video_max_items") or 0)
 
             if parsed_media:
-
-                # max items
                 if max_items and len(parsed_media) > max_items:
                     dest_errors.append({
-                        str(idx): {
-                            "content.media": [
-                                f"{platform} supports max {max_items} media items."
-                            ]
-                        }
+                        str(idx): {"content.media": [f"{platform} supports max {max_items} media items."]}
                     })
 
-                # type allowed?
+                if video_max_items and video_count > video_max_items:
+                    dest_errors.append({
+                        str(idx): {"content.media": [f"{platform} supports max {video_max_items} video item(s)."]}
+                    })
+
                 for m in parsed_media:
                     at = (m.get("asset_type") or "").lower()
-                    if allowed_types and at not in allowed_types:
+                    if allowed_media_types and at not in allowed_media_types:
                         dest_errors.append({
-                            str(idx): {
-                                "content.media": [
-                                    f"{platform} does not allow {at} here."
-                                ]
-                            }
+                            str(idx): {"content.media": [f"{platform} does not allow {at} here."]}
                         })
 
+            # ----------------------------------------------------
+            # PLATFORM-SPECIFIC EXTRA RULES
+            # ----------------------------------------------------
+
             # ------------------------------
-            # FACEBOOK placement logic
+            # Facebook placement logic
             # ------------------------------
             if platform == "facebook":
-
-                placement = placement or "feed"
-
-                # FEED: max 1 media
                 if placement == "feed":
+                    # your PLATFORM_RULES already says max 1, but keep explicit
                     if len(parsed_media) > 1:
-                        dest_errors.append({
-                            str(idx): {
-                                "placement": [
-                                    "Facebook feed supports only 1 media item."
-                                ]
-                            }
-                        })
+                        dest_errors.append({str(idx): {"content.media": ["Facebook feed supports only 1 media item."]}})
 
-                # REEL: exactly one video
                 elif placement == "reel":
-
                     if len(parsed_media) != 1:
-                        dest_errors.append({
-                            str(idx): {
-                                "placement": [
-                                    "Facebook reels require exactly one video."
-                                ]
-                            }
-                        })
+                        dest_errors.append({str(idx): {"content.media": ["Facebook reels require exactly one media item."]}})
+                    elif (parsed_media[0].get("asset_type") or "").lower() != "video":
+                        dest_errors.append({str(idx): {"content.media": ["Facebook reels require a video."]}})
+                    else:
+                        # reels flow commonly needs file size bytes
+                        if not parsed_media[0].get("bytes"):
+                            dest_errors.append({
+                                str(idx): {"content.media": ["Facebook reels require media.bytes (file size)."]}
+                            })
 
-                    elif parsed_media[0]["asset_type"] != "video":
-                        dest_errors.append({
-                            str(idx): {
-                                "placement": [
-                                    "Facebook reels require a video."
-                                ]
-                            }
-                        })
-
-                # STORY: allow but mark manual later
                 elif placement == "story":
+                    # If you want “Hootsuite style”, you can accept and mark manual.
+                    # If you want to hard-reject stories instead, change this to an error.
+                    manual_required.append({
+                        "platform": "facebook",
+                        "destination_id": dest.get("destination_id"),
+                        "destination_type": dest.get("destination_type"),
+                        "placement": "story",
+                        "reason": "Facebook Page story scheduling not supported by API; requires manual publish.",
+                    })
 
+            # ------------------------------
+            # Instagram placement logic
+            # ------------------------------
+            if platform == "instagram":
+                # For IG API publishing, require at least 1 media always
+                if len(parsed_media) < 1:
+                    dest_errors.append({
+                        str(idx): {"content.media": ["Instagram requires at least 1 media item (image/video)."]}
+                    })
+                # If you want additional IG-specific constraints (story = single media, reel=video), enforce here:
+                if placement == "reel":
+                    if len(parsed_media) != 1 or (parsed_media[0].get("asset_type") or "").lower() != "video":
+                        dest_errors.append({
+                            str(idx): {"placement": ["Instagram reels require exactly 1 video."]}
+                        })
+                if placement == "story":
                     if len(parsed_media) != 1:
                         dest_errors.append({
-                            str(idx): {
-                                "placement": [
-                                    "Facebook stories support exactly one media item."
-                                ]
-                            }
+                            str(idx): {"placement": ["Instagram story requires exactly 1 media item."]}
                         })
-
-                else:
-                    dest_errors.append({
-                        str(idx): {
-                            "placement": [
-                                "Invalid placement. Use feed, reel, or story."
-                            ]
-                        }
-                    })
 
         # ------------------------------
         # raise if any destination invalid
@@ -473,12 +485,16 @@ class CreateScheduledPostSchema(Schema):
         # inject normalized fields
         # ------------------------------
         data["_scheduled_at_utc"] = scheduled_at_utc
-
         data["_normalized_content"] = {
             "text": text or None,
             "link": link,
             "media": parsed_media or None,
         }
+
+        # if any manual placements exist (e.g. FB story)
+        if manual_required:
+            data["_manual_required"] = manual_required
+        
 
 class ScheduledPostStoredSchema(Schema):
     """
