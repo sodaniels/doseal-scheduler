@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from bson import ObjectId
+from pymongo import ReturnDocument
+
 from ..base_model import BaseModel
 from ...extensions import db as db_ext
 
@@ -9,6 +11,7 @@ class ScheduledPost(BaseModel):
 
     STATUS_DRAFT = "draft"
     STATUS_SCHEDULED = "scheduled"
+    STATUS_ENQUEUED = "enqueued"        # <--- NEW (important)
     STATUS_PUBLISHING = "publishing"
     STATUS_PUBLISHED = "published"
     STATUS_FAILED = "failed"
@@ -32,20 +35,17 @@ class ScheduledPost(BaseModel):
 
         self.platform = platform  # "facebook" or "multi"
 
-        # post content
-        self.content = content  # {"text": "...", "link": "...", "media": {...optional...}}
+        # {"text": "...", "link": "...", "media": {...optional...}}
+        self.content = content or {}
 
-        # Always store UTC
+        # Always store UTC datetime
         self.scheduled_at_utc = scheduled_at_utc
 
-        # Where to publish: list of dicts
-        # Example: [{"platform":"facebook","destination_type":"page","destination_id":"123"}]
-        self.destinations = destinations
+        # [{"platform":"facebook","destination_type":"page","destination_id":"123"}]
+        self.destinations = destinations or []
 
         self.status = status or self.STATUS_SCHEDULED
-
-        # results per destination
-        self.provider_results = provider_results or []  # [{"platform":"facebook","destination_id":"..","provider_post_id":"..","raw":{}}]
+        self.provider_results = provider_results or []
         self.error = error
 
         self.created_at = datetime.now(timezone.utc)
@@ -69,47 +69,85 @@ class ScheduledPost(BaseModel):
             "updated_at": self.updated_at,
         }
 
+    # -------------------------
+    # Helpers
+    # -------------------------
+
+    @staticmethod
+    def _parse_dt(value):
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            # ensure tz-aware UTC
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+        if isinstance(value, str):
+            # allow "Z"
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return None
+
+    @staticmethod
+    def _oid_str(doc):
+        if not doc:
+            return None
+        if "_id" in doc:
+            doc["_id"] = str(doc["_id"])
+        if "business_id" in doc:
+            doc["business_id"] = str(doc["business_id"])
+        if "user__id" in doc:
+            doc["user__id"] = str(doc["user__id"])
+        return doc
+
+    # -------------------------
+    # CRUD
+    # -------------------------
+
     @classmethod
     def create(cls, doc: dict):
         """
         Insert a scheduled post document into MongoDB.
-
-        Expects:
-          {
-            business_id,
-            user__id,
-            content,
-            scheduled_at_utc,
-            destinations,
-            status,
-            ...
-          }
+        Expects doc to include:
+          business_id, user__id, content, scheduled_at_utc, destinations
         """
-
         col = db_ext.get_collection(cls.collection_name)
+        insert_doc = dict(doc or {})
 
-        insert_doc = dict(doc)
+        if not insert_doc.get("business_id") or not insert_doc.get("user__id"):
+            raise ValueError("business_id and user__id are required")
 
-        # Ensure ObjectIds
-        insert_doc["business_id"] = ObjectId(insert_doc["business_id"])
-        insert_doc["user__id"] = ObjectId(insert_doc["user__id"])
+        insert_doc["business_id"] = ObjectId(str(insert_doc["business_id"]))
+        insert_doc["user__id"] = ObjectId(str(insert_doc["user__id"]))
 
-        # Normalize datetime
-        if isinstance(insert_doc.get("scheduled_at_utc"), str):
-            insert_doc["scheduled_at_utc"] = datetime.fromisoformat(
-                insert_doc["scheduled_at_utc"].replace("Z", "+00:00")
-            )
+        # normalize scheduled time
+        insert_doc["scheduled_at_utc"] = cls._parse_dt(insert_doc.get("scheduled_at_utc"))
+        if not insert_doc["scheduled_at_utc"]:
+            raise ValueError("scheduled_at_utc is required and must be ISO string or datetime")
 
-        insert_doc.setdefault("created_at", datetime.now(timezone.utc))
-        insert_doc.setdefault("updated_at", datetime.now(timezone.utc))
+        insert_doc.setdefault("platform", "multi")
+        insert_doc.setdefault("content", {})
+        insert_doc.setdefault("destinations", [])
+        insert_doc.setdefault("status", cls.STATUS_SCHEDULED)
+
+        now = datetime.now(timezone.utc)
+        insert_doc.setdefault("provider_results", [])
+        insert_doc.setdefault("error", None)
+        insert_doc.setdefault("created_at", now)
+        insert_doc.setdefault("updated_at", now)
 
         res = col.insert_one(insert_doc)
+        insert_doc["_id"] = res.inserted_id
 
-        insert_doc["_id"] = str(res.inserted_id)
-        insert_doc["business_id"] = str(insert_doc["business_id"])
-        insert_doc["user__id"] = str(insert_doc["user__id"])
+        return cls._oid_str(insert_doc)
 
-        return insert_doc
+    @classmethod
+    def get_by_id(cls, post_id: str, business_id: str):
+        col = db_ext.get_collection(cls.collection_name)
+        doc = col.find_one({
+            "_id": ObjectId(str(post_id)),
+            "business_id": ObjectId(str(business_id)),
+        })
+        return cls._oid_str(doc)
 
     @classmethod
     def get_due_posts(cls, limit=50):
@@ -121,13 +159,54 @@ class ScheduledPost(BaseModel):
             "scheduled_at_utc": {"$lte": now},
         }).sort("scheduled_at_utc", 1).limit(limit))
 
+    # -------------------------
+    # Atomic scheduler support
+    # -------------------------
+
+    @classmethod
+    def claim_due_posts(cls, limit=50):
+        """
+        IMPORTANT (scales well):
+        Atomically move due posts from scheduled -> enqueued
+        so only ONE scheduler process can enqueue them.
+        """
+        col = db_ext.get_collection(cls.collection_name)
+        now = datetime.now(timezone.utc)
+
+        claimed = []
+        for _ in range(limit):
+            doc = col.find_one_and_update(
+                {
+                    "status": cls.STATUS_SCHEDULED,
+                    "scheduled_at_utc": {"$lte": now},
+                },
+                {
+                    "$set": {
+                        "status": cls.STATUS_ENQUEUED,
+                        "updated_at": now,
+                    }
+                },
+                sort=[("scheduled_at_utc", 1)],
+                return_document=ReturnDocument.AFTER,
+            )
+            if not doc:
+                break
+            claimed.append(cls._oid_str(doc))
+        return claimed
+
+    # -------------------------
+    # Status updates
+    # -------------------------
+
     @classmethod
     def update_status(cls, post_id, business_id, status, **extra):
         col = db_ext.get_collection(cls.collection_name)
+        extra = extra or {}
         extra["status"] = status
         extra["updated_at"] = datetime.now(timezone.utc)
+
         res = col.update_one(
-            {"_id": ObjectId(post_id), "business_id": ObjectId(business_id)},
+            {"_id": ObjectId(str(post_id)), "business_id": ObjectId(str(business_id))},
             {"$set": extra}
         )
         return res.modified_count > 0
@@ -135,6 +214,13 @@ class ScheduledPost(BaseModel):
     @classmethod
     def ensure_indexes(cls):
         col = db_ext.get_collection(cls.collection_name)
+
+        # scheduler reads
         col.create_index([("status", 1), ("scheduled_at_utc", 1)])
+
+        # listing per tenant/user
         col.create_index([("business_id", 1), ("user__id", 1), ("created_at", -1)])
+
+        # optional: faster multi-destination queries later
+        col.create_index([("business_id", 1), ("status", 1), ("scheduled_at_utc", 1)])
         return True

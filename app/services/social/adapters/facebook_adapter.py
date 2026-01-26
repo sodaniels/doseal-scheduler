@@ -1,7 +1,8 @@
-import requests, os
-from ....constants.service_code import (
-    HTTP_STATUS_CODES,
-)
+# app/services/social/adapters/facebook_adapter.py
+import os
+import requests
+from ....constants.service_code import HTTP_STATUS_CODES
+
 
 class FacebookAdapter:
     GRAPH_BASE = os.getenv("FACEBOOK_GRAPH_API_URL", "https://graph.facebook.com/v20.0")
@@ -21,15 +22,8 @@ class FacebookAdapter:
 
     @staticmethod
     def publish_page_feed(page_id: str, page_access_token: str, message: str, link: str = None) -> dict:
-        """
-        Publish a post to a Facebook Page feed.
-        POST /{page_id}/feed
-        """
         url = f"{FacebookAdapter.GRAPH_BASE}/{page_id}/feed"
-        payload = {
-            "message": message,
-            "access_token": page_access_token,
-        }
+        payload = {"message": message, "access_token": page_access_token}
         if link:
             payload["link"] = link
 
@@ -38,40 +32,23 @@ class FacebookAdapter:
 
         if resp.status_code != HTTP_STATUS_CODES["OK"]:
             raise Exception(f"Facebook publish failed: {data}")
-
-        # returns {"id": "<page_post_id>"}
         return data
 
+    @staticmethod
+    def publish_page_photo(page_id: str, page_access_token: str, image_url: str, caption: str = "") -> dict:
+        """
+        POST /{page_id}/photos with a public URL (Cloudinary URL works)
+        """
+        url = f"{FacebookAdapter.GRAPH_BASE}/{page_id}/photos"
+        payload = {
+            "url": image_url,
+            "caption": caption or "",
+            "access_token": page_access_token,
+            "published": "true",
+        }
+        resp = requests.post(url, data=payload, timeout=60)
+        data = resp.json()
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        if resp.status_code != HTTP_STATUS_CODES["OK"]:
+            raise Exception(f"Facebook photo publish failed: {data}")
+        return data

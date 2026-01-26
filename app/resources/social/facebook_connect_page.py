@@ -1,4 +1,5 @@
 import json
+import requests
 import os
 from flask import request, jsonify, g
 from flask_smorest import Blueprint
@@ -196,3 +197,18 @@ class FacebookConnectPageResource(MethodView):
         }), HTTP_STATUS_CODES["OK"]
 
 # -------------------------------------------------------------------
+
+@staticmethod
+def publish_page_photo(page_id: str, page_access_token: str, image_url: str, caption: str = "") -> dict:
+    url = f"{FacebookAdapter.GRAPH_BASE}/{page_id}/photos"
+    payload = {
+        "url": image_url,
+        "caption": caption or "",
+        "access_token": page_access_token,
+        "published": "true",
+    }
+    resp = requests.post(url, data=payload, timeout=30)
+    data = resp.json()
+    if resp.status_code != HTTP_STATUS_CODES["OK"]:
+        raise Exception(f"Facebook photo publish failed: {data}")
+    return data
