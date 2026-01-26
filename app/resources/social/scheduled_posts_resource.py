@@ -6,6 +6,7 @@ from dateutil import parser as dateparser
 from flask.views import MethodView
 from flask import request, jsonify, g
 from flask_smorest import Blueprint
+from marshmallow import ValidationError
 
 from ...extensions.queue import scheduler
 from ...constants.service_code import HTTP_STATUS_CODES
@@ -15,6 +16,7 @@ from ...utils.logger import Log
 from ...utils.media.cloudinary_client import (
     upload_image_file, upload_video_file
 )
+from ...schemas.social.scheduled_post_schema import CreateScheduledPostSchema
 
 blp_scheduled_posts = Blueprint("scheduled_posts", __name__)
 
@@ -175,56 +177,47 @@ class CreateScheduledPostResource(MethodView):
         client_ip = request.remote_addr
         log_tag = f"[scheduled_posts.py][CreateScheduledPostResource][post][{client_ip}]"
 
-        body = request.get_json(silent=True) or {}
-
+        # --- owner context from token_required ---
         user = g.get("current_user", {}) or {}
         business_id = str(user.get("business_id") or "")
         user__id = str(user.get("_id") or "")
         if not business_id or not user__id:
             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
-        # required fields
-        text = body.get("text") or (body.get("content") or {}).get("text")
-        link = body.get("link") or (body.get("content") or {}).get("link")
+        # --- request body ---
+        body = request.get_json(silent=True) or {}
 
-        destinations = body.get("destinations") or []
-        page_id = body.get("page_id")
-        if page_id and not destinations:
-            destinations = [{
+        # ✅ Backward compatibility: accept legacy page_id
+        # (schema expects destinations, so we transform before validation)
+        if body.get("page_id") and not body.get("destinations"):
+            body["destinations"] = [{
                 "platform": "facebook",
-                "destination_id": str(page_id),
+                "destination_id": str(body["page_id"]),
                 "destination_type": "page",
             }]
 
-        scheduled_at_raw = body.get("scheduled_at")
-
-        if not text:
-            return jsonify({"success": False, "message": "text is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-        if not destinations:
-            return jsonify({"success": False, "message": "destinations is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-        if not scheduled_at_raw:
-            return jsonify({"success": False, "message": "scheduled_at is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        # parse scheduled_at
+        # ✅ Validate + normalize using schema
         try:
-            scheduled_at = dateparser.isoparse(scheduled_at_raw)
-            if scheduled_at.tzinfo is None:
-                return jsonify(
-                    {"success": False, "message": "scheduled_at must include timezone (e.g. +00:00)"},
-                ), HTTP_STATUS_CODES["BAD_REQUEST"]
-            scheduled_at_utc = scheduled_at.astimezone(timezone.utc)
-        except Exception:
-            return jsonify(
-                {"success": False, "message": "scheduled_at must be ISO8601 (e.g. 2026-01-26T12:50:00+00:00)"},
-            ), HTTP_STATUS_CODES["BAD_REQUEST"]
+            payload = CreateScheduledPostSchema().load(body)
+        except ValidationError as err:
+            # Marshmallow gives rich error structure
+            return jsonify({
+                "success": False,
+                "message": "Validation failed",
+                "errors": err.messages
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+        except Exception as e:
+            Log.info(f"{log_tag} Schema validation error: {e}")
+            return jsonify({
+                "success": False,
+                "message": "Validation failed"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        # media in body.media or body.content.media
-        media_in = body.get("media")
-        if media_in is None:
-            media_in = (body.get("content") or {}).get("media")
-        normalized_media = _normalize_media(media_in)
+        # ✅ Use normalized outputs computed by schema
+        scheduled_at_utc = payload["_scheduled_at_utc"]
+        normalized_content = payload["_normalized_content"]
+        destinations = payload["destinations"]
 
-        # build doc
         post_doc = {
             "business_id": business_id,
             "user__id": user__id,
@@ -232,11 +225,7 @@ class CreateScheduledPostResource(MethodView):
             "status": ScheduledPost.STATUS_SCHEDULED,
             "scheduled_at_utc": scheduled_at_utc,
             "destinations": destinations,
-            "content": {
-                "text": text,
-                "link": link,
-                "media": normalized_media,
-            },
+            "content": normalized_content,  # {"text":..., "link":..., "media": list|None}
             "provider_results": [],
             "error": None,
         }
@@ -252,15 +241,14 @@ class CreateScheduledPostResource(MethodView):
         if not post_id:
             return jsonify({"success": False, "message": "Failed to create scheduled post id"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-        # 2) enqueue job at scheduled time
-        # IMPORTANT: lazy import to avoid circular import
+        # 2) enqueue job at scheduled time (lazy import avoids circular import)
         try:
             from ...services.social.jobs import publish_scheduled_post
 
             # ✅ safe job id (NO ":" or spaces)
             job_id = f"publish-{business_id}-{post_id}"
 
-            # best-effort: remove any existing job with same id
+            # best-effort cancel old
             try:
                 existing = scheduler.get_job(job_id)
                 if existing:
@@ -277,8 +265,7 @@ class CreateScheduledPostResource(MethodView):
                 meta={"business_id": business_id, "post_id": post_id},
             )
 
-            # ✅ IMPORTANT: do NOT pass result_ttl/failure_ttl to enqueue_at
-            # Set them on the job object instead (prevents kwargs reaching your function).
+            # ✅ set TTLs on job object (don't pass as kwargs to enqueue_at)
             try:
                 job.result_ttl = 500
                 job.failure_ttl = 86400
@@ -294,7 +281,10 @@ class CreateScheduledPostResource(MethodView):
                 ScheduledPost.STATUS_FAILED,
                 error=f"enqueue failed: {e}",
             )
-            return jsonify({"success": False, "message": "Scheduled post created but enqueue failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+            return jsonify({
+                "success": False,
+                "message": "Scheduled post created but enqueue failed"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
         return jsonify({
             "success": True,
