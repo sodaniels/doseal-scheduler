@@ -198,6 +198,7 @@ class FacebookConnectPageResource(MethodView):
 
 # -------------------------------------------------------------------
 
+
 @staticmethod
 def publish_page_photo(page_id: str, page_access_token: str, image_url: str, caption: str = "") -> dict:
     url = f"{FacebookAdapter.GRAPH_BASE}/{page_id}/photos"
