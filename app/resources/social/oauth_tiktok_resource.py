@@ -98,6 +98,9 @@ def _tiktok_get_user_info(*, access_token: str, log_tag: str) -> dict:
       GET https://open.tiktokapis.com/v2/user/info/?fields=...
       Authorization: Bearer <access_token>
     """
+    if not access_token:
+        raise Exception("Missing TikTok access_token")
+
     headers = {"Authorization": f"Bearer {access_token}"}
     params = {"fields": "open_id,union_id,avatar_url,display_name"}
 
@@ -107,11 +110,16 @@ def _tiktok_get_user_info(*, access_token: str, log_tag: str) -> dict:
     except Exception:
         data = {"raw": r.text}
 
-    err = (data or {}).get("error") or {}
-    err_code = (err.get("code") or "").lower()
+    # 1) HTTP failure
+    if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+        raise Exception(f"TikTok user info HTTP error: {data}")
 
-    # TikTok returns {"error": {"code": "ok"}} on success
-    if r.status_code >= 400 or (err and err_code not in ("ok", "success")):
+    # 2) TikTok logical failure: error.code != ok
+    err = (data.get("error") or {}) if isinstance(data, dict) else {}
+    code = err.get("code")
+
+    # TikTok success commonly returns code="ok"
+    if code not in (None, "ok", 0, "0"):
         raise Exception(f"TikTok user info failed: {data}")
 
     return data

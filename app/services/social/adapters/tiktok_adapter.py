@@ -1,10 +1,9 @@
-# app/services/social/adapters/tiktok_adapter.py
-
 from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, Optional, Tuple, List
+import math
+from typing import Dict, Any, Optional, List
 
 import requests
 
@@ -13,89 +12,72 @@ from ....constants.service_code import HTTP_STATUS_CODES
 
 class TikTokAdapter:
     """
-    TikTok Open API helper (OAuth + Content Posting).
+    TikTok Open API helper.
 
-    What this adapter supports:
-      - OAuth2: exchange code -> access_token/refresh_token/open_id
-      - Refresh token
-      - User info fetch (requires user.info.basic)
-      - Content Posting (Direct Post):
-          1) init video publish (returns upload_url + publish_id)
-          2) upload video bytes to upload_url
-          3) poll status/fetch to confirm publishing result
-
-    Notes:
-      - TikTok access_token MUST be sent in Authorization: Bearer <token>
-      - Tokens expire. If you store tokens, you must refresh when expired.
-      - For video publishing you typically need: video.upload + video.publish
+    Supports:
+      - OAuth2 token exchange
+      - Token refresh
+      - User info fetch
+      - Video direct post
+      - Photo post
+      - Upload (single or chunked)
+      - Publish status polling
+      - Webhook parsing
     """
 
-    OPEN_API_BASE = os.environ.get("TIKTOK_OPEN_API_BASE", "https://open.tiktokapis.com")
+    OPEN_API_BASE = os.getenv("TIKTOK_OPEN_API_BASE", "https://open.tiktokapis.com")
 
-    # OAuth endpoints (OpenAPI v2)
+    # OAuth
     OAUTH_TOKEN_URL = f"{OPEN_API_BASE}/v2/oauth/token/"
     OAUTH_REFRESH_URL = f"{OPEN_API_BASE}/v2/oauth/token/refresh/"
 
-    # User info endpoint
+    # User info
     USER_INFO_URL = f"{OPEN_API_BASE}/v2/user/info/"
 
-    # Content Posting (Direct Post)
+    # Publishing
     VIDEO_INIT_URL = f"{OPEN_API_BASE}/v2/post/publish/video/init/"
+    PHOTO_INIT_URL = f"{OPEN_API_BASE}/v2/post/publish/photo/init/"
     STATUS_FETCH_URL = f"{OPEN_API_BASE}/v2/post/publish/status/fetch/"
 
-    # ----------------------------
-    # Low-level HTTP helpers
-    # ----------------------------
+    # ------------------------------------------------------------------
+    # Core helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _parse_json(cls, r: requests.Response) -> Dict[str, Any]:
+        try:
+            return r.json()
+        except Exception:
+            return {"raw": r.text}
+
+    @classmethod
+    def _raise_if_error(cls, payload: Dict[str, Any], prefix: str):
+        """
+        TikTok ALWAYS includes `error` even on success.
+        Only fail if error.code != ok.
+        """
+        err = payload.get("error") or {}
+        code = err.get("code")
+
+        if code in (None, "ok", 0, "0"):
+            return
+
+        raise Exception(f"{prefix}: {payload}")
+
     @classmethod
     def _headers_bearer(cls, access_token: str) -> Dict[str, str]:
         if not access_token:
             raise Exception("Missing TikTok access_token")
+
         return {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
 
-    @classmethod
-    def _post_json(
-        cls,
-        url: str,
-        *,
-        headers: Optional[Dict[str, str]] = None,
-        payload: Optional[Dict[str, Any]] = None,
-        timeout: int = 60,
-    ) -> Dict[str, Any]:
-        r = requests.post(url, headers=headers, json=payload or {}, timeout=timeout)
-        try:
-            data = r.json()
-        except Exception:
-            data = {"raw": r.text}
+    # ------------------------------------------------------------------
+    # OAuth
+    # ------------------------------------------------------------------
 
-        if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
-            raise Exception(f"TikTok API error: {data}")
-        return data
-
-    @classmethod
-    def _get(
-        cls,
-        url: str,
-        *,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        timeout: int = 60,
-    ) -> Dict[str, Any]:
-        r = requests.get(url, headers=headers, params=params or {}, timeout=timeout)
-        try:
-            data = r.json()
-        except Exception:
-            data = {"raw": r.text}
-
-        if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
-            raise Exception(f"TikTok API error: {data}")
-        return data
-
-    # ----------------------------
-    # OAuth2
-    # ----------------------------
     @classmethod
     def exchange_code_for_token(
         cls,
@@ -105,33 +87,23 @@ class TikTokAdapter:
         code: str,
         redirect_uri: str,
     ) -> Dict[str, Any]:
-        """
-        Exchange authorization 'code' for tokens.
-
-        Returns payload like:
-          {
-            "access_token": "...",
-            "expires_in": 86400,
-            "open_id": "...",
-            "refresh_token": "...",
-            "refresh_expires_in": ...,
-            "scope": "user.info.basic,video.upload,video.publish",
-            "token_type": "Bearer"
-          }
-        """
-        if not client_key or not client_secret:
-            raise Exception("Missing TikTok client_key/client_secret")
-        if not code or not redirect_uri:
-            raise Exception("Missing TikTok code/redirect_uri")
 
         payload = {
             "client_key": client_key,
             "client_secret": client_secret,
-            "code": code,
             "grant_type": "authorization_code",
+            "code": code,
             "redirect_uri": redirect_uri,
         }
-        return cls._post_json(cls.OAUTH_TOKEN_URL, payload=payload)
+
+        r = requests.post(cls.OAUTH_TOKEN_URL, json=payload, timeout=60)
+        data = cls._parse_json(r)
+
+        if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+            raise Exception(f"TikTok OAuth HTTP error: {data}")
+
+        cls._raise_if_error(data, "TikTok OAuth failed")
+        return data
 
     @classmethod
     def refresh_access_token(
@@ -141,13 +113,6 @@ class TikTokAdapter:
         client_secret: str,
         refresh_token: str,
     ) -> Dict[str, Any]:
-        """
-        Refresh access token.
-        """
-        if not client_key or not client_secret:
-            raise Exception("Missing TikTok client_key/client_secret")
-        if not refresh_token:
-            raise Exception("Missing TikTok refresh_token")
 
         payload = {
             "client_key": client_key,
@@ -155,194 +120,194 @@ class TikTokAdapter:
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
         }
-        return cls._post_json(cls.OAUTH_REFRESH_URL, payload=payload)
 
-    # ----------------------------
-    # User info (requires user.info.basic)
-    # ----------------------------
+        r = requests.post(cls.OAUTH_REFRESH_URL, json=payload, timeout=60)
+        data = cls._parse_json(r)
+
+        if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+            raise Exception(f"TikTok refresh HTTP error: {data}")
+
+        cls._raise_if_error(data, "TikTok refresh failed")
+        return data
+
+    # ------------------------------------------------------------------
+    # User info
+    # ------------------------------------------------------------------
+
     @classmethod
-    def get_user_info(
-        cls,
-        *,
-        access_token: str,
-        fields: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Fetch user information.
-
-        If fields is None, we request a safe default set.
-        """
+    def get_user_info(cls, *, access_token: str, fields: Optional[List[str]] = None) -> Dict[str, Any]:
         if not fields:
-            # Keep this minimal. Add more fields if TikTok app has them approved.
             fields = ["open_id", "union_id", "display_name", "avatar_url"]
 
-        params = {
-            "fields": ",".join(fields),
-        }
         headers = cls._headers_bearer(access_token)
-        return cls._get(cls.USER_INFO_URL, headers=headers, params=params)
+        params = {"fields": ",".join(fields)}
 
-    # ----------------------------
-    # Content Posting: Direct Post (Video)
-    # ----------------------------
+        r = requests.get(cls.USER_INFO_URL, headers=headers, params=params, timeout=60)
+        payload = cls._parse_json(r)
+
+        # Hard HTTP failure
+        if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+            raise Exception(f"TikTok user info HTTP error: {payload}")
+
+        # TikTok API returns { error: { code: "ok" } } on success
+        err = (payload.get("error") or {})
+        code = err.get("code")
+
+        if code not in (None, "ok", 0, "0"):
+            raise Exception(f"TikTok user info failed: {payload}")
+
+        return payload
+    # ------------------------------------------------------------------
+    # VIDEO POSTING
+    # ------------------------------------------------------------------
+
     @classmethod
-    def init_direct_post_video(
+    def init_video_post(
         cls,
         *,
         access_token: str,
-        post_text: str,
-        video_size_bytes: int,
+        caption: str,
+        video_size: int,
+        chunk_size: Optional[int] = None,
+        total_chunk_count: Optional[int] = None,
         privacy_level: str = "PUBLIC_TO_EVERYONE",
-        disable_comment: bool = False,
-        disable_duet: bool = False,
-        disable_stitch: bool = False,
-        brand_content_toggle: bool = False,
-        brand_organic_toggle: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Initialize a direct-post video upload.
 
-        Returns typically includes:
-          data: { publish_id, upload_url }
-        """
-        if not post_text:
-            post_text = ""
+        headers = cls._headers_bearer(access_token)
 
-        if not isinstance(video_size_bytes, int) or video_size_bytes <= 0:
-            raise Exception("video_size_bytes must be a positive int")
+        source_info = {
+            "source": "FILE_UPLOAD",
+            "video_size": video_size,
+        }
+
+        if chunk_size and total_chunk_count:
+            source_info["chunk_size"] = chunk_size
+            source_info["total_chunk_count"] = total_chunk_count
+
+        payload = {
+            "post_info": {
+                "title": caption or "",
+                "privacy_level": privacy_level,
+            },
+            "source_info": source_info,
+        }
+
+        r = requests.post(cls.VIDEO_INIT_URL, headers=headers, json=payload, timeout=60)
+        data = cls._parse_json(r)
+
+        if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+            raise Exception(f"TikTok init video HTTP error: {data}")
+
+        cls._raise_if_error(data, "TikTok init video failed")
+        return data
+
+    # ------------------------------------------------------------------
+    # PHOTO POSTING
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def init_photo_post(
+        cls,
+        *,
+        access_token: str,
+        caption: str,
+        image_urls: List[str],
+        privacy_level: str = "PUBLIC_TO_EVERYONE",
+    ) -> Dict[str, Any]:
 
         headers = cls._headers_bearer(access_token)
 
         payload = {
             "post_info": {
-                "title": post_text,
+                "title": caption or "",
                 "privacy_level": privacy_level,
-                "disable_comment": bool(disable_comment),
-                "disable_duet": bool(disable_duet),
-                "disable_stitch": bool(disable_stitch),
-                "video_cover_timestamp_ms": 0,
             },
             "source_info": {
-                "source": "FILE_UPLOAD",
-                "video_size": int(video_size_bytes),
-                # Some docs use "chunk_size" / "total_chunk_count". We will upload as a single PUT by default.
-                # If you want chunked PUTs, set these and use upload_video_put_chunked().
+                "source": "PULL_FROM_URL",
+                "photo_urls": image_urls,
             },
-            "brand_content_toggle": bool(brand_content_toggle),
-            "brand_organic_toggle": bool(brand_organic_toggle),
         }
 
-        resp = cls._post_json(cls.VIDEO_INIT_URL, headers=headers, payload=payload)
+        r = requests.post(cls.PHOTO_INIT_URL, headers=headers, json=payload, timeout=60)
+        data = cls._parse_json(r)
 
-        # TikTok returns:
-        # { "data": { "publish_id": "...", "upload_url": "..." }, "error": { "code": "ok", ... } }
-        err = (resp.get("error") or {})
-        if err.get("code") not in (None, "ok"):
-            raise Exception(f"TikTok API error (init): {resp}")
+        if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+            raise Exception(f"TikTok init photo HTTP error: {data}")
 
-        data = resp.get("data") or {}
-        if not data.get("upload_url") or not data.get("publish_id"):
-            raise Exception(f"TikTok init missing upload_url/publish_id: {resp}")
+        cls._raise_if_error(data, "TikTok init photo failed")
+        return data
 
-        return resp
+    # ------------------------------------------------------------------
+    # Upload helpers
+    # ------------------------------------------------------------------
 
     @classmethod
-    def upload_video_put_single(
-        cls,
-        *,
-        upload_url: str,
-        video_bytes: bytes,
-        timeout: int = 120,
-    ) -> Dict[str, Any]:
-        """
-        Upload the full video in a single PUT to upload_url.
+    def upload_put_single(cls, *, upload_url: str, blob: bytes) -> Dict[str, Any]:
 
-        Returns dict with status_code and response headers snippet.
-        """
-        if not upload_url:
-            raise Exception("Missing upload_url")
-        if not video_bytes:
-            raise Exception("video_bytes is empty")
-
-        # TikTok upload_url expects raw bytes
         headers = {
             "Content-Type": "video/mp4",
-            "Content-Length": str(len(video_bytes)),
+            "Content-Length": str(len(blob)),
         }
 
-        r = requests.put(upload_url, headers=headers, data=video_bytes, timeout=timeout)
+        r = requests.put(upload_url, headers=headers, data=blob, timeout=300)
+
         if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
-            # sometimes not JSON
-            raise Exception(f"TikTok upload PUT failed: status={r.status_code} body={r.text[:500]}")
+            raise Exception(f"TikTok upload PUT failed: {r.text[:500]}")
 
         return {
             "status_code": r.status_code,
             "etag": r.headers.get("etag"),
-            "request_id": r.headers.get("x-request-id") or r.headers.get("x-tt-trace-id"),
         }
 
     @classmethod
-    def upload_video_put_chunked(
+    def upload_put_chunked(
         cls,
         *,
         upload_url: str,
-        video_bytes: bytes,
-        chunk_size: int = 8 * 1024 * 1024,  # 8MB
-        timeout: int = 120,
+        blob: bytes,
+        chunk_size: int,
     ) -> Dict[str, Any]:
-        """
-        Chunked PUT using Content-Range. Use this if TikTok requires chunked upload for large files.
 
-        Returns: {"parts": [...], "total_bytes": int}
-        """
-        if not upload_url:
-            raise Exception("Missing upload_url")
-        if not video_bytes:
-            raise Exception("video_bytes is empty")
-
-        total = len(video_bytes)
-        parts = []
+        total = len(blob)
         start = 0
 
         while start < total:
             end = min(start + chunk_size, total) - 1
-            chunk = video_bytes[start:end + 1]
+            part = blob[start:end + 1]
 
             headers = {
                 "Content-Type": "video/mp4",
-                "Content-Length": str(len(chunk)),
+                "Content-Length": str(len(part)),
                 "Content-Range": f"bytes {start}-{end}/{total}",
             }
 
-            r = requests.put(upload_url, headers=headers, data=chunk, timeout=timeout)
-            if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
-                raise Exception(f"TikTok chunk upload failed: status={r.status_code} body={r.text[:500]}")
+            r = requests.put(upload_url, headers=headers, data=part, timeout=300)
 
-            parts.append({"start": start, "end": end, "status_code": r.status_code})
+            if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+                raise Exception(f"TikTok chunk upload failed: {r.text[:500]}")
+
             start = end + 1
 
-        return {"parts": parts, "total_bytes": total}
+        return {"total_bytes": total}
+
+    # ------------------------------------------------------------------
+    # Status polling
+    # ------------------------------------------------------------------
 
     @classmethod
-    def fetch_post_status(
-        cls,
-        *,
-        access_token: str,
-        publish_id: str,
-    ) -> Dict[str, Any]:
-        """
-        Fetch post status after init/upload.
+    def fetch_post_status(cls, *, access_token: str, publish_id: str) -> Dict[str, Any]:
 
-        Typical usage: poll until status indicates success/failure.
-        """
         headers = cls._headers_bearer(access_token)
         payload = {"publish_id": publish_id}
 
-        resp = cls._post_json(cls.STATUS_FETCH_URL, headers=headers, payload=payload)
-        err = (resp.get("error") or {})
-        if err.get("code") not in (None, "ok"):
-            raise Exception(f"TikTok API error (status): {resp}")
-        return resp
+        r = requests.post(cls.STATUS_FETCH_URL, headers=headers, json=payload, timeout=60)
+        data = cls._parse_json(r)
+
+        if r.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+            raise Exception(f"TikTok status HTTP error: {data}")
+
+        cls._raise_if_error(data, "TikTok fetch status failed")
+        return data
 
     @classmethod
     def wait_for_publish(
@@ -350,24 +315,21 @@ class TikTokAdapter:
         *,
         access_token: str,
         publish_id: str,
-        max_wait_seconds: int = 120,
+        max_wait_seconds: int = 180,
         poll_interval: float = 2.0,
     ) -> Dict[str, Any]:
-        """
-        Poll status until success/failure or timeout.
-        """
+
         deadline = time.time() + max_wait_seconds
         last = {}
 
         while time.time() < deadline:
             last = cls.fetch_post_status(access_token=access_token, publish_id=publish_id)
 
-            data = last.get("data") or {}
-            status = (data.get("status") or "").lower()
+            status = (last.get("data") or {}).get("status", "").lower()
 
-            # TikTok may return statuses like: PROCESSING / PUBLISHED / FAILED (depends on API)
             if status in ("published", "success", "succeeded"):
                 return last
+
             if status in ("failed", "error"):
                 return last
 
@@ -375,20 +337,19 @@ class TikTokAdapter:
 
         return last
 
-    # ----------------------------
-    # Webhooks (basic handler helpers)
-    # ----------------------------
+    # ------------------------------------------------------------------
+    # Webhooks
+    # ------------------------------------------------------------------
+
     @classmethod
-    def parse_webhook_event(cls, raw_json: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        TikTok webhooks payloads vary by product.
-        Keep this as a minimal normalizer so your resource can route events.
-        """
-        if not isinstance(raw_json, dict):
-            return {"type": None, "raw": raw_json}
+    def parse_webhook_event(cls, raw: Dict[str, Any]) -> Dict[str, Any]:
 
-        event_type = raw_json.get("event") or raw_json.get("type") or raw_json.get("event_type")
-        return {"type": event_type, "raw": raw_json}
-    
+        if not isinstance(raw, dict):
+            return {"type": None, "raw": raw}
 
+        etype = raw.get("event") or raw.get("event_type") or raw.get("type")
 
+        return {
+            "type": etype,
+            "raw": raw,
+        }
