@@ -1,7 +1,7 @@
 # app/services/social/adapters/instagram_adapter.py
 
 from __future__ import annotations
-
+import time
 from typing import Any, Dict, List
 import requests
 
@@ -95,6 +95,22 @@ class InstagramAdapter:
             next_url = ((d.get("paging") or {}).get("next") or "").strip()
 
         return pages
+
+
+    # -------------------------
+    # NEW: container status
+    # -------------------------
+    @classmethod
+    def get_container_status(cls, creation_id: str, access_token: str) -> Dict[str, Any]:
+        # fields commonly used by IG Graph
+        return cls._get(
+            f"/{creation_id}",
+            params={
+                "access_token": access_token,
+                "fields": "id,status_code,status",
+            },
+        )
+
 
     # ------------------------------------------------------------------
     # Publishing helpers
@@ -241,22 +257,47 @@ class InstagramAdapter:
             },
         )
 
-    # Publish
+    
     @classmethod
-    def publish_container(
+    def wait_until_container_ready(
         cls,
-        ig_user_id: str,
-        access_token: str,
         creation_id: str,
+        access_token: str,
+        *,
+        max_attempts: int = 10,
+        sleep_seconds: float = 2.0,
     ) -> Dict[str, Any]:
+        """
+        Polls until status_code == FINISHED.
+        Returns last status payload.
+        Raises if ERROR.
+        """
+        last = {}
+        for i in range(max_attempts):
+            last = cls.get_container_status(creation_id, access_token)
+            status_code = (last.get("status_code") or "").upper()
+
+            if status_code == "FINISHED":
+                return last
+
+            if status_code == "ERROR":
+                raise Exception(f"Instagram container status ERROR: {last}")
+
+            time.sleep(sleep_seconds)
+
+        # still not ready
+        return last
+
+    # -------------------------
+    # Publish
+    # -------------------------
+    @classmethod
+    def publish_container(cls, ig_user_id: str, access_token: str, creation_id: str) -> Dict:
         return cls._post(
             f"/{ig_user_id}/media_publish",
-            {
-                "creation_id": creation_id,
-                "access_token": access_token,
-            },
+            {"creation_id": creation_id, "access_token": access_token},
         )
-
+    
     # ------------------------------------------------------------------
     # NEW: Account discovery (user token -> pages -> instagram_accounts)
     # ------------------------------------------------------------------
