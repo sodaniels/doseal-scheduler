@@ -379,7 +379,7 @@ class InstagramOauthCallbackResource(MethodView):
             user_access_token = token_data["access_token"]
 
             # Fetch IG accounts list (page-linked IG biz/creator), including page_access_token
-            accounts = InstagramAdapter.list_connected_instagram_accounts(user_access_token)
+            accounts = InstagramAdapter.get_connected_instagram_accounts(user_access_token)
 
             if not accounts:
                 return jsonify({
@@ -481,8 +481,7 @@ class InstagramAccountsResource(MethodView):
         if not selection_key:
             return jsonify({"success": False, "message": "selection_key is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        # ✅ Match the naming used in the combined implementation:
-        # key: ig_select:<selection_key>
+        # ✅ Use the new naming (what you stored in callback)
         raw = get_redis(f"ig_select:{selection_key}")
         if not raw:
             return jsonify(
@@ -495,7 +494,10 @@ class InstagramAccountsResource(MethodView):
 
         # Ensure logged-in user matches selection owner
         user = g.get("current_user", {}) or {}
-        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
+        if (
+            str(user.get("business_id")) != str(owner.get("business_id"))
+            or str(user.get("_id")) != str(owner.get("user__id"))
+        ):
             Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
             return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
@@ -503,15 +505,15 @@ class InstagramAccountsResource(MethodView):
         safe_accounts = []
         for a in accounts:
             safe_accounts.append({
-                "ig_user_id": a.get("ig_user_id"),
-                "ig_username": a.get("ig_username"),
+                # ✅ NEW FIELDS FROM InstagramAdapter.get_connected_instagram_accounts()
+                "ig_user_id": a.get("destination_id"),
+                "ig_username": a.get("username"),
 
-                # helpful context for UI
+                # UI context
                 "page_id": a.get("page_id"),
                 "page_name": a.get("page_name"),
             })
 
         return jsonify({"success": True, "data": {"accounts": safe_accounts}}), HTTP_STATUS_CODES["OK"]
-
 
 
