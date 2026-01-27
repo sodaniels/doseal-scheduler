@@ -1,8 +1,10 @@
 # app/services/social/adapters/instagram_adapter.py
 
 from __future__ import annotations
+
 import time
 from typing import Any, Dict, List
+
 import requests
 
 from ....utils.logger import Log
@@ -20,10 +22,11 @@ class InstagramAdapter:
     Notes:
       - ig_user_id will be NULL if the Facebook Page has no linked Instagram Professional account.
       - Publishing typically uses a Page token (or a valid token with required permissions).
+      - Video-to-feed publishing uses REELS (VIDEO is deprecated).
     """
 
     GRAPH_BASE = "https://graph.facebook.com"
-    GRAPH_VERSION = "v19.0"  # keep consistent with your existing pinned version
+    GRAPH_VERSION = "v19.0"
 
     # ------------------------------------------------------------------
     # Core HTTP helpers
@@ -58,12 +61,11 @@ class InstagramAdapter:
             raise Exception(f"Instagram API error: {payload}")
         return payload
 
+    # ------------------------------------------------------------------
+    # Paged fetch pages the user manages
+    # ------------------------------------------------------------------
     @classmethod
     def _get_all_pages(cls, user_access_token: str) -> List[Dict[str, Any]]:
-        """
-        Paged fetch for /me/accounts to return all pages the user can manage.
-        Each page item typically includes page access_token (if permitted).
-        """
         pages: List[Dict[str, Any]] = []
         log_tag = "[InstagramAdapter][_get_all_pages]"
 
@@ -96,26 +98,55 @@ class InstagramAdapter:
 
         return pages
 
-
-    # -------------------------
-    # NEW: container status
-    # -------------------------
+    # ------------------------------------------------------------------
+    # Container status (processing)
+    # ------------------------------------------------------------------
     @classmethod
     def get_container_status(cls, creation_id: str, access_token: str) -> Dict[str, Any]:
-        # fields commonly used by IG Graph
+        """
+        Returns:
+          { id, status_code } where status_code is typically:
+            IN_PROGRESS | FINISHED | ERROR
+        """
         return cls._get(
             f"/{creation_id}",
             params={
                 "access_token": access_token,
-                "fields": "id,status_code,status",
+                "fields": "id,status_code",
             },
         )
 
+    @classmethod
+    def wait_until_container_ready(
+        cls,
+        creation_id: str,
+        access_token: str,
+        *,
+        max_attempts: int = 30,
+        sleep_seconds: float = 3.0,
+    ) -> Dict[str, Any]:
+        """
+        Polls until status_code == FINISHED.
+        Raises if ERROR.
+        Returns last status payload.
+        """
+        last: Dict[str, Any] = {}
+        for _ in range(max_attempts):
+            last = cls.get_container_status(creation_id, access_token)
+            status_code = (last.get("status_code") or "").upper()
+
+            if status_code == "FINISHED":
+                return last
+            if status_code == "ERROR":
+                raise Exception(f"Instagram container ERROR: {last}")
+
+            time.sleep(sleep_seconds)
+
+        return last
 
     # ------------------------------------------------------------------
-    # Publishing helpers
+    # Containers: Feed image
     # ------------------------------------------------------------------
-    # Feed containers (single)
     @classmethod
     def create_feed_container_image(
         cls,
@@ -133,24 +164,9 @@ class InstagramAdapter:
             },
         )
 
-    @classmethod
-    def create_feed_container_video(
-        cls,
-        ig_user_id: str,
-        access_token: str,
-        video_url: str,
-        caption: str,
-    ) -> Dict[str, Any]:
-        return cls._post(
-            f"/{ig_user_id}/media",
-            {
-                "video_url": video_url,
-                "caption": caption,
-                "access_token": access_token,
-            },
-        )
-
-    # Reels container
+    # ------------------------------------------------------------------
+    # Containers: REELS (used for BOTH reels and feed video)
+    # ------------------------------------------------------------------
     @classmethod
     def create_reel_container(
         cls,
@@ -158,18 +174,28 @@ class InstagramAdapter:
         access_token: str,
         video_url: str,
         caption: str,
+        share_to_feed: bool = True,
     ) -> Dict[str, Any]:
+        """
+        IMPORTANT:
+          - VIDEO is deprecated on IG Graph publishing.
+          - Use media_type=REELS for video publishing.
+          - Use share_to_feed=true if you want it on the main feed grid as well.
+        """
         return cls._post(
             f"/{ig_user_id}/media",
             {
                 "media_type": "REELS",
                 "video_url": video_url,
                 "caption": caption,
+                "share_to_feed": "true" if share_to_feed else "false",
                 "access_token": access_token,
             },
         )
 
-    # Story containers
+    # ------------------------------------------------------------------
+    # Containers: Stories
+    # ------------------------------------------------------------------
     @classmethod
     def create_story_container_image(
         cls,
@@ -206,7 +232,9 @@ class InstagramAdapter:
             },
         )
 
+    # ------------------------------------------------------------------
     # Carousel flow
+    # ------------------------------------------------------------------
     @classmethod
     def create_carousel_item_image(
         cls,
@@ -230,6 +258,11 @@ class InstagramAdapter:
         access_token: str,
         video_url: str,
     ) -> Dict[str, Any]:
+        """
+        IMPORTANT:
+          Do NOT use media_type=VIDEO here (deprecated in many contexts).
+          For carousel child videos, supply video_url + is_carousel_item.
+        """
         return cls._post(
             f"/{ig_user_id}/media",
             {
@@ -257,64 +290,33 @@ class InstagramAdapter:
             },
         )
 
-    
-    @classmethod
-    def wait_until_container_ready(
-        cls,
-        creation_id: str,
-        access_token: str,
-        *,
-        max_attempts: int = 10,
-        sleep_seconds: float = 2.0,
-    ) -> Dict[str, Any]:
-        """
-        Polls until status_code == FINISHED.
-        Returns last status payload.
-        Raises if ERROR.
-        """
-        last = {}
-        for i in range(max_attempts):
-            last = cls.get_container_status(creation_id, access_token)
-            status_code = (last.get("status_code") or "").upper()
-
-            if status_code == "FINISHED":
-                return last
-
-            if status_code == "ERROR":
-                raise Exception(f"Instagram container status ERROR: {last}")
-
-            time.sleep(sleep_seconds)
-
-        # still not ready
-        return last
-
-    # -------------------------
+    # ------------------------------------------------------------------
     # Publish
-    # -------------------------
+    # ------------------------------------------------------------------
     @classmethod
-    def publish_container(cls, ig_user_id: str, access_token: str, creation_id: str) -> Dict:
+    def publish_container(
+        cls,
+        ig_user_id: str,
+        access_token: str,
+        creation_id: str,
+    ) -> Dict[str, Any]:
         return cls._post(
             f"/{ig_user_id}/media_publish",
-            {"creation_id": creation_id, "access_token": access_token},
+            {
+                "creation_id": creation_id,
+                "access_token": access_token,
+            },
         )
-    
+
     # ------------------------------------------------------------------
-    # NEW: Account discovery (user token -> pages -> instagram_accounts)
+    # Account discovery: user token -> pages -> page/instagram_accounts
     # ------------------------------------------------------------------
     @classmethod
     def list_user_pages(cls, user_access_token: str) -> List[Dict[str, Any]]:
-        """
-        Returns pages the user can manage, including each page access_token.
-        """
         return cls._get_all_pages(user_access_token)
 
     @classmethod
     def list_page_instagram_accounts(cls, page_id: str, page_access_token: str) -> List[Dict[str, Any]]:
-        """
-        Correct way to get IG professional accounts linked to a Facebook Page.
-        Uses: /{page-id}/instagram_accounts
-        Returns: [{"id": "...", "username": "..."}]
-        """
         data = cls._get(
             f"/{page_id}/instagram_accounts",
             params={
@@ -327,21 +329,6 @@ class InstagramAdapter:
 
     @classmethod
     def get_connected_instagram_accounts(cls, user_access_token: str) -> List[Dict[str, Any]]:
-        """
-        Returns list of Instagram professional accounts connected to Facebook Pages
-        that the user can manage.
-
-        Output items example:
-        {
-          "platform": "instagram",
-          "destination_type": "ig_user",
-          "destination_id": "<ig_user_id>",
-          "username": "...",
-          "page_id": "...",
-          "page_name": "...",
-          "page_access_token": "...",
-        }
-        """
         log_tag = "[InstagramAdapter][get_connected_instagram_accounts]"
 
         if not user_access_token:
@@ -364,8 +351,6 @@ class InstagramAdapter:
                 Log.info(f"{log_tag} instagram_accounts lookup failed page_id={page_id}: {e}")
                 continue
 
-            # If none linked, you can either skip or return placeholders.
-            # Most UIs skip and tell the user to link IG to a Page.
             for ig in ig_accounts:
                 ig_id = str(ig.get("id") or "")
                 if not ig_id:
@@ -378,7 +363,6 @@ class InstagramAdapter:
                     "username": ig.get("username"),
                     "page_id": page_id,
                     "page_name": page_name,
-                    # You will usually publish using a token tied to the page/user with needed perms
                     "page_access_token": page_access_token,
                 })
 

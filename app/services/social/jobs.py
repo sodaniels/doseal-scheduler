@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-import json
 import time
 
 from ...models.social.scheduled_post import ScheduledPost
@@ -31,23 +30,16 @@ def _as_list(x):
 def _build_caption(text: str, link: Optional[str]) -> str:
     caption = (text or "").strip()
     if link:
-        if caption:
-            caption = f"{caption}\n\n{link}"
-        else:
-            caption = link
+        caption = f"{caption}\n\n{link}".strip() if caption else link.strip()
     return caption.strip()
 
 
 def _is_ig_not_ready_error(err: Exception | str) -> bool:
-    """
-    Detect IG Graph 'Media ID is not available / media not ready for publishing' errors.
-    Typical:
-      code=9007, subcode=2207027
-    """
     s = str(err)
     return (
         "Media ID is not available" in s
         or "media is not ready for publishing" in s
+        or "The media is not ready for publishing" in s
         or "code': 9007" in s
         or "error_subcode': 2207027" in s
     )
@@ -68,12 +60,7 @@ def _get_facebook_page_token(post: dict, destination_id: str) -> str:
     return acct["access_token_plain"]
 
 
-def _get_instagram_user_token(post: dict, ig_user_id: str) -> str:
-    """
-    Your IG connect flow stores the token you publish with as access_token_plain
-    under platform='instagram', destination_id=<ig_user_id>.
-    In your implementation this is typically the Page access token.
-    """
+def _get_instagram_token(post: dict, ig_user_id: str) -> str:
     acct = SocialAccount.get_destination(
         post["business_id"],
         post["user__id"],
@@ -86,40 +73,51 @@ def _get_instagram_user_token(post: dict, ig_user_id: str) -> str:
 
 
 # -----------------------------
-# Instagram publish: wait + publish
+# Instagram: create -> wait -> publish (with publish retry)
 # -----------------------------
-def _ig_wait_then_publish(
+def _ig_create_wait_publish(
     *,
     ig_user_id: str,
     access_token: str,
     creation_id: str,
-    max_attempts: int = 10,
-    sleep_seconds: float = 2.0,
+    wait_attempts: int = 40,
+    wait_sleep: float = 3.0,
+    publish_attempts: int = 6,
+    publish_sleep: float = 3.0,
 ) -> Dict[str, Any]:
     """
-    IG Graph: container create is async. We must wait until status_code == FINISHED,
-    then call media_publish.
+    - Waits for container processing to FINISH
+    - Then attempts publish, retrying "not ready" errors a few times
     """
-    last_status: Dict[str, Any] = {}
-    for _ in range(max_attempts):
-        last_status = InstagramAdapter.get_container_status(creation_id, access_token)
-        status_code = (last_status.get("status_code") or last_status.get("status") or "").upper()
+    status_payload = InstagramAdapter.wait_until_container_ready(
+        creation_id,
+        access_token,
+        max_attempts=wait_attempts,
+        sleep_seconds=wait_sleep,
+    )
 
-        if status_code == "FINISHED":
-            publish_resp = InstagramAdapter.publish_container(
+    status_code = (status_payload.get("status_code") or "").upper()
+    if status_code != "FINISHED":
+        # still in progress after timeout
+        raise Exception(f"Instagram container not ready: {status_payload}")
+
+    last_publish_err: Optional[Exception] = None
+    for _ in range(publish_attempts):
+        try:
+            pub = InstagramAdapter.publish_container(
                 ig_user_id=ig_user_id,
                 access_token=access_token,
                 creation_id=creation_id,
             )
-            return {"status": last_status, "publish": publish_resp}
+            return {"status": status_payload, "publish": pub}
+        except Exception as e:
+            last_publish_err = e
+            if _is_ig_not_ready_error(e):
+                time.sleep(publish_sleep)
+                continue
+            raise
 
-        if status_code == "ERROR":
-            raise Exception(f"Instagram container ERROR: {last_status}")
-
-        time.sleep(sleep_seconds)
-
-    # Not ready in time
-    raise Exception(f"Instagram media not ready after retries. status={last_status}")
+    raise Exception(f"Instagram publish failed after retries: {last_publish_err}")
 
 
 # -----------------------------
@@ -173,51 +171,48 @@ def _publish_to_facebook(
             video_url=media_url,
             description=caption,
             file_size_bytes=int(media_bytes),
-            share_to_feed=False,  # feed handled separately if user selected feed too
+            share_to_feed=False,
         )
-
         r["status"] = "success"
         r["provider_post_id"] = resp.get("id") or resp.get("post_id")
         r["raw"] = resp
         return r
 
-    if placement == "feed":
-        if asset_type == "image" and media_url:
-            resp = FacebookAdapter.publish_page_photo(
-                page_id=destination_id,
-                page_access_token=page_access_token,
-                image_url=media_url,
-                caption=caption,
-            )
-            r["status"] = "success"
-            r["provider_post_id"] = resp.get("post_id") or resp.get("id")
-            r["raw"] = resp
-            return r
-
-        if asset_type == "video" and media_url:
-            resp = FacebookAdapter.publish_page_video(
-                page_id=destination_id,
-                page_access_token=page_access_token,
-                video_url=media_url,
-                description=caption,
-            )
-            r["status"] = "success"
-            r["provider_post_id"] = resp.get("id")
-            r["raw"] = resp
-            return r
-
-        resp = FacebookAdapter.publish_page_feed(
+    # feed
+    if asset_type == "image" and media_url:
+        resp = FacebookAdapter.publish_page_photo(
             page_id=destination_id,
             page_access_token=page_access_token,
-            message=text,
-            link=link,
+            image_url=media_url,
+            caption=caption,
+        )
+        r["status"] = "success"
+        r["provider_post_id"] = resp.get("post_id") or resp.get("id")
+        r["raw"] = resp
+        return r
+
+    if asset_type == "video" and media_url:
+        resp = FacebookAdapter.publish_page_video(
+            page_id=destination_id,
+            page_access_token=page_access_token,
+            video_url=media_url,
+            description=caption,
         )
         r["status"] = "success"
         r["provider_post_id"] = resp.get("id")
         r["raw"] = resp
         return r
 
-    raise Exception("Invalid facebook placement. Use feed|reel|story.")
+    resp = FacebookAdapter.publish_page_feed(
+        page_id=destination_id,
+        page_access_token=page_access_token,
+        message=text,
+        link=link,
+    )
+    r["status"] = "success"
+    r["provider_post_id"] = resp.get("id")
+    r["raw"] = resp
+    return r
 
 
 # -----------------------------
@@ -248,13 +243,8 @@ def _publish_to_instagram(
         return r
 
     placement = r["placement"]
-
-    # IG: no clickable link field; put it in caption
-    caption = (text or "").strip()
-    if link:
-        caption = f"{caption}\n\n{link}".strip() if caption else link.strip()
-
-    access_token = _get_instagram_user_token(post, ig_user_id)
+    caption = _build_caption(text, link)
+    access_token = _get_instagram_token(post, ig_user_id)
 
     # -----------------
     # REEL
@@ -264,20 +254,22 @@ def _publish_to_instagram(
             raise Exception("Instagram reel requires exactly 1 media item (video).")
         if (media[0].get("asset_type") or "").lower() != "video":
             raise Exception("Instagram reel requires media.asset_type=video.")
-        if not media[0].get("url"):
+        url = media[0].get("url")
+        if not url:
             raise Exception("Instagram reel requires media.url.")
 
         create_resp = InstagramAdapter.create_reel_container(
             ig_user_id=ig_user_id,
             access_token=access_token,
-            video_url=media[0]["url"],
+            video_url=url,
             caption=caption,
+            share_to_feed=False,
         )
         creation_id = create_resp.get("id")
         if not creation_id:
             raise Exception(f"Instagram create container missing id: {create_resp}")
 
-        flow = _ig_wait_then_publish(
+        flow = _ig_create_wait_publish(
             ig_user_id=ig_user_id,
             access_token=access_token,
             creation_id=creation_id,
@@ -296,23 +288,24 @@ def _publish_to_instagram(
             raise Exception("Instagram story requires exactly 1 media item.")
         m = media[0]
         mtype = (m.get("asset_type") or "").lower()
-        if mtype not in ("image", "video"):
-            raise Exception("Instagram story supports image or video only.")
-        if not m.get("url"):
+        url = m.get("url")
+        if not url:
             raise Exception("Instagram story requires media.url.")
+        if mtype not in ("image", "video"):
+            raise Exception("Instagram story supports image|video only.")
 
         if mtype == "image":
             create_resp = InstagramAdapter.create_story_container_image(
                 ig_user_id=ig_user_id,
                 access_token=access_token,
-                image_url=m["url"],
+                image_url=url,
                 caption=caption,
             )
         else:
             create_resp = InstagramAdapter.create_story_container_video(
                 ig_user_id=ig_user_id,
                 access_token=access_token,
-                video_url=m["url"],
+                video_url=url,
                 caption=caption,
             )
 
@@ -320,7 +313,7 @@ def _publish_to_instagram(
         if not creation_id:
             raise Exception(f"Instagram create container missing id: {create_resp}")
 
-        flow = _ig_wait_then_publish(
+        flow = _ig_create_wait_publish(
             ig_user_id=ig_user_id,
             access_token=access_token,
             creation_id=creation_id,
@@ -338,35 +331,38 @@ def _publish_to_instagram(
         if len(media) < 1:
             raise Exception("Instagram feed requires at least 1 media item.")
 
-        # Single media => image/video feed container
+        # Single media
         if len(media) == 1:
             m = media[0]
             mtype = (m.get("asset_type") or "").lower()
-            if not m.get("url"):
+            url = m.get("url")
+            if not url:
                 raise Exception("Instagram feed requires media.url.")
 
-            if mtype == "image":
+            # ✅ IMPORTANT: feed video uses REELS with share_to_feed=True
+            if mtype == "video":
+                create_resp = InstagramAdapter.create_reel_container(
+                    ig_user_id=ig_user_id,
+                    access_token=access_token,
+                    video_url=url,
+                    caption=caption,
+                    share_to_feed=True,
+                )
+            elif mtype == "image":
                 create_resp = InstagramAdapter.create_feed_container_image(
                     ig_user_id=ig_user_id,
                     access_token=access_token,
-                    image_url=m["url"],
-                    caption=caption,
-                )
-            elif mtype == "video":
-                create_resp = InstagramAdapter.create_feed_container_video(
-                    ig_user_id=ig_user_id,
-                    access_token=access_token,
-                    video_url=m["url"],
+                    image_url=url,
                     caption=caption,
                 )
             else:
-                raise Exception("Instagram feed supports image or video only.")
+                raise Exception("Instagram feed supports image|video only.")
 
             creation_id = create_resp.get("id")
             if not creation_id:
                 raise Exception(f"Instagram create container missing id: {create_resp}")
 
-            flow = _ig_wait_then_publish(
+            flow = _ig_create_wait_publish(
                 ig_user_id=ig_user_id,
                 access_token=access_token,
                 creation_id=creation_id,
@@ -377,36 +373,37 @@ def _publish_to_instagram(
             r["raw"] = {"create": create_resp, **flow}
             return r
 
-        # Carousel (2..10): create children, then carousel container, then wait+publish.
+        # Carousel (2..10)
         child_ids: List[str] = []
-        child_create_raw: List[Dict[str, Any]] = []
+        child_raw: List[Dict[str, Any]] = []
 
         for m in media:
             mtype = (m.get("asset_type") or "").lower()
-            if not m.get("url"):
+            url = m.get("url")
+            if not url:
                 raise Exception("Instagram carousel requires media.url for each item.")
 
             if mtype == "image":
                 child = InstagramAdapter.create_carousel_item_image(
                     ig_user_id=ig_user_id,
                     access_token=access_token,
-                    image_url=m["url"],
+                    image_url=url,
                 )
             elif mtype == "video":
                 child = InstagramAdapter.create_carousel_item_video(
                     ig_user_id=ig_user_id,
                     access_token=access_token,
-                    video_url=m["url"],
+                    video_url=url,
                 )
             else:
-                raise Exception("Instagram carousel supports image/video only.")
+                raise Exception("Instagram carousel supports image|video only.")
 
             cid = child.get("id")
             if not cid:
                 raise Exception(f"Instagram carousel child missing id: {child}")
 
             child_ids.append(cid)
-            child_create_raw.append(child)
+            child_raw.append(child)
 
         carousel = InstagramAdapter.create_carousel_container(
             ig_user_id=ig_user_id,
@@ -418,7 +415,7 @@ def _publish_to_instagram(
         if not carousel_id:
             raise Exception(f"Instagram carousel create missing id: {carousel}")
 
-        flow = _ig_wait_then_publish(
+        flow = _ig_create_wait_publish(
             ig_user_id=ig_user_id,
             access_token=access_token,
             creation_id=carousel_id,
@@ -426,7 +423,7 @@ def _publish_to_instagram(
 
         r["status"] = "success"
         r["provider_post_id"] = (flow.get("publish") or {}).get("id")
-        r["raw"] = {"children_create": child_create_raw, "carousel_create": carousel, **flow}
+        r["raw"] = {"children": child_raw, "carousel_create": carousel, **flow}
         return r
 
     raise Exception("Invalid instagram placement. Use feed|reel|story.")
@@ -451,10 +448,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
     content = post.get("content") or {}
     text = (content.get("text") or "").strip()
     link = content.get("link")
-
-    media = content.get("media") or []
-    if isinstance(media, dict):
-        media = [media]
+    media = _as_list(content.get("media"))
 
     for dest in post.get("destinations") or []:
         platform = (dest.get("platform") or "").strip().lower()
@@ -468,7 +462,6 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     link=link,
                     media=media,
                 )
-
             elif platform == "instagram":
                 r = _publish_to_instagram(
                     post=post,
@@ -477,7 +470,6 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     link=link,
                     media=media,
                 )
-
             else:
                 r = {
                     "platform": platform,
@@ -491,14 +483,13 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                 }
 
             results.append(r)
-
             if r.get("status") == "success":
                 any_success = True
             else:
                 any_failed = True
 
         except Exception as e:
-            r = {
+            rr = {
                 "platform": platform,
                 "destination_id": str(dest.get("destination_id") or ""),
                 "destination_type": dest.get("destination_type"),
@@ -508,22 +499,18 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                 "error": str(e),
                 "raw": None,
             }
-            results.append(r)
+            results.append(rr)
             any_failed = True
-            Log.info(f"{log_tag} destination failed: {r}")
+            Log.info(f"{log_tag} destination failed: {rr}")
 
-    # -------------------------
     # Decide overall status
-    # -------------------------
     if any_success and not any_failed:
         overall_status = ScheduledPost.STATUS_PUBLISHED
         overall_error = None
-
     elif any_success and any_failed:
         overall_status = getattr(ScheduledPost, "STATUS_PARTIAL", ScheduledPost.STATUS_PUBLISHED)
         first_err = next((x.get("error") for x in results if x.get("status") == "failed"), None)
         overall_error = f"Some destinations failed. Example: {first_err}" if first_err else "Some destinations failed."
-
     else:
         overall_status = ScheduledPost.STATUS_FAILED
         first_err = next((x.get("error") for x in results if x.get("error")), "All destinations failed.")
