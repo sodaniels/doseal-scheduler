@@ -14,8 +14,6 @@ from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 
 from ...models.social.social_account import SocialAccount
-from ...services.social.adapters.facebook_adapter import FacebookAdapter
-from ...services.social.adapters.instagram_adapter import InstagramAdapter
 from ...services.social.adapters.x_adapter import XAdapter
 
 from ...utils.schedule_helper import (
