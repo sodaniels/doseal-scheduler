@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import time, os
 import requests
+import json
 
 
 from ...models.social.scheduled_post import ScheduledPost
@@ -559,6 +560,124 @@ def _publish_to_x(
 
 
 # -----------------------------
+# TikTok token fetcher
+# -----------------------------
+def _get_tiktok_user_token(post: dict, tiktok_user_id: str) -> str:
+    """
+    Assumes your TikTok connect flow stores:
+      SocialAccount.platform="tiktok"
+      SocialAccount.destination_id=<tiktok_user_id>
+      SocialAccount.access_token_plain=<TikTok user access_token>
+    """
+    acct = SocialAccount.get_destination(
+        post["business_id"],
+        post["user__id"],
+        "tiktok",
+        tiktok_user_id,
+    )
+    if not acct or not acct.get("access_token_plain"):
+        raise Exception(f"Missing tiktok destination token for destination_id={tiktok_user_id}")
+    return acct["access_token_plain"]
+
+
+def _publish_to_tiktok(
+    *,
+    post: dict,
+    dest: dict,
+    text: str,
+    link: Optional[str],
+    media: List[dict],
+) -> Dict[str, Any]:
+    """
+    TikTok (Content Posting API - Direct Post):
+      - We implement VIDEO posting (1 video) using /v2/post/publish/video/init/ (scope: video.publish).
+      - We use PULL_FROM_URL mode by default (works well with Cloudinary URLs).
+      - If your app is not audited, posts may be restricted to private visibility. (TikTok docs)
+    """
+    r = {
+        "platform": "tiktok",
+        "destination_id": str(dest.get("destination_id") or ""),
+        "destination_type": dest.get("destination_type"),
+        "placement": (dest.get("placement") or "feed").lower(),
+        "status": "failed",
+        "provider_post_id": None,  # we will store publish_id (or post_id if you later fetch it)
+        "error": None,
+        "raw": None,
+    }
+
+    tiktok_user_id = r["destination_id"]
+    if not tiktok_user_id:
+        r["error"] = "Missing destination_id"
+        return r
+
+    # Require exactly 1 video for now
+    if not media or len(media) != 1:
+        raise Exception("TikTok requires exactly 1 media item (video) for this integration.")
+    m = media[0]
+    mtype = (m.get("asset_type") or "").lower()
+    video_url = (m.get("url") or "").strip()
+    if mtype != "video":
+        raise Exception("TikTok posting here supports video only (asset_type=video).")
+    if not video_url:
+        raise Exception("TikTok requires media.url for the video.")
+
+    access_token = _get_tiktok_user_token(post, tiktok_user_id)
+
+    # Caption: TikTok title/caption supports long text; keep your link in caption if you want.
+    caption = (text or "").strip()
+    if link:
+        caption = f"{caption}\n\n{link}".strip() if caption else link.strip()
+
+    # IMPORTANT: privacy_level must match creator_info/query privacy_level_options.
+    # If you are not querying creator_info yet, default to SELF_ONLY to avoid rejects.
+    privacy_level = (dest.get("privacy_level") or "SELF_ONLY").strip()
+
+    base = os.getenv("TIKTOK_OPEN_BASE_URL", "https://open.tiktokapis.com")
+    init_url = f"{base}/v2/post/publish/video/init/"
+
+    # Prefer PULL_FROM_URL for hosted videos (Cloudinary, S3, etc.)
+    # TikTok supports an init step before transferring media. (Direct Post flow)  [oai_citation:3‡developers.tiktok.com](https://developers.tiktok.com/doc/content-posting-api-reference-direct-post?enter_method=left_navigation)
+    body = {
+        "post_info": {
+            "privacy_level": privacy_level,
+            "title": caption,  # docs call this the video caption/title  [oai_citation:4‡developers.tiktok.com](https://developers.tiktok.com/doc/content-posting-api-reference-direct-post?enter_method=left_navigation)
+        },
+        "source_info": {
+            "source": "PULL_FROM_URL",
+            "video_url": video_url,
+        },
+    }
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json; charset=UTF-8",
+    }
+
+    resp = requests.post(init_url, headers=headers, data=json.dumps(body), timeout=60)
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {"raw": resp.text}
+
+    if resp.status_code >= 400:
+        raise Exception(f"TikTok API error (init): {payload}")
+
+    # TikTok returns a publish_id in the init response (naming may be payload['data']['publish_id']).
+    data = payload.get("data") or {}
+    publish_id = data.get("publish_id") or data.get("publishId") or data.get("id")
+
+    # Some variants may also return upload_url when using FILE_UPLOAD.
+    # With PULL_FROM_URL, TikTok pulls it asynchronously (no upload step from you).
+    if not publish_id:
+        # still store raw for debugging
+        raise Exception(f"TikTok init succeeded but publish_id missing. payload={payload}")
+
+    r["status"] = "success"
+    r["provider_post_id"] = str(publish_id)
+    r["raw"] = payload
+    return r
+
+# -----------------------------
 # Main job
 # -----------------------------
 def _publish_scheduled_post(post_id: str, business_id: str):
@@ -610,6 +729,15 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
             elif platform == "x":
                 r = _publish_to_x(
+                    post=post,
+                    dest=dest,
+                    text=text,
+                    link=link,
+                    media=media,
+                )
+
+            elif platform == "tiktok":
+                r = _publish_to_tiktok(
                     post=post,
                     dest=dest,
                     text=text,
@@ -695,8 +823,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
         overall_status,
         provider_results=results,
         error=overall_error,
-    )
-    
+    ) 
 
 def publish_scheduled_post(post_id: str, business_id: str):
     return run_in_app_context(_publish_scheduled_post, post_id, business_id)

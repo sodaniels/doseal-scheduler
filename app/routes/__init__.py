@@ -69,6 +69,7 @@ from ..resources import (
     blp_fb_connect,
     blp_scheduled_posts,
     blp_x_oauth,
+    blp_tiktok_oauth,
 )
 
 
@@ -98,11 +99,13 @@ def register_social_routes(app, api):
         blp_subscriber_beneficiary,
         blp_subscriber_transaction,
         blp_billpay,
-        blp_meta_oauth,
         blp_fb_webhook,
         blp_fb_connect,
         blp_scheduled_posts,
+        blp_meta_oauth,
         blp_x_oauth,
+        blp_tiktok_oauth
+        
         
     ]
 
