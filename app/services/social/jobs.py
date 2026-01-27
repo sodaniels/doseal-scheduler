@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 import time, os
+import requests
+
 
 from ...models.social.scheduled_post import ScheduledPost
 from ...models.social.social_account import SocialAccount
@@ -88,6 +90,16 @@ def _get_x_oauth_tokens(post: dict, destination_id: str) -> Dict[str, str]:
         raise Exception("Missing X oauth_token/oauth_token_secret (reconnect X account).")
 
     return {"oauth_token": oauth_token, "oauth_token_secret": oauth_token_secret}
+def _download_media_bytes(url: str) -> tuple[bytes, str]:
+    """
+    Download media from Cloudinary (or any HTTPS URL).
+    Returns: (bytes, content_type)
+    """
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    content_type = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+    return r.content, content_type
+
 
 # -----------------------------
 # Instagram: create -> wait -> publish (with publish retry)
@@ -460,12 +472,6 @@ def _publish_to_x(
     link: Optional[str],
     media: List[dict],
 ) -> Dict[str, Any]:
-    """
-    X rules:
-      - Only one placement (ignore dest.placement)
-      - Text <= 280
-      - Media: up to 4 images OR 1 video (your schema enforces this)
-    """
     r = {
         "platform": "x",
         "destination_id": str(dest.get("destination_id") or ""),
@@ -482,10 +488,10 @@ def _publish_to_x(
         r["error"] = "Missing destination_id"
         return r
 
-    consumer_key = os.getenv("X_CLIENT_ID")
-    consumer_secret = os.getenv("X_CLIENT_SECRET")
+    consumer_key = os.getenv("X_CONSUMER_KEY")
+    consumer_secret = os.getenv("X_CONSUMER_SECRET")
     if not consumer_key or not consumer_secret:
-        raise Exception("Missing X_CLIENT_ID / X_CLIENT_SECRET in env")
+        raise Exception("Missing X_CONSUMER_KEY / X_CONSUMER_SECRET in env")
 
     tokens = _get_x_oauth_tokens(post, destination_id)
     oauth_token = tokens["oauth_token"]
@@ -495,18 +501,31 @@ def _publish_to_x(
     if len(tweet_text) > 280:
         tweet_text = tweet_text[:277] + "..."
 
+    # -----------------------------------------
+    # Upload media (download bytes first)
+    # -----------------------------------------
     media_ids: List[str] = []
+
     if media:
-        # Upload each media item
+        # detect if video exists (X: 1 video max)
+        has_video = any(((m.get("asset_type") or "").lower() == "video") for m in media)
+        if has_video:
+            media = [next(m for m in media if (m.get("asset_type") or "").lower() == "video")]
+
         for m in media:
             mtype = (m.get("asset_type") or "").lower()
             url = m.get("url")
             if not url:
                 continue
 
-            # choose category
+            raw_bytes, content_type = _download_media_bytes(url)
+
+            # category
             category = "tweet_image" if mtype == "image" else "tweet_video"
 
+            # IMPORTANT:
+            # - images: upload + get media_id
+            # - video: chunk upload + finalize + wait processing => then media_id
             mid = XAdapter.upload_media(
                 consumer_key=consumer_key,
                 consumer_secret=consumer_secret,
@@ -516,8 +535,12 @@ def _publish_to_x(
                 media_type=mtype,
                 media_category=category,
             )
-            media_ids.append(mid)
 
+            media_ids.append(str(mid))
+
+    # -----------------------------------------
+    # Create tweet (only after video ready)
+    # -----------------------------------------
     resp = XAdapter.create_tweet(
         consumer_key=consumer_key,
         consumer_secret=consumer_secret,
@@ -527,15 +550,12 @@ def _publish_to_x(
         media_ids=media_ids or None,
     )
 
-    # v2 returns { "data": {"id":"...", "text":"..."} }
     tweet_id = ((resp.get("data") or {}).get("id")) if isinstance(resp, dict) else None
 
     r["status"] = "success"
     r["provider_post_id"] = tweet_id
     r["raw"] = resp
     return r
-
-
 
 
 # -----------------------------

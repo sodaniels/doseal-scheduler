@@ -6,6 +6,8 @@ import base64
 import math
 import os
 from typing import Any, Dict, Optional, Tuple, List
+import time
+from requests_oauthlib import OAuth1
 
 from ....constants.service_code import HTTP_STATUS_CODES
 
@@ -26,9 +28,10 @@ class XAdapter:
       - For media upload, we use https://upload.x.com/1.1/media/upload.json
       - For tweet creation, we use https://api.x.com/2/tweets
     """
+    
 
     API_BASE = os.environ.get("X_API_BASE_URL", "https://api.x.com")
-    UPLOAD_BASE = os.environ.get("X_UPLOAD_BASE_URL", "https://upload.x.com")
+    UPLOAD_BASE = os.environ.get("X_UPLOAD_BASE_URL", "https://upload.twitter.com")
 
     REQUEST_TOKEN_URL = f"{API_BASE}/oauth/request_token"
     AUTHORIZE_URL = f"{API_BASE}/oauth/authorize"
@@ -151,11 +154,13 @@ class XAdapter:
         media_type: str,  # "image" | "video"
         media_category: Optional[str] = None,  # e.g. "tweet_image" | "tweet_video"
         chunk_size: int = 1024 * 1024 * 2,  # 2MB
+        status_max_wait_seconds: int = 60,
+        status_poll_interval: float = 2.0,
     ) -> str:
         """
         Downloads media_url, uploads it to X, returns media_id_string.
 
-        Uses INIT/APPEND/FINALIZE.
+        Uses INIT/APPEND/FINALIZE and polls STATUS for video processing.
         """
         if media_type not in ("image", "video"):
             raise Exception("media_type must be image or video")
@@ -170,6 +175,9 @@ class XAdapter:
         if total_bytes <= 0:
             raise Exception("Downloaded media is empty")
 
+        # Best-effort mime type detection (important!)
+        content_type = (dl.headers.get("content-type") or "").split(";")[0].strip().lower()
+
         # 2) INIT
         auth = OAuth1(
             consumer_key,
@@ -183,17 +191,20 @@ class XAdapter:
             "total_bytes": str(total_bytes),
         }
 
-        # X expects "media_type" to be a real mime type.
-        # We can guess minimally:
         if media_type == "image":
-            init_data["media_type"] = "image/png"  # safe default if you use PNG often
+            # try to keep correct type if server provides it
+            init_data["media_type"] = content_type if content_type.startswith("image/") else "image/png"
             init_data["media_category"] = media_category or "tweet_image"
         else:
-            init_data["media_type"] = "video/mp4"
+            init_data["media_type"] = content_type if content_type.startswith("video/") else "video/mp4"
             init_data["media_category"] = media_category or "tweet_video"
 
         r_init = requests.post(cls.MEDIA_UPLOAD_URL, data=init_data, auth=auth, timeout=60)
-        init_payload = r_init.json() if r_init.headers.get("content-type", "").startswith("application/json") else {"raw": r_init.text}
+        init_payload = (
+            r_init.json()
+            if r_init.headers.get("content-type", "").startswith("application/json")
+            else {"raw": r_init.text}
+        )
         if r_init.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
             raise Exception(f"X media INIT failed: {init_payload}")
 
@@ -213,12 +224,15 @@ class XAdapter:
                 "media_id": media_id,
                 "segment_index": str(seg),
             }
+            files = {"media": chunk}
 
-            files = {
-                "media": chunk
-            }
-
-            r_app = requests.post(cls.MEDIA_UPLOAD_URL, data=append_data, files=files, auth=auth, timeout=120)
+            r_app = requests.post(
+                cls.MEDIA_UPLOAD_URL,
+                data=append_data,
+                files=files,
+                auth=auth,
+                timeout=120,
+            )
             if r_app.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
                 try:
                     ap = r_app.json()
@@ -229,13 +243,50 @@ class XAdapter:
         # 4) FINALIZE
         fin_data = {"command": "FINALIZE", "media_id": media_id}
         r_fin = requests.post(cls.MEDIA_UPLOAD_URL, data=fin_data, auth=auth, timeout=60)
-        fin_payload = r_fin.json() if r_fin.headers.get("content-type", "").startswith("application/json") else {"raw": r_fin.text}
+        fin_payload = (
+            r_fin.json()
+            if r_fin.headers.get("content-type", "").startswith("application/json")
+            else {"raw": r_fin.text}
+        )
         if r_fin.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
             raise Exception(f"X media FINALIZE failed: {fin_payload}")
 
-        # Some videos require processing; you can optionally poll STATUS if needed.
-        return media_id
+        # 5) STATUS poll (CRITICAL for videos; sometimes for GIF too)
+        processing_info = fin_payload.get("processing_info")
+        if processing_info:
+            deadline = time.time() + status_max_wait_seconds
 
+            while True:
+                state = (processing_info.get("state") or "").lower()
+
+                if state == "succeeded":
+                    break
+
+                if state == "failed":
+                    raise Exception(f"X media processing failed: {processing_info}")
+
+                if time.time() > deadline:
+                    raise Exception(f"X media processing timeout: {processing_info}")
+
+                # X can tell us how long to wait
+                wait_secs = processing_info.get("check_after_secs")
+                time.sleep(float(wait_secs) if wait_secs is not None else status_poll_interval)
+
+                # refresh status
+                status_params = {"command": "STATUS", "media_id": media_id}
+                r_status = requests.get(cls.MEDIA_UPLOAD_URL, params=status_params, auth=auth, timeout=30)
+                status_payload = (
+                    r_status.json()
+                    if r_status.headers.get("content-type", "").startswith("application/json")
+                    else {"raw": r_status.text}
+                )
+                if r_status.status_code >= HTTP_STATUS_CODES["BAD_REQUEST"]:
+                    raise Exception(f"X media STATUS failed: {status_payload}")
+
+                processing_info = status_payload.get("processing_info") or processing_info
+
+        return media_id
+    
     # ----------------------------
     # Create Tweet (v2)
     # ----------------------------
