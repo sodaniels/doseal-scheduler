@@ -561,26 +561,118 @@ def _publish_to_x(
 
 
 # -----------------------------
-# TikTok token fetcher
+# TikTok token fetcher (UPDATED)
 # -----------------------------
 def _get_tiktok_tokens(post: dict, destination_id: str) -> Dict[str, Any]:
+    """
+    Reads your stored SocialAccount for platform=tiktok, destination_id=open_id.
+
+    Stored fields:
+      access_token_plain  -> access_token
+      refresh_token_plain -> refresh_token
+
+    Returns:
+      {
+        "access_token": str,
+        "refresh_token": Optional[str],
+        "_acct": dict (full SocialAccount record)
+      }
+    """
     acct = SocialAccount.get_destination(
         post["business_id"],
         post["user__id"],
         "tiktok",
         destination_id,
     )
-    if not acct or not acct.get("access_token_plain"):
-        raise Exception(f"Missing tiktok destination token for destination_id={destination_id}")
+    if not acct:
+        raise Exception(f"Missing tiktok destination for destination_id={destination_id}")
+
+    access_token = acct.get("access_token_plain")
+    if not access_token:
+        raise Exception(f"Missing TikTok access_token_plain (reconnect TikTok) destination_id={destination_id}")
 
     return {
-        "access_token": acct.get("access_token_plain"),
+        "access_token": access_token,
         "refresh_token": acct.get("refresh_token_plain"),
         "_acct": acct,
     }
-    
+
+def _is_tiktok_token_invalid(err: Exception | str) -> bool:
+    """
+    Detect token invalid/expired errors robustly across TikTok error formats.
+    """
+    s = str(err).lower()
+    return (
+        "access_token_invalid" in s
+        or "invalid access token" in s
+        or "access token is invalid" in s
+        or "token is invalid" in s
+        or "invalid or not found" in s
+        or "authorization failed" in s
+        or "unauthorized" in s
+        or "401" in s
+    )
+
+def _refresh_tiktok_access_token_or_raise(
+    *,
+    post: dict,
+    destination_id: str,
+    destination_type: str,
+    tokens: Dict[str, Any],
+) -> str:
+    """
+    Refresh TikTok token once and persist it to SocialAccount.
+    Returns: new_access_token
+    """
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        raise Exception("TikTok access token invalid/expired and refresh_token is missing (reconnect TikTok).")
+
+    client_key = os.getenv("TIKTOK_CLIENT_KEY") or os.getenv("TIKTOK_CLIENT_ID")
+    client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
+    if not client_key or not client_secret:
+        raise Exception("TikTok token refresh requires TIKTOK_CLIENT_KEY (or TIKTOK_CLIENT_ID) and TIKTOK_CLIENT_SECRET in env")
+
+    refreshed = TikTokAdapter.refresh_access_token(
+        client_key=client_key,
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+    )
+
+    # TikTok refresh response may be {data:{...}, error:{...}} or flat.
+    ref_data = refreshed.get("data") or refreshed
+    new_access = ref_data.get("access_token")
+    new_refresh = ref_data.get("refresh_token") or refresh_token
+
+    if not new_access:
+        raise Exception(f"TikTok OAuth refresh failed: {refreshed}")
+
+    # Persist updated tokens (recommended)
+    acct = tokens.get("_acct") or {}
+    try:
+        SocialAccount.upsert_destination(
+            business_id=post["business_id"],
+            user__id=post["user__id"],
+            platform="tiktok",
+            destination_id=destination_id,
+            destination_type=destination_type or "user",
+            destination_name=(acct.get("destination_name") or destination_id),
+            access_token_plain=new_access,
+            refresh_token_plain=new_refresh,
+            token_expires_at=None,
+            scopes=(acct.get("scopes") or []),
+            platform_user_id=destination_id,
+            platform_username=acct.get("platform_username"),
+            meta=(acct.get("meta") or {}),
+        )
+    except Exception:
+        # don't block publishing if persistence fails
+        pass
+
+    return new_access
+
 # ---------------------------------------------
-# TikTok publisher
+# TikTok publisher (UPDATED to match TikTokAdapter)
 # ---------------------------------------------
 def _publish_to_tiktok(
     *,
@@ -612,22 +704,26 @@ def _publish_to_tiktok(
         raise Exception("TikTok requires media (video or images).")
 
     # Decide type
-    has_video = any(((m.get("asset_type") or "").lower() == "video") for m in media)
     images = [m for m in media if ((m.get("asset_type") or "").lower() == "image")]
     videos = [m for m in media if ((m.get("asset_type") or "").lower() == "video")]
 
+    # If both exist, prefer video (safer)
+    has_video = len(videos) > 0
+
+    tokens = _get_tiktok_tokens(post, destination_id)
+    access_token = tokens["access_token"]
+
+    # ----------------------
+    # VIDEO FLOW
+    # ----------------------
     if has_video:
-        # ---- VIDEO: support exactly 1 video
         if len(videos) != 1:
             raise Exception("TikTok video publishing supports exactly 1 video media item.")
-        v = videos[0]
+
+        v = videos[0] or {}
         video_url = v.get("url")
         if not video_url:
             raise Exception("TikTok video requires media.url")
-
-        tokens = _get_tiktok_tokens(post, destination_id)
-        access_token = tokens["access_token"]
-        refresh_token = tokens.get("refresh_token")
 
         video_bytes, _ct = _download_media_bytes(video_url)
         if not video_bytes:
@@ -635,15 +731,15 @@ def _publish_to_tiktok(
 
         video_size = len(video_bytes)
 
-        # chunk hint
+        # TikTok: chunk upload recommended for large videos
         chunk_size = None
         total_chunk_count = None
         if video_size > 64 * 1024 * 1024:
             chunk_size = 16 * 1024 * 1024
             total_chunk_count = int(math.ceil(video_size / float(chunk_size)))
 
-        def _init(a_token: str) -> Dict[str, Any]:
-            return TikTokAdapter.init_direct_post_video(
+        def _init_video(a_token: str) -> Dict[str, Any]:
+            return TikTokAdapter.init_video_post(
                 access_token=a_token,
                 post_text=caption,
                 video_size_bytes=video_size,
@@ -654,56 +750,23 @@ def _publish_to_tiktok(
 
         # init (refresh once if token invalid)
         try:
-            init_resp = _init(access_token)
+            init_resp = _init_video(access_token)
         except Exception as e:
-            msg = str(e)
-            if ("access_token_invalid" in msg or "invalid" in msg) and refresh_token:
-                client_key = os.getenv("TIKTOK_CLIENT_KEY") or os.getenv("TIKTOK_CLIENT_ID")
-                client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
-                if not client_key or not client_secret:
-                    raise Exception("TikTok token invalid and refresh env missing (TIKTOK_CLIENT_KEY/TIKTOK_CLIENT_SECRET)")
-
-                refreshed = TikTokAdapter.refresh_access_token(
-                    client_key=client_key,
-                    client_secret=client_secret,
-                    refresh_token=refresh_token,
+            if _is_tiktok_token_invalid(e):
+                access_token = _refresh_tiktok_access_token_or_raise(
+                    post=post,
+                    destination_id=destination_id,
+                    destination_type=r["destination_type"],
+                    tokens=tokens,
                 )
-
-                data = refreshed.get("data") or refreshed
-                new_access = data.get("access_token")
-                new_refresh = data.get("refresh_token") or refresh_token
-                if not new_access:
-                    raise Exception(f"TikTok refresh failed: {refreshed}")
-
-                # persist updated tokens (recommended)
-                try:
-                    acct = tokens.get("_acct") or {}
-                    SocialAccount.upsert_destination(
-                        business_id=post["business_id"],
-                        user__id=post["user__id"],
-                        platform="tiktok",
-                        destination_id=destination_id,
-                        destination_type=r["destination_type"],
-                        destination_name=(acct.get("destination_name") or destination_id),
-                        access_token_plain=new_access,
-                        refresh_token_plain=new_refresh,
-                        token_expires_at=None,
-                        scopes=(acct.get("scopes") or []),
-                        platform_user_id=destination_id,
-                        platform_username=acct.get("platform_username"),
-                        meta=(acct.get("meta") or {}),
-                    )
-                except Exception:
-                    pass
-
-                access_token = new_access
-                init_resp = _init(access_token)
+                init_resp = _init_video(access_token)
             else:
                 raise
 
         init_data = init_resp.get("data") or {}
         upload_url = init_data.get("upload_url")
         publish_id = init_data.get("publish_id")
+
         if not upload_url or not publish_id:
             raise Exception(f"TikTok init missing upload_url/publish_id: {init_resp}")
 
@@ -729,6 +792,7 @@ def _publish_to_tiktok(
 
         status_data = status_resp.get("data") or {}
         status_val = (status_data.get("status") or "").lower()
+
         if status_val in ("failed", "error"):
             raise Exception(f"TikTok publish failed: {status_resp}")
 
@@ -739,75 +803,68 @@ def _publish_to_tiktok(
         r["raw"] = {"init": init_resp, "upload": upload_resp, "status": status_resp}
         return r
 
-    else:
-        # ---- PHOTO: use image URLs
-        if not images:
-            raise Exception("TikTok requires either a video or at least 1 image.")
-        image_urls = [m.get("url") for m in images if m.get("url")]
-        if not image_urls:
-            raise Exception("TikTok photo post requires media.url for images.")
+    # ----------------------
+    # PHOTO FLOW
+    # ----------------------
+    if not images:
+        raise Exception("TikTok requires either a video or at least 1 image.")
 
-        tokens = _get_tiktok_tokens(post, destination_id)
-        access_token = tokens["access_token"]
-        refresh_token = tokens.get("refresh_token")
+    image_urls = [m.get("url") for m in images if m.get("url")]
+    if not image_urls:
+        raise Exception("TikTok photo post requires media.url for images.")
 
-        def _init_photo(a_token: str) -> Dict[str, Any]:
-            return TikTokAdapter.init_photo_post(
-                access_token=a_token,
-                post_text=caption,
-                image_urls=image_urls,
-                privacy_level="PUBLIC_TO_EVERYONE",
-            )
+    # TikTok photo posts typically support multiple images (but be conservative)
+    if len(image_urls) > 35:
+        image_urls = image_urls[:35]
 
-        try:
-            init_resp = _init_photo(access_token)
-        except Exception as e:
-            msg = str(e)
-            if ("access_token_invalid" in msg or "invalid" in msg) and refresh_token:
-                client_key = os.getenv("TIKTOK_CLIENT_KEY") or os.getenv("TIKTOK_CLIENT_ID")
-                client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
-                if not client_key or not client_secret:
-                    raise Exception("TikTok token invalid and refresh env missing (TIKTOK_CLIENT_KEY/TIKTOK_CLIENT_SECRET)")
-
-                refreshed = TikTokAdapter.refresh_access_token(
-                    client_key=client_key,
-                    client_secret=client_secret,
-                    refresh_token=refresh_token,
-                )
-                data = refreshed.get("data") or refreshed
-                new_access = data.get("access_token")
-                new_refresh = data.get("refresh_token") or refresh_token
-                if not new_access:
-                    raise Exception(f"TikTok refresh failed: {refreshed}")
-
-                access_token = new_access
-                init_resp = _init_photo(access_token)
-            else:
-                raise
-
-        init_data = init_resp.get("data") or {}
-        publish_id = init_data.get("publish_id")
-        if not publish_id:
-            raise Exception(f"TikTok photo init missing publish_id: {init_resp}")
-
-        status_resp = TikTokAdapter.wait_for_publish(
-            access_token=access_token,
-            publish_id=publish_id,
-            max_wait_seconds=240,
-            poll_interval=2.0,
+    def _init_photo(a_token: str) -> Dict[str, Any]:
+        return TikTokAdapter.init_photo_post(
+            access_token=a_token,
+            post_text=caption,
+            image_urls=image_urls,
+            privacy_level="PUBLIC_TO_EVERYONE",
         )
 
-        status_data = status_resp.get("data") or {}
-        status_val = (status_data.get("status") or "").lower()
-        if status_val in ("failed", "error"):
-            raise Exception(f"TikTok photo publish failed: {status_resp}")
+    try:
+        init_resp = _init_photo(access_token)
+    except Exception as e:
+        if _is_tiktok_token_invalid(e):
+            access_token = _refresh_tiktok_access_token_or_raise(
+                post=post,
+                destination_id=destination_id,
+                destination_type=r["destination_type"],
+                tokens=tokens,
+            )
+            init_resp = _init_photo(access_token)
+        else:
+            raise
 
-        provider_id = status_data.get("video_id") or publish_id
+    init_data = init_resp.get("data") or {}
+    publish_id = init_data.get("publish_id")
+    if not publish_id:
+        raise Exception(f"TikTok photo init missing publish_id: {init_resp}")
 
-        r["status"] = "success"
-        r["provider_post_id"] = str(provider_id)
-        r["raw"] = {"init": init_resp, "status": status_resp}
-        return r
+    status_resp = TikTokAdapter.wait_for_publish(
+        access_token=access_token,
+        publish_id=publish_id,
+        max_wait_seconds=240,
+        poll_interval=2.0,
+    )
+
+    status_data = status_resp.get("data") or {}
+    status_val = (status_data.get("status") or "").lower()
+
+    if status_val in ("failed", "error"):
+        raise Exception(f"TikTok photo publish failed: {status_resp}")
+
+    provider_id = status_data.get("video_id") or publish_id
+
+    r["status"] = "success"
+    r["provider_post_id"] = str(provider_id)
+    r["raw"] = {"init": init_resp, "status": status_resp}
+    return r
+
+
 
 
 # -----------------------------
