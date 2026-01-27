@@ -669,10 +669,172 @@ class XOauthCallbackResource(MethodView):
             Log.info(f"{log_tag} X OAuth failed: {e}")
             return jsonify({"success": False, "message": "X OAuth failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+# -------------------------------------------------------------------
+# X: LIST ACCOUNTS (from redis selection_key)
+# -------------------------------------------------------------------
+@blp_meta_oauth.route("/social/x/accounts", methods=["GET"])
+class XAccountsResource(MethodView):
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[oauth_x.py][XAccountsResource][get][{client_ip}]"
+
+        selection_key = request.args.get("selection_key")
+        if not selection_key:
+            return jsonify(
+                {"success": False, "message": "selection_key is required"}
+            ), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # key: x_select:<selection_key>
+        raw = get_redis(f"x_select:{selection_key}")
+        if not raw:
+            return jsonify(
+                {"success": False, "message": "Selection expired. Please reconnect."}
+            ), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        doc = _safe_json_load(raw, default={}) or {}
+
+        owner = doc.get("owner") or {}
+        token_data = doc.get("token_data") or {}
+
+        # Ensure logged-in user matches owner
+        user = g.get("current_user", {}) or {}
+        if (
+            str(user.get("business_id")) != str(owner.get("business_id"))
+            or str(user.get("_id")) != str(owner.get("user__id"))
+        ):
+            Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
+            return jsonify(
+                {"success": False, "message": "Not allowed for this selection_key"}
+            ), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # ----------------------------
+        # SAFE RESPONSE ONLY
+        # ----------------------------
+        safe_accounts = [
+            {
+                "platform": "x",
+                "destination_type": "user",
+                "destination_id": token_data.get("user_id"),
+                "username": token_data.get("screen_name"),
+            }
+        ]
+
+        return jsonify(
+            {"success": True, "data": {"accounts": safe_accounts}}
+        ), HTTP_STATUS_CODES["OK"]
 
 
+# -------------------------------------------------------------------
+# X: CONNECT ACCOUNT (finalize into social_accounts)
+# -------------------------------------------------------------------
+@blp_meta_oauth.route("/social/x/connect-account", methods=["POST"])
+class XConnectAccountResource(MethodView):
+    @token_required
+    def post(self):
+        client_ip = request.remote_addr
+        log_tag = f"[oauth_x.py][XConnectAccountResource][post][{client_ip}]"
 
+        body = request.get_json(silent=True) or {}
+        selection_key = body.get("selection_key")
 
+        # Optional: allow client to pass destination_id (user_id) for extra safety
+        destination_id = body.get("destination_id")  # X user_id
+
+        if not selection_key:
+            return jsonify({
+                "success": False,
+                "message": "selection_key is required"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # key: x_select:<selection_key>
+        raw = get_redis(f"x_select:{selection_key}")
+        if not raw:
+            return jsonify({
+                "success": False,
+                "message": "Selection expired. Please reconnect."
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        doc = _safe_json_load(raw, default={}) or {}
+        owner = doc.get("owner") or {}
+        token_data = doc.get("token_data") or {}
+
+        # Ensure logged-in user matches selection owner
+        user = g.get("current_user", {}) or {}
+        if (
+            str(user.get("business_id")) != str(owner.get("business_id"))
+            or str(user.get("_id")) != str(owner.get("user__id"))
+        ):
+            Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
+            return jsonify({
+                "success": False,
+                "message": "Not allowed for this selection_key"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # token_data should contain: oauth_token, oauth_token_secret, user_id, screen_name
+        oauth_token = token_data.get("oauth_token")
+        oauth_token_secret = token_data.get("oauth_token_secret")
+        user_id = str(token_data.get("user_id") or "")
+        screen_name = token_data.get("screen_name")
+
+        if not oauth_token or not oauth_token_secret or not user_id:
+            return jsonify({
+                "success": False,
+                "message": "Invalid OAuth selection (missing token data). Please reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Optional: validate client-provided destination_id matches
+        if destination_id and str(destination_id) != user_id:
+            return jsonify({
+                "success": False,
+                "message": "destination_id mismatch for this selection_key"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        try:
+            SocialAccount.upsert_destination(
+                business_id=owner["business_id"],
+                user__id=owner["user__id"],
+                platform="x",
+                destination_id=user_id,
+                destination_type="user",
+                destination_name=screen_name or user_id,
+
+                # For X OAuth 1.0a, store BOTH token + secret.
+                # If your schema only has access_token_plain, store token there and put secret in refresh_token_plain.
+                access_token_plain=oauth_token,
+                refresh_token_plain=oauth_token_secret,
+                token_expires_at=None,
+
+                # Scopes are not always available in OAuth 1.0a
+                scopes=["tweet.write", "tweet.read"],
+
+                platform_user_id=user_id,
+                platform_username=screen_name,
+
+                meta={
+                    "user_id": user_id,
+                    "screen_name": screen_name,
+                    "oauth_version": "1.0a",
+                },
+            )
+
+            # one-time use
+            try:
+                remove_redis(f"x_select:{selection_key}")
+            except Exception:
+                pass
+
+            return jsonify({
+                "success": True,
+                "message": "X account connected successfully"
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.info(f"{log_tag} Failed to upsert: {e}")
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect X account"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
 
