@@ -13,7 +13,7 @@ http://localhost:9181 #viewing the worker dashboard
 venv/bin/gunicorn wsgi:application -b 0.0.0.0:9090 --reload
 
 #RQ Worker (publishing jobs)
-venv/bin/rq worker publish
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES venv/bin/rq worker publish
 
 #RQ Scheduler
 #Third terminal:
