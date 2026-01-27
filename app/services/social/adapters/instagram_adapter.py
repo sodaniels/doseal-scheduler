@@ -10,6 +10,7 @@ import requests
 from ....utils.logger import Log
 
 
+
 class InstagramAdapter:
     """
     Instagram Graph API helper.

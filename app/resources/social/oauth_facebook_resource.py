@@ -16,6 +16,7 @@ from ..doseal.admin.admin_business_resource import token_required
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
 from ...services.social.adapters.instagram_adapter import InstagramAdapter
+from ...services.social.adapters.x_adapter import XAdapter
 
 
 blp_meta_oauth = Blueprint("meta_oauth", __name__)
@@ -30,10 +31,10 @@ def _safe_json_load(raw, default=None):
     try:
         if raw is None:
             return default
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
         if isinstance(raw, (dict, list)):
             return raw
-        if isinstance(raw, (bytes, bytearray)):
-            raw = raw.decode("utf-8", errors="ignore")
         return json.loads(raw)
     except Exception:
         return default
@@ -140,6 +141,14 @@ def _redirect_to_frontend(path: str, selection_key: str):
         }), HTTP_STATUS_CODES["OK"]
 
     return redirect(f"{frontend_url}{path}?selection_key={selection_key}")
+
+
+def _require_x_env(log_tag: str):
+    ck = _require_env("X_CONSUMER_KEY", log_tag)
+    cs = _require_env("X_CONSUMER_SECRET", log_tag)
+    cb = _require_env("X_OAUTH_CALLBACK_URL", log_tag)
+    return ck, cs, cb
+
 
 
 # -------------------------------------------------------------------
@@ -511,3 +520,183 @@ class InstagramAccountsResource(MethodView):
             })
 
         return jsonify({"success": True, "data": {"accounts": safe_accounts}}), HTTP_STATUS_CODES["OK"]
+
+
+# -------------------------------------------------------------------
+# X: START (OAuth 1.0a)
+# -------------------------------------------------------------------
+@blp_meta_oauth.route("/social/oauth/x/start", methods=["GET"])
+class XOauthStartResource(MethodView):
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[oauth_x.py][XOauthStartResource][get][{client_ip}]"
+
+        consumer_key, consumer_secret, callback_url = _require_x_env(log_tag)
+        if not consumer_key or not consumer_secret or not callback_url:
+            return jsonify({"success": False, "message": "X OAuth env missing"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+        user = g.get("current_user", {}) or {}
+        owner = {"business_id": str(user.get("business_id")), "user__id": str(user.get("_id"))}
+        if not owner["business_id"] or not owner["user__id"]:
+            return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # ✅ Create state
+        state = secrets.token_urlsafe(24)
+
+        # ✅ IMPORTANT: embed state into callback_url so callback ALWAYS gets it
+        joiner = "&" if "?" in callback_url else "?"
+        callback_url_with_state = f"{callback_url}{joiner}{urlencode({'state': state})}"
+
+        try:
+            # 1) request token
+            oauth_token, oauth_token_secret = XAdapter.get_request_token(
+                consumer_key=consumer_key,
+                consumer_secret=consumer_secret,
+                callback_url=callback_url_with_state,  # ✅ contains state
+            )
+
+            # 2) Store by state
+            # key: x_oauth_state:<state>
+            set_redis_with_expiry(
+                f"x_oauth_state:{state}",
+                600,
+                json.dumps({
+                    "owner": owner,
+                    "oauth_token": oauth_token,
+                    "oauth_token_secret": oauth_token_secret,
+                }),
+            )
+
+            # 3) ALSO store by oauth_token (fallback / debugging)
+            set_redis_with_expiry(
+                f"x_oauth_token:{oauth_token}",
+                600,
+                json.dumps({
+                    "owner": owner,
+                    "state": state,
+                    "oauth_token": oauth_token,
+                    "oauth_token_secret": oauth_token_secret,
+                }),
+            )
+
+            Log.info(f"{log_tag} stored state_key=x_oauth_state:{state} token_key=x_oauth_token:{oauth_token}")
+
+            return redirect(XAdapter.build_authorize_url(oauth_token))
+
+        except Exception as e:
+            Log.info(f"{log_tag} Failed to start X OAuth: {e}")
+            return jsonify({"success": False, "message": "Could not start X OAuth"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+# -------------------------------------------------------------------
+# X: CALLBACK (OAuth 1.0a)
+# -------------------------------------------------------------------
+@blp_meta_oauth.route("/social/oauth/x/callback", methods=["GET"])
+class XOauthCallbackResource(MethodView):
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[oauth_x.py][XOauthCallbackResource][get][{client_ip}]"
+
+        denied = request.args.get("denied")
+        if denied:
+            return jsonify({"success": False, "message": "User denied authorization"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        oauth_token = request.args.get("oauth_token")
+        oauth_verifier = request.args.get("oauth_verifier")
+        state = request.args.get("state")  # ✅ should now be present because callback_url includes it
+
+        Log.info(f"{log_tag} args={dict(request.args)}")
+
+        if not oauth_token or not oauth_verifier:
+            return jsonify({"success": False, "message": "Missing oauth_token/oauth_verifier"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        doc = {}
+
+        # 1) preferred lookup by state
+        if state:
+            raw = get_redis(f"x_oauth_state:{state}")
+            doc = _safe_json_load(raw, default={}) if raw else {}
+
+        # 2) fallback by oauth_token
+        if not doc:
+            raw = get_redis(f"x_oauth_token:{oauth_token}")
+            doc = _safe_json_load(raw, default={}) if raw else {}
+
+        if not doc:
+            Log.info(f"{log_tag} cache-miss state={state} oauth_token={oauth_token}")
+            return jsonify({"success": False, "message": "OAuth state expired. Retry connect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        owner = doc.get("owner") or {}
+        tmp_token = doc.get("oauth_token")
+        tmp_secret = doc.get("oauth_token_secret")
+
+        if not owner.get("business_id") or not owner.get("user__id") or not tmp_token or not tmp_secret:
+            return jsonify({"success": False, "message": "Invalid OAuth cache"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        consumer_key, consumer_secret, _ = _require_x_env(log_tag)
+        if not consumer_key or not consumer_secret:
+            return jsonify({"success": False, "message": "X OAuth env missing"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+        try:
+            token_data = XAdapter.exchange_access_token(
+                consumer_key=consumer_key,
+                consumer_secret=consumer_secret,
+                oauth_token=tmp_token,
+                oauth_token_secret=tmp_secret,
+                oauth_verifier=oauth_verifier,
+            )
+
+            selection_key = secrets.token_urlsafe(24)
+            _store_selection(
+                provider="x",
+                selection_key=selection_key,
+                payload={"owner": owner, "token_data": token_data},
+                ttl_seconds=300,
+            )
+
+            # cleanup
+            try:
+                if state:
+                    remove_redis(f"x_oauth_state:{state}")
+                remove_redis(f"x_oauth_token:{oauth_token}")
+            except Exception:
+                pass
+
+            return _redirect_to_frontend("/connect/x", selection_key)
+
+        except Exception as e:
+            Log.info(f"{log_tag} X OAuth failed: {e}")
+            return jsonify({"success": False, "message": "X OAuth failed"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-import time
+import time, os
 
 from ...models.social.scheduled_post import ScheduledPost
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
 from ...services.social.adapters.instagram_adapter import InstagramAdapter
+from ...services.social.adapters.x_adapter import XAdapter
 from ...utils.logger import Log
 
 from .appctx import run_in_app_context
@@ -71,6 +72,22 @@ def _get_instagram_token(post: dict, ig_user_id: str) -> str:
         raise Exception(f"Missing instagram destination token for destination_id={ig_user_id}")
     return acct["access_token_plain"]
 
+def _get_x_oauth_tokens(post: dict, destination_id: str) -> Dict[str, str]:
+    """
+    For X we stored:
+      access_token_plain  -> oauth_token
+      refresh_token_plain -> oauth_token_secret
+    """
+    acct = SocialAccount.get_destination(post["business_id"], post["user__id"], "x", destination_id)
+    if not acct:
+        raise Exception(f"Missing X destination for destination_id={destination_id}")
+
+    oauth_token = acct.get("access_token_plain")
+    oauth_token_secret = acct.get("refresh_token_plain")
+    if not oauth_token or not oauth_token_secret:
+        raise Exception("Missing X oauth_token/oauth_token_secret (reconnect X account).")
+
+    return {"oauth_token": oauth_token, "oauth_token_secret": oauth_token_secret}
 
 # -----------------------------
 # Instagram: create -> wait -> publish (with publish retry)
@@ -429,6 +446,98 @@ def _publish_to_instagram(
     raise Exception("Invalid instagram placement. Use feed|reel|story.")
 
 
+#------------------------------
+# X publisher
+#------------------------------
+# -----------------------------
+# X publisher
+# -----------------------------
+def _publish_to_x(
+    *,
+    post: dict,
+    dest: dict,
+    text: str,
+    link: Optional[str],
+    media: List[dict],
+) -> Dict[str, Any]:
+    """
+    X rules:
+      - Only one placement (ignore dest.placement)
+      - Text <= 280
+      - Media: up to 4 images OR 1 video (your schema enforces this)
+    """
+    r = {
+        "platform": "x",
+        "destination_id": str(dest.get("destination_id") or ""),
+        "destination_type": dest.get("destination_type"),
+        "placement": (dest.get("placement") or "feed").lower(),
+        "status": "failed",
+        "provider_post_id": None,
+        "error": None,
+        "raw": None,
+    }
+
+    destination_id = r["destination_id"]
+    if not destination_id:
+        r["error"] = "Missing destination_id"
+        return r
+
+    consumer_key = os.getenv("X_CLIENT_ID")
+    consumer_secret = os.getenv("X_CLIENT_SECRET")
+    if not consumer_key or not consumer_secret:
+        raise Exception("Missing X_CLIENT_ID / X_CLIENT_SECRET in env")
+
+    tokens = _get_x_oauth_tokens(post, destination_id)
+    oauth_token = tokens["oauth_token"]
+    oauth_token_secret = tokens["oauth_token_secret"]
+
+    tweet_text = _build_caption(text, link)
+    if len(tweet_text) > 280:
+        tweet_text = tweet_text[:277] + "..."
+
+    media_ids: List[str] = []
+    if media:
+        # Upload each media item
+        for m in media:
+            mtype = (m.get("asset_type") or "").lower()
+            url = m.get("url")
+            if not url:
+                continue
+
+            # choose category
+            category = "tweet_image" if mtype == "image" else "tweet_video"
+
+            mid = XAdapter.upload_media(
+                consumer_key=consumer_key,
+                consumer_secret=consumer_secret,
+                oauth_token=oauth_token,
+                oauth_token_secret=oauth_token_secret,
+                media_url=url,
+                media_type=mtype,
+                media_category=category,
+            )
+            media_ids.append(mid)
+
+    resp = XAdapter.create_tweet(
+        consumer_key=consumer_key,
+        consumer_secret=consumer_secret,
+        oauth_token=oauth_token,
+        oauth_token_secret=oauth_token_secret,
+        text=tweet_text,
+        media_ids=media_ids or None,
+    )
+
+    # v2 returns { "data": {"id":"...", "text":"..."} }
+    tweet_id = ((resp.get("data") or {}).get("id")) if isinstance(resp, dict) else None
+
+    r["status"] = "success"
+    r["provider_post_id"] = tweet_id
+    r["raw"] = resp
+    return r
+
+
+
+
 # -----------------------------
 # Main job
 # -----------------------------
@@ -439,7 +548,14 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
     log_tag = f"[jobs.py][_publish_scheduled_post][{business_id}][{post_id}]"
 
-    ScheduledPost.update_status(post_id, post["business_id"], ScheduledPost.STATUS_PUBLISHING)
+    # Mark as publishing
+    ScheduledPost.update_status(
+        post_id,
+        post["business_id"],
+        ScheduledPost.STATUS_PUBLISHING,
+        provider_results=[],
+        error=None,
+    )
 
     results: List[Dict[str, Any]] = []
     any_success = False
@@ -462,6 +578,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     link=link,
                     media=media,
                 )
+
             elif platform == "instagram":
                 r = _publish_to_instagram(
                     post=post,
@@ -470,6 +587,16 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     link=link,
                     media=media,
                 )
+
+            elif platform == "x":
+                r = _publish_to_x(
+                    post=post,
+                    dest=dest,
+                    text=text,
+                    link=link,
+                    media=media,
+                )
+
             else:
                 r = {
                     "platform": platform,
@@ -482,7 +609,31 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     "raw": None,
                 }
 
+            # Ensure shape
+            if not isinstance(r, dict):
+                r = {
+                    "platform": platform,
+                    "destination_id": str(dest.get("destination_id") or ""),
+                    "destination_type": dest.get("destination_type"),
+                    "placement": (dest.get("placement") or "feed").lower(),
+                    "status": "failed",
+                    "provider_post_id": None,
+                    "error": f"Publisher returned invalid result type: {type(r)}",
+                    "raw": None,
+                }
+
+            # Enforce required keys (safe defaults)
+            r.setdefault("platform", platform)
+            r.setdefault("destination_id", str(dest.get("destination_id") or ""))
+            r.setdefault("destination_type", dest.get("destination_type"))
+            r.setdefault("placement", (dest.get("placement") or "feed").lower())
+            r.setdefault("status", "failed")
+            r.setdefault("provider_post_id", None)
+            r.setdefault("error", None)
+            r.setdefault("raw", None)
+
             results.append(r)
+
             if r.get("status") == "success":
                 any_success = True
             else:
@@ -507,10 +658,12 @@ def _publish_scheduled_post(post_id: str, business_id: str):
     if any_success and not any_failed:
         overall_status = ScheduledPost.STATUS_PUBLISHED
         overall_error = None
+
     elif any_success and any_failed:
         overall_status = getattr(ScheduledPost, "STATUS_PARTIAL", ScheduledPost.STATUS_PUBLISHED)
-        first_err = next((x.get("error") for x in results if x.get("status") == "failed"), None)
+        first_err = next((x.get("error") for x in results if x.get("status") == "failed" and x.get("error")), None)
         overall_error = f"Some destinations failed. Example: {first_err}" if first_err else "Some destinations failed."
+
     else:
         overall_status = ScheduledPost.STATUS_FAILED
         first_err = next((x.get("error") for x in results if x.get("error")), "All destinations failed.")
@@ -523,7 +676,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
         provider_results=results,
         error=overall_error,
     )
-
+    
 
 def publish_scheduled_post(post_id: str, business_id: str):
     return run_in_app_context(_publish_scheduled_post, post_id, business_id)
