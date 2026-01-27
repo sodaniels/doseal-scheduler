@@ -68,6 +68,7 @@ from ..resources import (
     blp_fb_webhook,
     blp_fb_connect,
     blp_scheduled_posts,
+    blp_x_oauth,
 )
 
 
@@ -101,6 +102,7 @@ def register_social_routes(app, api):
         blp_fb_webhook,
         blp_fb_connect,
         blp_scheduled_posts,
+        blp_x_oauth,
         
     ]
 
