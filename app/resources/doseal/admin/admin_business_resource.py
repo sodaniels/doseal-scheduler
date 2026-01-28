@@ -106,12 +106,14 @@ def token_required(f):
             user.pop('pin', None)
             
             account_type = decrypt_data(user.get("account_type"))
-            Log.info(f"{log_tag}: account_type: {account_type}" )
+            # Log.info(f"{log_tag}: account_type: {account_type}" )
             
             if account_type not in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]):
                 permissions = data.get('permissions')
                 user['permissions'] = permissions
-                user['account_type'] = encrypt_data(account_type)
+                user['account_type'] = account_type
+            else:
+                user['account_type'] = account_type
 
             g.current_user = user
 
@@ -275,8 +277,10 @@ class RegisterBusinessResource(MethodView):
     )
     def post(self, business_data):
         client_ip = request.remote_addr
+        
+        log_tag = f"[business_resource.py][RegisterBusinessResource][post][{client_ip}]"
 
-        # Check if the business already exists based on email
+        # Check if the business already exists based on email item_data["business_id"], key="name", value=item_data["name"]
         if Business.check_item_exists(key="email", value=business_data["email"]):
             return jsonify({
                 "success": False,
@@ -291,13 +295,14 @@ class RegisterBusinessResource(MethodView):
         
         user_data = {}
         
-        user_data["fullname"] = f"{business_data['first_name']} {business_data['last_name']}"
-        user_data["email"] = business_data['email']
-        user_data["phone_number"] = business_data['business_contact']
-        user_data["password"] = business_data['password']
-        user_data["account_type"] = business_data["account_type"]
+        user_data["fullname"] = f"{business_data.get('first_name', '')} {business_data.get('last_name', '')}".strip()
+        user_data["email"] = business_data.get('email')
+        user_data["phone_number"] = business_data.get('business_contact')
+        user_data["password"] = business_data.get('password')
+        user_data["account_type"] = business_data.get('account_type')
         
-        business_data["password"] = business_data['password']
+        business_data["password"] = business_data.get('password')
+        
         
         # Create a new user instance
         business = Business(**business_data)
@@ -305,7 +310,7 @@ class RegisterBusinessResource(MethodView):
         # Try saving the business to MongoDB and handle any errors
         try:
             # send email after successful signup
-            Log.info(f"[business_resource.py][RegisterBusinessResource][post][{client_ip}][{business_data['business_name']}][committing assignment history")
+            Log.info(f"{log_tag} [{business_data['business_name']}][committing assignment history")
             # committing business data to db
             
             # Record the start time
@@ -322,11 +327,11 @@ class RegisterBusinessResource(MethodView):
                     image_path, actual_path = upload_file(image, business_id)
                     result = Business.update_business_image(user_data['email'], image_path, actual_path)
                     if result:
-                        Log.info(f"[business_resource.py][RegisterBusinessResource][post][{client_ip}] image upload success: {result}")
+                        Log.info(f"{log_tag} image upload success: {result}")
                     else:
-                        Log.info(f"[business_resource.py][RegisterBusinessResource][post][{client_ip}] image upload failed: {result}")
+                        Log.info(f"{log_tag} image upload failed: {result}")
                 except ValueError as e:
-                    Log.info(f"[business_resource.py][RegisterBusinessResource][post][{client_ip}] image upload error: {e}")
+                    Log.info(f"{log_tag} image upload error: {e}")
             
             
             # Record the end time
@@ -336,7 +341,7 @@ class RegisterBusinessResource(MethodView):
             duration = end_time - start_time
             
             # Log the response and time taken
-            Log.info(f"[business_resource.py][RegisterBusinessResource][post][{client_ip}] commit business completed in {duration:.2f} seconds")
+            Log.info(f"{log_tag} commit business completed in {duration:.2f} seconds")
             
             if client_id:
                 
@@ -345,7 +350,7 @@ class RegisterBusinessResource(MethodView):
                 user_data["business_id"] = business_id
      
                 try:
-                    Log.info(f"[business_resource.py][RegisterBusinessResource][post][{client_ip}][committing business information")
+                    Log.info(f"{log_tag}[committing business information")
                     # committing user data to db
                     user = User(**user_data)
                     user_client_id = user.save()
@@ -357,9 +362,9 @@ class RegisterBusinessResource(MethodView):
                                 "user_id": user_client_id
                             }
                             update_business = Business.update_business_with_user_id(business_id, **data)
-                            Log.info(f"[business_resource.py][RegisterBusinessResource][post]\t respone updating business with user_id")
+                            Log.info(f"{log_tag}\t respone updating business with user_id")
                         except Exception as e:
-                            Log.info(f"[business_resource.py][RegisterBusinessResource][post]\t error updating business with user_id: {e}")
+                            Log.info(f"{log_tag}\t error updating business with user_id: {e}")
                         
                          #create a client secret
                         client_secret = generate_client_secret()
@@ -381,10 +386,10 @@ class RegisterBusinessResource(MethodView):
                             
                 
                             if update_code:
-                                Log.info(f"[business_resource.py][RegisterBusinessResource][post]\t reset_url: {reset_url}")
+                                Log.info(f"{log_tag}\t reset_url: {reset_url}")
                                 send_user_registration_email(business_data["email"], user_data['fullname'], reset_url)
                         except Exception as e:
-                            Log.info(f"[business_resource.py][RegisterBusinessResource][post]\t An error occurred sending emails: {e}")
+                            Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
                         
                         try:
                             # send email to admins about registration
@@ -398,7 +403,7 @@ class RegisterBusinessResource(MethodView):
                                 ) 
                             pass
                         except Exception as e:
-                            Log.info(f"[business_resource.py][RegisterBusinessResource][post][{client_ip}] error sending emails: { str(e)}")
+                            Log.info(f"{log_tag} error sending emails: { str(e)}")
                         
                         return jsonify({
                             "success": True,
@@ -408,7 +413,7 @@ class RegisterBusinessResource(MethodView):
                         
                     
                 except Exception as e:
-                    Log.info(f"[business_resource.py][RegisterBusinessResource][post]\t An error occurred while creating user: {e}")
+                    Log.info(f"{log_tag} An error occurred while creating user: {e}")
                     # Create a new user instance
                     return jsonify({
                         "success": False,

@@ -3,6 +3,10 @@
 from datetime import datetime
 import uuid, os
 from zoneinfo import ZoneInfo
+
+import bcrypt
+from marshmallow import ValidationError
+
 from ..extensions.db import db
 from bson.objectid import ObjectId
 from flask import g
@@ -38,6 +42,9 @@ class BaseModel:
         Convert the model object to a dictionary representation.
         """
         return {key: getattr(self, key) for key in self.__dict__}
+    
+    def _is_bcrypt_hash(s: str) -> bool:
+        return isinstance(s, str) and (s.startswith("$2a$") or s.startswith("$2b$") or s.startswith("$2y$"))
 
     @classmethod
     def check_permission(cls, operation, custom_model_name=None):
@@ -756,9 +763,13 @@ class BaseModel:
                 "per_page": per_page_int,
             }
 
-
-
-
+    @classmethod
+    def _hash_password(cls, password: str) -> str:
+        if not password:
+            raise ValidationError("Password is required.")
+        if cls._is_bcrypt_hash(password):
+            return password
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 

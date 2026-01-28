@@ -2286,6 +2286,8 @@ class AvailableRoleResource(MethodView):
         allowed_permissions = {}
         
         acount_type = decrypt_data(user_info.get("account_type"))
+        
+        
 
         # Assign user_id and business_id from the current user
         business_id = str(user_info.get("business_id"))
@@ -2457,6 +2459,12 @@ class LoginBusinessResource(MethodView):
         business = Business.get_business_by_client_id(client_id)
         if not business: 
             abort(401, message="Your access has been revoked. Contact your administrator")
+            
+        # Log.info(f"business: {business}")
+        
+        account_type = business.get("account_type")
+        
+        decrypted_data = decrypt_data(account_type)
 
         # when user was not found
         if user is None:
@@ -2466,6 +2474,7 @@ class LoginBusinessResource(MethodView):
         # proceed to create token when user payload was created
         return create_token_response_admin(
             user=user,
+            account_type=decrypted_data,
             client_ip=client_ip, 
             log_tag=log_tag, 
         )

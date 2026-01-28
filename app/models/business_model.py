@@ -1,108 +1,249 @@
-import uuid
-import bcrypt
+from __future__ import annotations
 
-from pymongo import MongoClient
-from bson.objectid import ObjectId
-from werkzeug.security import generate_password_hash, check_password_hash
-from marshmallow import ValidationError
+import bcrypt
 from datetime import datetime
+from typing import Any, Dict, Optional, Tuple, Iterable
+
+from bson.objectid import ObjectId
+from marshmallow import ValidationError
+
+from werkzeug.security import generate_password_hash, check_password_hash
+
 from app.extensions.db import db
-from app.utils.logger import Log # import logging
+from app.utils.logger import Log
 from app.utils.generators import generate_client_id
 from app.utils.crypt import encrypt_data, decrypt_data, hash_data
+from ..models.base_model import BaseModel
 
-class Business:
-    def __init__(self,tenant_id, business_name, start_date, country, city, state, postcode, currency, 
-                 website, alternate_contact_number, time_zone, first_name, last_name, username, password, 
-                 email, package, landmark=None, image=None, business_contact=None, store_url = None, 
-                 prefix=None, user_id=None, return_url=None, callback_url=None, status="Active", 
-                 account_type="super_admin",):
-        # Generate client_id
-        client_id = generate_client_id()
 
-        self.tenant_id = encrypt_data(tenant_id)
-        self.business_name = encrypt_data(business_name)
-        self.start_date = encrypt_data(start_date)
-        self.image = image  # This will be handled separately if uploaded
-        self.business_contact = encrypt_data(business_contact)
-        self.country = encrypt_data(country)
-        self.city = encrypt_data(city)
-        self.state = encrypt_data(state)
-        self.postcode = encrypt_data(postcode)
-        self.landmark = encrypt_data(landmark) if landmark else None
-        self.currency = encrypt_data(currency)
-        self.website = encrypt_data(website) if website else None
-        self.alternate_contact_number = encrypt_data(alternate_contact_number)
-        self.time_zone = encrypt_data(time_zone)
-        self.prefix = encrypt_data(prefix) if prefix else None
-        self.first_name = encrypt_data(first_name)
-        self.last_name = encrypt_data(last_name)
-        self.username = encrypt_data(username)
-        # Hash the password if not already hashed
-        if not password.startswith("$2b$"):
-            self.password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        else:
-            self.password = password  # If already hashed, store as is
-        self.email = encrypt_data(email)
+def _now():
+    return datetime.utcnow()
+
+
+def _drop_nones(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of dict without keys whose value is None."""
+    return {k: v for k, v in d.items() if v is not None}
+
+
+class Business(BaseModel):
+    """
+    Business model (MongoDB).
+
+    Goal:
+      - No optional field is stored as null.
+      - Store encrypted fields + hashed lookup fields.
+      - Store password as bcrypt hash only.
+    """
+
+    collection_name = "businesses"
+
+    # Fields in DB that are encrypted (so we can decrypt when returning to API callers)
+    FIELDS_TO_DECRYPT = [
+        "tenant_id",
+        "business_name",
+        "start_date",
+        "business_contact",
+        "country",
+        "city",
+        "state",
+        "postcode",
+        "landmark",
+        "currency",
+        "website",
+        "alternate_contact_number",
+        "time_zone",
+        "prefix",
+        "username",
+        "email",
+        "store_url",
+        "package",
+        "return_url",
+        "callback_url",
+        "status",
+        "account_type",
+        "client_id",
+        "file_path",
+    ]
+
+    @staticmethod
+    def _enc(v: Any) -> Optional[str]:
+        """Encrypt non-empty values; return None for empty."""
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return encrypt_data(str(v))
+
+
+    @staticmethod
+    def check_password(business_doc: dict, password: str) -> bool:
+        stored_hash = (business_doc or {}).get("password")
+        if not stored_hash or not password:
+            return False
+        try:
+            return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+        except Exception:
+            return False
+
+    def __init__(
+        self,
+        tenant_id: str,
+        business_name: str,
+        country: str,
+        first_name: str,
+        last_name: str,
+        password: str,
+        email: str,
+        # Optional
+        start_date: Optional[str] = None,
+        business_contact: Optional[str] = None,
+        city: Optional[str] = None,
+        state: Optional[str] = None,
+        postcode: Optional[str] = None,
+        landmark: Optional[str] = None,
+        currency: Optional[str] = None,
+        website: Optional[str] = None,
+        alternate_contact_number: Optional[str] = None,
+        time_zone: Optional[str] = None,
+        prefix: Optional[str] = None,
+        username: Optional[str] = None,
+        store_url: Optional[str] = None,
+        package: Optional[str] = None,
+        return_url: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        status: str = "Active",
+        account_type: str = "super_admin",
+        image: Optional[str] = None,  # kept plain
+        user_id: Optional[str] = None,
+        **kwargs,
+    ):
+        client_id_plain = generate_client_id()
+
+        # Required encrypted fields
+        self.tenant_id = self._enc(tenant_id)
+        self.business_name = self._enc(business_name)
+        self.country = self._enc(country)
+        self.first_name = self._enc(first_name)
+        self.last_name = self._enc(last_name)
+        self.email = self._enc(email)
+
+        # Required hashed lookups
         self.hashed_email = hash_data(email)
-        self.store_url = encrypt_data(store_url)
-        self.package = encrypt_data(package)
-        self.user_id = user_id if user_id else None
-        self.return_url = encrypt_data(return_url) if return_url else None
-        self.callback_url = encrypt_data(callback_url) if callback_url else None
-        self.status = encrypt_data(status)
-        self.client_id = encrypt_data(client_id)
-        self.client_id_hashed = hash_data(client_id)
-        self.account_type = encrypt_data(account_type)
-        self.created_at = datetime.now()
-        self.updated_at = datetime.now()
+        self.client_id = self._enc(client_id_plain)
+        self.client_id_hashed = hash_data(client_id_plain)
 
-    def to_dict(self):
+        # Password (bcrypt only)
+        self.password = self._hash_password(password)
+
+        # Optional encrypted fields (only set if not None/empty)
+        self.start_date = self._enc(start_date)
+        self.business_contact = self._enc(business_contact)
+        self.city = self._enc(city)
+        self.state = self._enc(state)
+        self.postcode = self._enc(postcode)
+        self.landmark = self._enc(landmark)
+        self.currency = self._enc(currency)
+        self.website = self._enc(website)
+        self.alternate_contact_number = self._enc(alternate_contact_number)
+        self.time_zone = self._enc(time_zone)
+        self.prefix = self._enc(prefix)
+        self.username = self._enc(username)
+        self.store_url = self._enc(store_url)
+        self.package = self._enc(package)
+        self.return_url = self._enc(return_url)
+        self.callback_url = self._enc(callback_url)
+
+        # Status/account_type
+        self.status = self._enc(status or "Active")
+        self.hashed_status = hash_data(status or "Active")
+        self.account_type = self._enc(account_type or "super_admin")
+
+        # Plain optional fields
+        self.image = image
+        self.user_id = user_id
+
+        self.created_at = _now()
+        self.updated_at = _now()
+
+        # Extra fields (only set if not None)
+        for k, v in kwargs.items():
+            if v is not None:
+                setattr(self, k, v)
+
+    def to_dict(self) -> Dict[str, Any]:
         """
-        Convert the business object to a dictionary representation.
+        IMPORTANT:
+        - We drop None keys so MongoDB will not store them as null.
         """
-        business_dict = {
+        doc = {
             "tenant_id": self.tenant_id,
             "business_name": self.business_name,
-            "start_date": self.start_date,
-            "image": self.image,
-            "business_contact": self.business_contact,
+            "start_date": getattr(self, "start_date", None),
+            "image": getattr(self, "image", None),
+            "business_contact": getattr(self, "business_contact", None),
             "country": self.country,
-            "city": self.city,
-            "state": self.state,
-            "postcode": self.postcode,
-            "landmark": self.landmark,
-            "currency": self.currency,
-            "website": self.website,
-            "alternate_contact_number": self.alternate_contact_number,
-            "time_zone": self.time_zone,
-            "prefix": self.prefix,
+            "city": getattr(self, "city", None),
+            "state": getattr(self, "state", None),
+            "postcode": getattr(self, "postcode", None),
+            "landmark": getattr(self, "landmark", None),
+            "currency": getattr(self, "currency", None),
+            "website": getattr(self, "website", None),
+            "alternate_contact_number": getattr(self, "alternate_contact_number", None),
+            "time_zone": getattr(self, "time_zone", None),
+            "prefix": getattr(self, "prefix", None),
             "first_name": self.first_name,
             "last_name": self.last_name,
-            "username": self.username,
+            "username": getattr(self, "username", None),
             "password": self.password,
             "email": self.email,
             "hashed_email": self.hashed_email,
-            "store_url": self.store_url,
-            "package": self.package,
-            "user_id": self.user_id,
+            "store_url": getattr(self, "store_url", None),
+            "package": getattr(self, "package", None),
+            "user_id": getattr(self, "user_id", None),
             "client_id": self.client_id,
             "client_id_hashed": self.client_id_hashed,
-            "return_url": self.return_url,
-            "callback_url": self.callback_url,
+            "return_url": getattr(self, "return_url", None),
+            "callback_url": getattr(self, "callback_url", None),
             "status": self.status,
+            "hashed_status": self.hashed_status,
             "account_type": self.account_type,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
-        return business_dict
+        return _drop_nones(doc)
 
-    def save(self):
-        """Save the business to the MongoDB database."""
-        business_collection = db.get_collection("businesses")
-        result = business_collection.insert_one(self.to_dict())
-        return (self.client_id, self.tenant_id, result.inserted_id, self.email)
+    def save(self) -> Dict[str, Any]:
+        collection = db.get_collection(self.collection_name)
+        res = collection.insert_one(self.to_dict())
 
+        # Return safe values
+        return (self.client_id, self.tenant_id, res.inserted_id, self.email)
+
+    # ----------------------------
+    # Normalization / Decryption
+    # ----------------------------
+    @classmethod
+    def _normalise_business_doc(cls, business: dict) -> Optional[dict]:
+        if not business:
+            return None
+
+        business["_id"] = str(business["_id"])
+
+        for f in cls.FIELDS_TO_DECRYPT:
+            if f in business and business[f] is not None:
+                try:
+                    business[f] = decrypt_data(business[f])
+                except Exception:
+                    pass
+
+        # never leak password hash
+        business.pop("password", None)
+        return business
+
+    # ----------------------------
+    # Queries
+    # ----------------------------
+    
     @staticmethod
     def get_business_by_id(business_id):
         """Retrieve a business by its MongoDB _id."""
@@ -117,10 +258,16 @@ class Business:
             business["_id"] = str(business["_id"])
             business["business_name"] = decrypt_data(business["business_name"])
             business["email"] = decrypt_data(business["email"])
-            business["phone_number"] = decrypt_data(business["business_contact"])
             # Decrypt other fields as necessary
             business.pop("password", None)
         return business
+
+    @classmethod
+    def get_business_by_email(cls, email_plain: str) -> Optional[dict]:
+        hashed = hash_data(email_plain)
+        collection = db.get_collection(cls.collection_name)
+        doc = collection.find_one({"hashed_email": hashed})
+        return cls._normalise_business_doc(doc)
 
     @staticmethod
     def get_business_by_client_id(client_id):
@@ -131,34 +278,112 @@ class Business:
             business["_id"] = str(business["_id"])
             business["business_name"] = decrypt_data(business["business_name"])
             business["email"] = decrypt_data(business["email"])
-            business["business_contact"] = decrypt_data(business["business_contact"])
             # Decrypt other fields as necessary
             business.pop("password", None)
         return business
 
-    @staticmethod
-    def get_business_by_email(email):
-        """Retrieve a business by email."""
-        hashed_email = hash_data(email)
-        collection = db.get_collection("businesses")
-        business = collection.find_one({"email_hashed": hashed_email})
-        if business:
-            business["_id"] = str(business["_id"])
-            business["business_name"] = decrypt_data(business["business_name"])
-            business["email"] = decrypt_data(business["email"])
-            business["phone_number"] = decrypt_data(business["phone_number"])
-            # Decrypt other fields as necessary
-            business.pop("password", None)
-        return business
+    # ----------------------------
+    # Updates (NO NULLS)
+    # ----------------------------
+    @classmethod
+    def update_business_by_id(
+        cls,
+        business_id: str,
+        *,
+        unset_fields: Optional[Iterable[str]] = None,
+        **updates,
+    ) -> bool:
+        """
+        - Ignores None values so they won't be written as null.
+        - If you want to REMOVE a field, pass it in unset_fields.
+        """
+        oid = ObjectId(business_id)
+        collection = db.get_collection(cls.collection_name)
 
-    @staticmethod
-    def update_business(email, **updates):
-        """Update a business's details."""
-        updates["updated_at"] = datetime.now()
-        collection = db.get_collection("businesses")
-        result = collection.update_one({"email": email}, {"$set": updates})
-        return result.inserted_id
-        
+        updates = dict(updates or {})
+        updates["updated_at"] = _now()
+
+        # If caller passes None, we IGNORE it (so no nulls)
+        updates = _drop_nones(updates)
+
+        # Handle special fields that need hashing/encryption
+        set_doc: Dict[str, Any] = {}
+
+        # Email update must also update hashed_email
+        if "email" in updates:
+            plain = str(updates["email"])
+            set_doc["email"] = encrypt_data(plain)
+            set_doc["hashed_email"] = hash_data(plain)
+            updates.pop("email", None)
+
+        # Status update must also update hashed_status
+        if "status" in updates:
+            plain = str(updates["status"])
+            set_doc["status"] = encrypt_data(plain)
+            set_doc["hashed_status"] = hash_data(plain)
+            updates.pop("status", None)
+
+        # Password update (bcrypt only)
+        if "password" in updates:
+            set_doc["password"] = cls._hash_password(str(updates["password"]))
+            updates.pop("password", None)
+
+        # Encrypt fields that should be encrypted
+        encryptable = set(cls.FIELDS_TO_DECRYPT) - {"email", "status"}  # already handled above
+        for k, v in updates.items():
+            if k in encryptable:
+                set_doc[k] = encrypt_data(str(v))
+            else:
+                set_doc[k] = v
+
+        mongo_update: Dict[str, Any] = {}
+        if set_doc:
+            mongo_update["$set"] = set_doc
+
+        # Unset explicitly requested fields
+        if unset_fields:
+            mongo_update["$unset"] = {f: "" for f in unset_fields}
+
+        if not mongo_update:
+            return False
+
+        res = collection.update_one({"_id": oid}, mongo_update)
+        return res.modified_count > 0
+
+    @classmethod
+    def update_business_image(cls, email_plain: str, image: str, file_path: str) -> bool:
+        """
+        Keeps image/file_path as plaintext. If you want them encrypted, change here.
+        """
+        hashed = hash_data(email_plain)
+        collection = db.get_collection(cls.collection_name)
+
+        set_doc = _drop_nones(
+            {
+                "image": image,
+                "file_path": file_path,
+                "updated_at": _now(),
+            }
+        )
+
+        res = collection.update_one({"hashed_email": hashed}, {"$set": set_doc})
+        return res.modified_count > 0
+
+    @classmethod
+    def delete_business_with_cascade(cls, business_id: str) -> Dict[str, Any]:
+        oid = ObjectId(business_id)
+        businesses = db.get_collection(cls.collection_name)
+
+        business = businesses.find_one({"_id": oid})
+        if not business:
+            raise ValidationError("Business not found.")
+
+        db.get_collection("agents").delete_many({"business_id": oid})
+        db.get_collection("users").delete_many({"business_id": oid})
+        businesses.delete_one({"_id": oid})
+
+        return {"status_code": 200, "message": "Business and related data deleted successfully."}
+
     @staticmethod
     def update_business_with_user_id(business_id, **updates):
         """Update a business's details."""
@@ -166,36 +391,7 @@ class Business:
         collection = db.get_collection("businesses")
         result = collection.update_one({"_id": ObjectId(business_id)}, {"$set": updates})
         return result
-       
-    @staticmethod
-    def update_business_image(email, image, file_path):
-        """Update a business's image and file path."""
-        try:
-            # Ensure the image is valid (this could be done with a validation check, depending on your requirements)
-            if not image:
-                raise ValueError("No image provided")
-
-            # Prepare the updates
-            updates = {
-                "image": encrypt_data(image),
-                "file_path": encrypt_data(file_path), 
-                "updated_at": datetime.now()
-            }
-
-            # Update the business in the database
-            hashed_email = hash_data(email)
-            collection = db.get_collection("businesses")
-            result = collection.update_one({"hashed_email": hashed_email}, {"$set": updates})
-            
-            # Check if any document was updated
-            if result.modified_count == 0:
-                raise ValueError("Business not found or no change was made")
-
-            return True
-
-        except Exception as e:
-            return False
-
+    
     @staticmethod
     def check_item_exists(key, value):
         """
@@ -239,78 +435,70 @@ class Business:
         """Check if the password is correct."""
         return check_password_hash(business['password'], password)
    
-    @staticmethod
-    def delete_business_with_cascade(business_id):
-        """
-        Deletes a business and cascades the deletion to related users and agents.
-        """
-        # First, find the business to delete
-        business = db.get_collection("businesses").find_one({"_id": ObjectId(business_id)})
-        
-        if not business:
-            raise ValidationError("Business not found.")
-        
-        # Delete related agents and users (assuming they have the `business_id` field)
-        db.get_collection("agents").delete_many({"business_id": ObjectId(business_id)}) 
-        db.get_collection("users").delete_many({"business_id": ObjectId(business_id)})
-        
-        # Finally, delete the business itself
-        db.get_collection("businesses").delete_one({"_id": ObjectId(business_id)})  # Delete the business
-        
-        response_json = {
-            "status_code": 200,
-            "message": "Business and related data deleted successfully."
-        }
-
-        return response_json
-  
+    
+    
+    
     
 class Client:
-    @staticmethod
-    def create_client(client_id, client_secret):
-        collection = db.get_collection("clients")
-        collection.insert_one({"client_id": client_id, "client_secret": client_secret})
+    collection_name = "clients"
 
-    @staticmethod
-    def get_client(client_id, client_secret):
-        collection = db.get_collection("clients")
-        return collection.find_one({"client_id": client_id, "client_secret": client_secret})
-    
-    @staticmethod
-    def retrieve_client(client_id):
-        collection = db.get_collection("clients")
-        client = collection.find_one({"client_id": client_id})
-        
-        if client:
-            return client
-        else:
-            return None
+    @classmethod
+    def create_client(cls, client_id: str, client_secret: str):
+        db.get_collection(cls.collection_name).insert_one(
+            _drop_nones(
+                {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "created_at": _now(),
+                }
+            )
+        )
+
+    @classmethod
+    def get_client(cls, client_id: str, client_secret: str):
+        return db.get_collection(cls.collection_name).find_one(
+            {"client_id": client_id, "client_secret": client_secret}
+        )
+
+    @classmethod
+    def retrieve_client(cls, client_id: str):
+        return db.get_collection(cls.collection_name).find_one({"client_id": client_id})
 
 
 class Token:
-    @staticmethod
-    def create_token(client_id, access_token, refresh_token, expires_in, refresh_expires_in):
-        collection = db.get_collection("tokens")
-        collection.insert_one({
-            "client_id": client_id,
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "expires_in": expires_in,
-            "refresh_expires_in": refresh_expires_in
-        })
+    collection_name = "tokens"
 
-    @staticmethod
-    def get_token(access_token):
-        collection = db.get_collection("tokens")
-        return collection.find_one({"access_token": access_token})
+    @classmethod
+    def create_token(
+        cls,
+        client_id: str,
+        access_token: str,
+        refresh_token: str,
+        expires_in: int,
+        refresh_expires_in: int,
+    ):
+        db.get_collection(cls.collection_name).insert_one(
+            _drop_nones(
+                {
+                    "client_id": client_id,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "expires_in": int(expires_in),
+                    "refresh_expires_in": int(refresh_expires_in),
+                    "created_at": _now(),
+                }
+            )
+        )
 
-    @staticmethod
-    def delete_token(access_token):
-        collection = db.get_collection("tokens")
-        result = collection.delete_one({"access_token": access_token})
-        return result.deleted_count > 0
-    
-    @staticmethod
-    def get_refresh_token(refresh_token):
-        collection = db.get_collection("tokens")
-        return collection.find_one({"refresh_token": refresh_token})
+    @classmethod
+    def get_token(cls, access_token: str):
+        return db.get_collection(cls.collection_name).find_one({"access_token": access_token})
+
+    @classmethod
+    def delete_token(cls, access_token: str) -> bool:
+        res = db.get_collection(cls.collection_name).delete_one({"access_token": access_token})
+        return res.deleted_count > 0
+
+    @classmethod
+    def get_refresh_token(cls, refresh_token: str):
+        return db.get_collection(cls.collection_name).find_one({"refresh_token": refresh_token})

@@ -32,6 +32,7 @@ class LoginResource(MethodView, Helper):
     @blp.response(200, LoginSchema)
 
     def post(self, login_data):
+        
         # Check if the user does not exist
         if not self.userExists(self.users, "email", login_data["email"]):
             abort(404, message="User do not exists")

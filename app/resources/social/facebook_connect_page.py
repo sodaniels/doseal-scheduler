@@ -106,6 +106,9 @@ class FacebookConnectPageResource(MethodView):
         user_id = user_info.get("user_id")
         account_type_enc = user_info.get("account_type")
         
+        Log.info(f"user_info: {user_info}")
+        return jsonify(user_info.get("account_type"))
+        
         account_type = decrypt_data(account_type_enc) if account_type_enc else None
         
         

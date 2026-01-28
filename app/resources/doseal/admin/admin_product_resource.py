@@ -76,6 +76,7 @@ class ProductResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         user_id = user_info.get("user_id")
         account_type_enc = user_info.get("account_type")
+        
         account_type = decrypt_data(account_type_enc) if account_type_enc else None
         
         manufactured_date = str(item_data.get("manufactured_date"))

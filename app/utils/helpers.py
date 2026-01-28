@@ -146,7 +146,7 @@ def prepare_response(verification):
     return prepared_response
 
 # Helper function to generate tokens
-def generate_tokens(user, permissions=None):
+def generate_tokens(user, account_type, permissions=None):
     # Secret key for encoding and decoding tokens
     SECRET_KEY = os.getenv("SECRET_KEY")
     # Define the expiration time
@@ -156,7 +156,7 @@ def generate_tokens(user, permissions=None):
     payload_access = {
         'user_id': str(user["_id"]),
         'exp': datetime.utcnow() + access_token_expiration,
-        "account_type": decrypt_data(user["account_type"]) if user["account_type"] else None,
+        "account_type": account_type,
         "type": decrypt_data(user.get("type"))  if user.get("type") else None,
         'permissions': permissions,  # This includes the permissions dictionary
     }
@@ -164,7 +164,7 @@ def generate_tokens(user, permissions=None):
     payload_refresh = {
         'user_id': str(user["_id"]),
         'exp': datetime.utcnow() + refresh_token_expiration,
-        "account_type": decrypt_data(user["account_type"])  if user["account_type"] else None,
+        "account_type": account_type,
         "type": decrypt_data(user.get("type"))  if user.get("type") else None,
         'permissions': permissions,  # This includes the permissions dictionary
     }
@@ -618,7 +618,7 @@ def create_token_response_super_agent(user, agent_id, client_ip, log_tag, agent,
             "business_id": str(user.get("business_id")),
             "fullname": user_data.get("fullname")}) # change to 900 on prod
 
-def create_token_response_admin(user, client_ip, log_tag):
+def create_token_response_admin(user, client_ip, account_type, log_tag):
     
     user_data = {}
     permissions = dict()
@@ -638,7 +638,6 @@ def create_token_response_admin(user, client_ip, log_tag):
     
     user_data["role"] = user.get("role") if user.get("role") else None
     user_data["type"] = user.get("type") if user.get("type") else None
-    account_type = user.get("account_type") if user.get("account_type") else None
     user_data["account_type"] = account_type
     user_data["fullname"] = decrypt_data(user.get("fullname")) if user.get("fullname") else None
     user_data["phone_number"] = decrypt_data(user.get("phone_number")) if user.get("phone_number") else None
@@ -663,7 +662,7 @@ def create_token_response_admin(user, client_ip, log_tag):
         Log.info(f"{log_tag} [helpers.py][{client_ip}]: error retreiving permissions for user: {e}")
     
     # Generate both access token and refresh token using the user object
-    access_token, refresh_token = generate_tokens(user_data, permissions)
+    access_token, refresh_token = generate_tokens(user_data, account_type, permissions)
 
     # Save both tokens to the database (with 15 minutes expiration for access token)
     access_token_time_to_live = os.getenv("ADMIN_LOGIN_ACCESS_TOKEN_TIME_TO_LIVE", 900)
@@ -697,7 +696,6 @@ def create_token_response_admin(user, client_ip, log_tag):
         "profile": business_info
     }
     
-    account_type = decrypt_data(account_type)
     
     response["account_type"] = account_type
 
