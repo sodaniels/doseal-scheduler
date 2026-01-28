@@ -6,16 +6,20 @@ from flask_smorest import Blueprint
 from flask.views import MethodView
 from flask import request, jsonify, g
 
+from build.lib.app.utils.crypt import decrypt_data
 from build.lib.app.utils.json_response import prepared_response
 from ...utils.redis import (
     get_redis, set_redis_with_expiry, remove_redis, set_redis
 )
 from ...constants.service_code import (
     HTTP_STATUS_CODES,
+    SYSTEM_USERS
 )
 from ...resources.doseal.admin.admin_business_resource import token_required
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
 from ...models.social.social_account import SocialAccount
+from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
+from ...utils.helpers import make_log_tag
 from ...utils.logger import Log
 
 # -------------------------------------------------------------------
@@ -91,11 +95,42 @@ class FacebookConnectPageResource(MethodView):
     @token_required
     def post(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_facebook.py][FacebookConnectPageResource][post][{client_ip}]"
+        user_info = g.get("current_user", {}) or {}
 
         body = request.get_json(silent=True) or {}
         selection_key = body.get("selection_key")
         page_id = body.get("page_id")
+        
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        user_id = user_info.get("user_id")
+        account_type_enc = user_info.get("account_type")
+        
+        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        
+        
+        Log.info(f"[facebook_connect_page.py]account_type: {account_type}")
+        
+        
+        
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+            
+            
+        log_tag = make_log_tag(
+            "facebook_connect_page.py",
+            "FacebookConnectPageResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
 
         if not selection_key or not page_id:
             return jsonify({
@@ -140,6 +175,22 @@ class FacebookConnectPageResource(MethodView):
 
         business_id = owner.get("business_id")
         user__id = owner.get("user__id")
+        
+        # ---- PLAN ENFORCER (scoped to target business) ----
+        enforcer = QuotaEnforcer(target_business_id)
+        
+        # ✅ 2) RESERVE QUOTA ONLY WHEN WE ARE ABOUT TO CREATE
+        try:
+            enforcer.reserve(
+                counter_name="social_accounts",
+                limit_key="max_social_accounts",
+                qty=1,
+                period="billing",   # monthly plans => month bucket, yearly => year bucket
+                reason="social_accounts:create",
+            )
+        except PlanLimitError as e:
+            Log.info(f"{log_tag} plan limit reached: {e.meta}")
+            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             ok = SocialAccount.upsert_destination(
@@ -174,6 +225,8 @@ class FacebookConnectPageResource(MethodView):
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert SocialAccount destination: {e}")
+            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
             return jsonify({
                 "success": False,
                 "message": "Failed to connect page"
