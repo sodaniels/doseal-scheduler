@@ -104,17 +104,7 @@ class FacebookConnectPageResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         user_id = user_info.get("user_id")
-        account_type_enc = user_info.get("account_type")
-        
-        Log.info(f"user_info: {user_info}")
-        return jsonify(user_info.get("account_type"))
-        
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
-        
-        
-        Log.info(f"[facebook_connect_page.py]account_type: {account_type}")
-        
-        
+        account_type = user_info.get("account_type")
         
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = body.get("business_id")
