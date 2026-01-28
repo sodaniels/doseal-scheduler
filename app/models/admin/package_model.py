@@ -1,8 +1,11 @@
-# models/admin/package_model.py
+# app/models/package.py
+
+from __future__ import annotations
 
 from datetime import datetime
 from bson import ObjectId
 from ...models.base_model import BaseModel
+from typing import Any, Dict, Optional
 from ...extensions.db import db
 from ...utils.crypt import encrypt_data, decrypt_data, hash_data
 from ...utils.logger import Log
@@ -10,31 +13,49 @@ from ...utils.logger import Log
 
 class Package(BaseModel):
     """
-    Subscription package/plan model.
-    Defines features, limits, and pricing for different subscription tiers.
+    Subscription package/plan model (Social Media Management SaaS).
+
+    Hootsuite-style:
+      - per-user pricing (price_model = "per_user")
+      - limits centered around: social accounts, scheduling, inbox, analytics, listening
+      - enterprise has custom price (price=None)
     """
-    
+
     collection_name = "packages"
-    
-    # Package Tiers
-    TIER_FREE = "Free"
-    TIER_STARTER = "Starter"
-    TIER_PROFESSIONAL = "Professional"
+
+    # -------------------------
+    # Package Tiers (UPDATED)
+    # -------------------------
+    TIER_STANDARD = "Standard"
+    TIER_ADVANCED = "Advanced"
     TIER_ENTERPRISE = "Enterprise"
-    TIER_CUSTOM = "Custom"
-    
+
+    # -------------------------
     # Billing Periods
+    # -------------------------
     PERIOD_MONTHLY = "monthly"
     PERIOD_QUARTERLY = "quarterly"
     PERIOD_YEARLY = "yearly"
     PERIOD_LIFETIME = "lifetime"
-    
+    PERIOD_CUSTOM = "custom"
+
+    # -------------------------
+    # Price Model (NEW)
+    # -------------------------
+    PRICE_MODEL_PER_USER = "per_user"
+    PRICE_MODEL_FLAT = "flat"
+    PRICE_MODEL_CUSTOM = "custom"
+
+    # -------------------------
     # Status
+    # -------------------------
     STATUS_ACTIVE = "Active"
     STATUS_INACTIVE = "Inactive"
     STATUS_DEPRECATED = "Deprecated"
-    
+
+    # -------------------------
     # Fields to decrypt
+    # -------------------------
     FIELDS_TO_DECRYPT = [
         "name",
         "description",
@@ -42,380 +63,401 @@ class Package(BaseModel):
         "billing_period",
         "currency",
         "status",
-        "price",       # 👈 now decrypted
-        "setup_fee",   # 👈 now decrypted
+        "price",       # encrypted string
+        "setup_fee",   # encrypted string
+        "price_model", # encrypted string (NEW)
     ]
-    
+
     def __init__(
         self,
-        name,
-        tier,
-        billing_period,
-        price,
-        currency="USD",
-        # Feature limits
-        max_users=None,
-        max_outlets=None,
-        max_products=None,
-        max_transactions_per_month=None,
-        storage_limit_gb=None,
-        # Feature flags
-        features=None,
-        # Pricing
-        setup_fee=0.0,
-        trial_days=0,
+        name: str,
+        tier: str,
+        billing_period: str,
+        price: Optional[float],
+        currency: str = "GBP",
+
+        # Pricing model (NEW)
+        price_model: str = PRICE_MODEL_PER_USER,
+
+        # Social limits (UPDATED)
+        max_users: Optional[int] = None,                # seats/users
+        max_social_accounts: Optional[int] = None,      # connected accounts
+        bulk_schedule_limit: Optional[int] = None,      # e.g. 350 in Advanced
+        competitor_tracking: Optional[int] = None,      # e.g. 5 / 20
+        history_search_days: Optional[int] = None,      # e.g. 7 / 30
+
+        # Feature flags (UPDATED)
+        features: Optional[Dict[str, Any]] = None,
+
+        # Fees/trial
+        setup_fee: float = 0.0,
+        trial_days: int = 0,
+
         # Metadata
-        description=None,
-        is_popular=False,
-        display_order=0,
-        status=STATUS_ACTIVE,
+        description: Optional[str] = None,
+        is_popular: bool = False,
+        display_order: int = 0,
+        status: str = STATUS_ACTIVE,
+
         # Internal
         user_id=None,
         user__id=None,
         business_id=None,
-        **kwargs
+        **kwargs,
     ):
-        """
-        Initialize a subscription package.
-        
-        Args:
-            name: Package name (e.g., "Professional Plan")
-            tier: Package tier (Free, Starter, Professional, Enterprise, Custom)
-            billing_period: Billing cycle (monthly, quarterly, yearly, lifetime)
-            price: Price for the billing period
-            currency: Currency code (default USD)
-            max_users: Maximum number of users allowed
-            max_outlets: Maximum number of outlets/locations
-            max_products: Maximum number of products
-            max_transactions_per_month: Monthly transaction limit
-            storage_limit_gb: Storage limit in GB
-            features: Dict of feature flags and values
-            setup_fee: One-time setup fee
-            trial_days: Free trial period in days
-            description: Package description
-            is_popular: Mark as popular/recommended
-            display_order: Display order (lower = shown first)
-            status: Package status
-        """
         super().__init__(
             user__id=user__id,
             user_id=user_id,
             business_id=business_id,
-            **kwargs
+            **kwargs,
         )
-        
-        self.business_id = ObjectId(business_id)
-        
+
+        self.business_id = ObjectId(business_id) if business_id else None
+
         # Core fields - ENCRYPTED
         self.name = encrypt_data(name)
         self.hashed_name = hash_data(name)
+
         self.description = encrypt_data(description) if description else None
         self.tier = encrypt_data(tier)
         self.billing_period = encrypt_data(billing_period)
         self.currency = encrypt_data(currency)
-        
+
+        self.price_model = encrypt_data(price_model)
+
         self.status = encrypt_data(status)
         self.hashed_status = hash_data(status)
-        
-        # Pricing - ENCRYPTED (sensitive)
-        self.price = encrypt_data(str(price))
-        self.setup_fee = encrypt_data(str(setup_fee))
-        
-        # Limits - PLAIN (for quick queries)
-        self.max_users = int(max_users) if max_users else None
-        self.max_outlets = int(max_outlets) if max_outlets else None
-        self.max_products = int(max_products) if max_products else None
-        self.max_transactions_per_month = int(max_transactions_per_month) if max_transactions_per_month else None
-        self.storage_limit_gb = float(storage_limit_gb) if storage_limit_gb else None
-        
-        # Features - PLAIN (JSON object)
-        self.features = features or {
-            "pos": True,
-            "inventory": True,
-            "reports": True,
-            "multi_outlet": False,
-            "api_access": False,
-            "custom_branding": False,
-            "priority_support": False,
-            "advanced_analytics": False,
-            "integrations": False,
-            "mobile_app": True,
-            "web_app": True,
-            "backup_restore": True,
-            "user_permissions": True,
-            "discount_coupons": True,
-            "loyalty_program": False,
-            "email_notifications": True,
-            "sms_notifications": False,
-            "whatsapp_notifications": False,
-        }
-        
-        # Trial and display - PLAIN
+
+        # Pricing - ENCRYPTED
+        # NOTE: Enterprise can be custom -> price=None
+        self.price = encrypt_data(str(price)) if price is not None else None
+        self.setup_fee = encrypt_data(str(setup_fee)) if setup_fee is not None else encrypt_data("0")
+
+        # Limits - PLAIN (fast queries)
+        self.max_users = int(max_users) if max_users is not None else None
+        self.max_social_accounts = int(max_social_accounts) if max_social_accounts is not None else None
+        self.bulk_schedule_limit = int(bulk_schedule_limit) if bulk_schedule_limit is not None else None
+        self.competitor_tracking = int(competitor_tracking) if competitor_tracking is not None else None
+        self.history_search_days = int(history_search_days) if history_search_days is not None else None
+
+        # Features - PLAIN (JSON)
+        self.features = features or self._default_features_for_tier(tier)
+
+        # Trial + display - PLAIN
         self.trial_days = int(trial_days)
         self.is_popular = bool(is_popular)
         self.display_order = int(display_order)
-        
+
         # Timestamps
         self.created_at = datetime.utcnow()
         self.updated_at = datetime.utcnow()
-    
-    def to_dict(self):
+
+    # -----------------------------
+    # Defaults per tier (UPDATED)
+    # -----------------------------
+    @classmethod
+    def _default_features_for_tier(cls, tier: str) -> Dict[str, Any]:
+        t = (tier or "").strip().lower()
+
+        # baseline (Standard-ish)
+        base = {
+            "post_scheduling": True,
+            "unlimited_scheduled_posts": True,
+            "best_time_to_post_ai": True,
+            "ai_caption_generator": True,
+            "ai_image_generator": True,
+            "content_templates": True,
+
+            "shared_inbox": True,
+            "dm_automation": True,
+            "brand_monitoring": True,
+            "sentiment_analysis": True,
+            "competitor_benchmarking": True,
+            "team_assignments": True,
+
+            "analytics_dashboards": True,
+            "custom_reports": False,
+            "export_reports": False,
+            "scheduled_reports": False,
+
+            "approval_workflows": False,
+            "bulk_upload": False,
+            "routing_and_tagging": False,
+            "auto_responses": False,
+            "custom_permissions": False,
+
+            "api_access": False,
+
+            "sso": False,
+            "enterprise_support": False,
+            "dedicated_success_manager": False,
+            "sla": False,
+
+            "social_listening": False,
+            "review_management": False,
+            "employee_advocacy": False,
+            "crm_integrations": False,
+            "salesforce_integration": False,
+        }
+
+        if t == "advanced":
+            base.update({
+                "custom_reports": True,
+                "export_reports": True,
+                "scheduled_reports": True,
+
+                "approval_workflows": True,
+                "bulk_upload": True,
+                "routing_and_tagging": True,
+                "auto_responses": True,
+                "custom_permissions": True,
+
+                "api_access": True,
+            })
+
+        if t == "enterprise":
+            base.update({
+                "custom_reports": True,
+                "export_reports": True,
+                "scheduled_reports": True,
+
+                "approval_workflows": True,
+                "bulk_upload": True,
+                "routing_and_tagging": True,
+                "auto_responses": True,
+                "custom_permissions": True,
+
+                "api_access": True,
+
+                "sso": True,
+                "enterprise_support": True,
+                "dedicated_success_manager": True,
+                "sla": True,
+
+                "social_listening": True,
+                "review_management": True,
+                "employee_advocacy": True,
+                "crm_integrations": True,
+                "salesforce_integration": True,
+            })
+
+        return base
+
+    def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for MongoDB insertion."""
-        doc = {
+        return {
             "business_id": self.business_id,
+
             "name": self.name,
             "hashed_name": self.hashed_name,
             "description": self.description,
+
             "tier": self.tier,
             "billing_period": self.billing_period,
+
+            "price_model": self.price_model,
             "price": self.price,
             "currency": self.currency,
             "setup_fee": self.setup_fee,
+
+            # limits
             "max_users": self.max_users,
-            "max_outlets": self.max_outlets,
-            "max_products": self.max_products,
-            "max_transactions_per_month": self.max_transactions_per_month,
-            "storage_limit_gb": self.storage_limit_gb,
+            "max_social_accounts": self.max_social_accounts,
+            "bulk_schedule_limit": self.bulk_schedule_limit,
+            "competitor_tracking": self.competitor_tracking,
+            "history_search_days": self.history_search_days,
+
             "features": self.features,
+
             "trial_days": self.trial_days,
             "is_popular": self.is_popular,
             "display_order": self.display_order,
+
             "status": self.status,
             "hashed_status": self.hashed_status,
+
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
-        
-        return doc
-    
+
     # ---------------- INTERNAL HELPER ---------------- #
-    
     @staticmethod
-    def _normalise_package_doc(package: dict) -> dict:
+    def _normalise_package_doc(package: dict) -> Optional[dict]:
         """Normalise ObjectId fields and decrypt data."""
         if not package:
             return None
 
-        package["_id"] = str(package["_id"])
-        package["business_id"] = str(package["business_id"])
-        
-        # Decrypt fields (now also price & setup_fee)
+        if package.get("_id") is not None:
+            package["_id"] = str(package["_id"])
+
+        if package.get("business_id") is not None:
+            package["business_id"] = str(package["business_id"])
+
+        # Decrypt fields
         for field in Package.FIELDS_TO_DECRYPT:
             if field in package and package[field] is not None:
                 package[field] = decrypt_data(package[field])
-        
-        # Convert price fields back to numbers
+
+        # Convert numeric fields back
+        # price may be None for Enterprise/custom
         if package.get("price") is not None:
             try:
                 package["price"] = float(package["price"])
             except (ValueError, TypeError):
-                package["price"] = 0.0
-        
+                package["price"] = None
+
         if package.get("setup_fee") is not None:
             try:
                 package["setup_fee"] = float(package["setup_fee"])
             except (ValueError, TypeError):
                 package["setup_fee"] = 0.0
-        
+
         # Remove internal fields
         package.pop("hashed_name", None)
         package.pop("hashed_status", None)
-        
+
         return package
-    
+
     # ---------------- QUERIES ---------------- #
-    
     @classmethod
     def get_by_id(cls, package_id):
-        """
-        Retrieve a package by ID.
-        
-        Args:
-            package_id: Package ObjectId or string
-            
-        Returns:
-            Normalised package dict or None
-        """
         log_tag = f"[package.py][Package][get_by_id][{package_id}]"
-        
         try:
             package_id = ObjectId(package_id) if not isinstance(package_id, ObjectId) else package_id
-            
             collection = db.get_collection(cls.collection_name)
             package = collection.find_one({"_id": package_id})
-            
             if not package:
                 Log.error(f"{log_tag} Package not found")
                 return None
-            
-            package = cls._normalise_package_doc(package)
-            Log.info(f"{log_tag} Package retrieved successfully")
-            return package
-            
+            return cls._normalise_package_doc(package)
         except Exception as e:
             Log.error(f"{log_tag} Error: {str(e)}")
             return None
-    
+
     @classmethod
     def get_all_active(cls, page=None, per_page=None):
-        """
-        Get all active packages.
-        
-        Args:
-            page: Optional page number
-            per_page: Optional items per page
-            
-        Returns:
-            Dict with paginated packages
-        """
         log_tag = f"[package.py][Package][get_all_active]"
-        
         try:
-            # Pagination defaults
             page = int(page) if page else 1
             per_page = int(per_page) if per_page else 50
-            
+
             collection = db.get_collection(cls.collection_name)
-            
-            # Query active packages (using hashed_status)
             query = {"hashed_status": hash_data(cls.STATUS_ACTIVE)}
-            
             total_count = collection.count_documents(query)
-            
+
             cursor = (
                 collection.find(query)
-                .sort("display_order", 1)  # Sort by display order
+                .sort("display_order", 1)
                 .skip((page - 1) * per_page)
                 .limit(per_page)
             )
-            
+
             items = list(cursor)
             packages = [cls._normalise_package_doc(p) for p in items]
-            
             total_pages = (total_count + per_page - 1) // per_page
-            
-            result = {
+
+            Log.info(f"{log_tag} Retrieved {len(packages)} packages")
+            return {
                 "packages": packages,
                 "total_count": total_count,
                 "total_pages": total_pages,
                 "current_page": page,
                 "per_page": per_page,
             }
-            
-            Log.info(f"{log_tag} Retrieved {len(packages)} packages")
-            return result
-            
+
         except Exception as e:
             Log.error(f"{log_tag} Error: {str(e)}")
             return {
                 "packages": [],
                 "total_count": 0,
                 "total_pages": 0,
-                "current_page": page or 1,
-                "per_page": per_page or 50,
+                "current_page": int(page) if page else 1,
+                "per_page": int(per_page) if per_page else 50,
             }
-    
+
     @classmethod
-    def get_by_tier(cls, tier):
-        """
-        Get packages by tier.
-        
-        Args:
-            tier: Package tier (Free, Starter, etc.)
-            
-        Returns:
-            List of normalised package dicts
-        """
+    def get_by_tier(cls, tier: str):
         log_tag = f"[package.py][Package][get_by_tier][{tier}]"
-        
         try:
             collection = db.get_collection(cls.collection_name)
-            
+
+            # NOTE: tier is encrypted so this matches your existing storage approach
             packages = list(
                 collection.find({
                     "tier": encrypt_data(tier),
-                    "hashed_status": hash_data(cls.STATUS_ACTIVE)
-                }).sort("price", 1)
+                    "hashed_status": hash_data(cls.STATUS_ACTIVE),
+                }).sort("display_order", 1)
             )
-            
+
             packages = [cls._normalise_package_doc(p) for p in packages]
-            
             Log.info(f"{log_tag} Retrieved {len(packages)} packages")
             return packages
-            
+
         except Exception as e:
             Log.error(f"{log_tag} Error: {str(e)}")
             return []
-    
+
     @classmethod
     def update(cls, package_id, business_id, **updates):
-        """
-        Update a package.
-        
-        Args:
-            package_id: Package ObjectId or string
-            business_id: Business ObjectId or string
-            **updates: Fields to update
-            
-        Returns:
-            Bool - success status
-        """
         updates["updated_at"] = datetime.utcnow()
-        
-        # Encrypt fields – be careful to hash the *plaintext*,
-        # not the encrypted string.
+
+        # Encrypt + hash plaintext fields
         if "name" in updates and updates["name"]:
             original_name = updates["name"]
             updates["name"] = encrypt_data(original_name)
             updates["hashed_name"] = hash_data(original_name)
-        
+
         if "description" in updates:
-            updates["description"] = (
-                encrypt_data(updates["description"])
-                if updates["description"]
-                else None
-            )
-        
+            updates["description"] = encrypt_data(updates["description"]) if updates["description"] else None
+
         if "tier" in updates and updates["tier"]:
             updates["tier"] = encrypt_data(updates["tier"])
-        
+
         if "billing_period" in updates and updates["billing_period"]:
             updates["billing_period"] = encrypt_data(updates["billing_period"])
-        
+
         if "currency" in updates and updates["currency"]:
             updates["currency"] = encrypt_data(updates["currency"])
-        
+
+        if "price_model" in updates and updates["price_model"]:
+            updates["price_model"] = encrypt_data(updates["price_model"])
+
         if "status" in updates and updates["status"]:
             plain_status = updates["status"]
             updates["status"] = encrypt_data(plain_status)
             updates["hashed_status"] = hash_data(plain_status)
-        
-        if "price" in updates and updates["price"] is not None:
-            updates["price"] = encrypt_data(str(updates["price"]))
-        
+
+        if "price" in updates:
+            # allow None for enterprise/custom
+            updates["price"] = encrypt_data(str(updates["price"])) if updates["price"] is not None else None
+
         if "setup_fee" in updates and updates["setup_fee"] is not None:
             updates["setup_fee"] = encrypt_data(str(updates["setup_fee"]))
-        
+
         return super().update(package_id, business_id, **updates)
-    
+
     @classmethod
     def create_indexes(cls):
-        """Create database indexes for optimal query performance."""
         log_tag = f"[package.py][Package][create_indexes]"
-        
         try:
             collection = db.get_collection(cls.collection_name)
-            
-            # Core indexes
-            collection.create_index([("status", 1), ("display_order", 1)])
-            collection.create_index([("tier", 1), ("price", 1)])
+
+            # Indexes (UPDATED)
+            collection.create_index([("hashed_status", 1), ("display_order", 1)])
+            collection.create_index([("tier", 1)])
             collection.create_index([("is_popular", 1)])
             collection.create_index([("hashed_name", 1)])
-            collection.create_index([("hashed_status", 1)])
-            
+            collection.create_index([("price", 1)])  # encrypted string; still okay for existence queries
+            collection.create_index([("max_social_accounts", 1)])
+            collection.create_index([("max_users", 1)])
+
             Log.info(f"{log_tag} Indexes created successfully")
             return True
-            
+
         except Exception as e:
             Log.error(f"{log_tag} Error creating indexes: {str(e)}")
             return False
+
+
+
+
