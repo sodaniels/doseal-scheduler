@@ -2285,7 +2285,7 @@ class AvailableRoleResource(MethodView):
         
         allowed_permissions = {}
         
-        acount_type = decrypt_data(user_info.get("account_type"))
+        acount_type = user_info.get("account_type")
         
         
 

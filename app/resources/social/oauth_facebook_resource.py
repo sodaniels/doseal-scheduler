@@ -2,7 +2,7 @@ import os
 import json
 import secrets
 from urllib.parse import urlencode
-
+from build.lib.app.utils.json_response import prepared_response
 import requests
 from flask.views import MethodView
 from flask import request, jsonify, redirect, g
@@ -10,13 +10,18 @@ from flask_smorest import Blueprint
 
 from ...utils.logger import Log
 from ...utils.redis import get_redis, set_redis_with_expiry, remove_redis
-from ...constants.service_code import HTTP_STATUS_CODES
+from ...constants.service_code import (
+    HTTP_STATUS_CODES,
+    SYSTEM_USERS
+)
 from ..doseal.admin.admin_business_resource import token_required
 
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
 from ...services.social.adapters.instagram_adapter import InstagramAdapter
 from ...services.social.adapters.x_adapter import XAdapter
+from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
+from ...utils.helpers import make_log_tag
 
 from ...utils.schedule_helper import (
     _safe_json_load, _require_env, _exchange_code_for_token, _store_state, _consume_state,
@@ -126,11 +131,33 @@ class FacebookConnectPageResource(MethodView):
     @token_required
     def post(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_meta.py][FacebookConnectPageResource][post][{client_ip}]"
 
         body = request.get_json(silent=True) or {}
         selection_key = body.get("selection_key")
         page_id = body.get("page_id")
+        
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        account_type = user_info.get("account_type")
+        
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+            
+        log_tag = make_log_tag(
+            "oauth_facebook_resource.py",
+            "FacebookConnectPageResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
 
         if not selection_key or not page_id:
             return jsonify({"success": False, "message": "selection_key and page_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
@@ -153,6 +180,22 @@ class FacebookConnectPageResource(MethodView):
         page_access_token = selected.get("access_token")
         if not page_access_token:
             return jsonify({"success": False, "message": "Page token missing. Reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+         # ---- PLAN ENFORCER (scoped to target business) ----
+        enforcer = QuotaEnforcer(target_business_id)
+        
+        # ✅ 2) RESERVE QUOTA ONLY WHEN WE ARE ABOUT TO CREATE
+        try:
+            enforcer.reserve(
+                counter_name="social_accounts",
+                limit_key="max_social_accounts",
+                qty=1,
+                period="billing",   # monthly plans => month bucket, yearly => year bucket
+                reason="social_accounts:create",
+            )
+        except PlanLimitError as e:
+            Log.info(f"{log_tag} plan limit reached: {e.meta}")
+            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
@@ -181,6 +224,8 @@ class FacebookConnectPageResource(MethodView):
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
+            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
             return jsonify({"success": False, "message": "Failed to connect page"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
@@ -192,7 +237,30 @@ class InstagramOauthStartResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_meta.py][InstagramOauthStartResource][get][{client_ip}]"
+        
+        body = request.get_json(silent=True) or {}
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        account_type = user_info.get("account_type")
+        
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+            
+        log_tag = make_log_tag(
+            "oauth_facebook_resource.py",
+            "FacebookConnectPageResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
 
         redirect_uri = _require_env("INSTAGRAM_REDIRECT_URI", log_tag)
         meta_app_id = _require_env("META_APP_ID", log_tag)
@@ -293,6 +361,10 @@ class InstagramConnectAccountResource(MethodView):
         body = request.get_json(silent=True) or {}
         selection_key = body.get("selection_key")
         ig_user_id = body.get("ig_user_id")  # chosen IG user id
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        account_type = user_info.get("account_type")
 
         if not selection_key or not ig_user_id:
             return jsonify({"success": False, "message": "selection_key and ig_user_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
@@ -316,6 +388,48 @@ class InstagramConnectAccountResource(MethodView):
         page_access_token = selected.get("page_access_token")
         if not page_access_token:
             return jsonify({"success": False, "message": "Missing page_access_token. Reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+        
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+            
+        log_tag = make_log_tag(
+            "oauth_facebook_resource.py",
+            "FacebookConnectPageResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+        
+         # ---- PLAN ENFORCER (scoped to target business) ----
+        enforcer = QuotaEnforcer(target_business_id)
+        
+        # ✅ 2) RESERVE QUOTA ONLY WHEN WE ARE ABOUT TO CREATE
+        try:
+            enforcer.reserve(
+                counter_name="social_accounts",
+                limit_key="max_social_accounts",
+                qty=1,
+                period="billing",   # monthly plans => month bucket, yearly => year bucket
+                reason="social_accounts:create",
+            )
+        except PlanLimitError as e:
+            Log.info(f"{log_tag} plan limit reached: {e.meta}")
+            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
@@ -353,6 +467,8 @@ class InstagramConnectAccountResource(MethodView):
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
+            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
             return jsonify({"success": False, "message": "Failed to connect instagram"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 

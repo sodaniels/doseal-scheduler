@@ -993,7 +993,7 @@ class StockCheckResource(MethodView):
         client_ip = request.remote_addr
         user_info = g.get("current_user", {}) or {}
 
-        account_type = decrypt_data(user_info.get("account_type")) if user_info.get("account_type") else None
+        account_type = user_info.get("account_type") if user_info.get("account_type") else None
         token_business_id = str(user_info.get("business_id"))
         user_id = str(user_info.get("user_id"))
         user__id = str(user_info.get("_id"))

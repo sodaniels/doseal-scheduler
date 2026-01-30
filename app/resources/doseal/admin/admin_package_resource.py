@@ -102,7 +102,8 @@ class CreatePackage(MethodView):
         
         client_ip = request.remote_addr
         user_info = g.get("current_user", {})
-        account_type = decrypt_data(user_info.get("account_type"))
+        account_type = user_info.get("account_type")
+        
         
         business_id = str(user_info.get("business_id"))
         user_id = str(user_info.get("_id"))
@@ -156,6 +157,7 @@ class CreatePackage(MethodView):
             user_id = user_info.get("user_id")
             user__id = str(user_info.get("_id"))
             
+            
             package = Package(
                 user_id=user_id,
                 user__id=user__id,
@@ -165,11 +167,13 @@ class CreatePackage(MethodView):
             
             package_id = package.save()
             
+            Log.info(f"package_id: {package_id}")
+            
             if not package_id:
                 Log.info(f"{log_tag} Failed to create package")
                 return prepared_response(
                     status=False,
-                    status_code="INTERNAL_SERVER_ERROR",
+                    status_code="BAD_REQUEST",
                     message="Failed to create package"
                 )
             
@@ -205,7 +209,7 @@ class UpdatePackage(MethodView):
         
         client_ip = request.remote_addr
         user_info = g.get("current_user", {})
-        account_type = decrypt_data(user_info.get("account_type"))
+        account_type = user_info.get("account_type")
         business_id = str(user_info.get("business_id"))
         user_id = str(user_info.get("_id"))
         
@@ -279,7 +283,7 @@ class DeletePackage(MethodView):
         client_ip = request.remote_addr
         package_id = item_data.get("package_id")
         user_info = g.get("current_user", {})
-        account_type = decrypt_data(user_info.get("account_type"))
+        account_type = user_info.get("account_type")
         
         business_id = str(user_info.get("business_id"))
         user_id = str(user_info.get("_id"))

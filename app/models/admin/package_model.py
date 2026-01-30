@@ -115,18 +115,20 @@ class Package(BaseModel):
         self.business_id = ObjectId(business_id) if business_id else None
 
         # Core fields - ENCRYPTED
-        self.name = encrypt_data(name)
-        self.hashed_name = hash_data(name)
+        if name:
+            self.name = encrypt_data(name)
+            self.hashed_name = hash_data(name)
 
         self.description = encrypt_data(description) if description else None
-        self.tier = encrypt_data(tier)
-        self.billing_period = encrypt_data(billing_period)
-        self.currency = encrypt_data(currency)
+        self.tier = encrypt_data(tier) if tier else None
+        self.billing_period = encrypt_data(billing_period) if billing_period else None
+        self.currency = encrypt_data(currency) if currency else None
 
-        self.price_model = encrypt_data(price_model)
+        self.price_model = encrypt_data(price_model) if price_model else None
 
-        self.status = encrypt_data(status)
-        self.hashed_status = hash_data(status)
+        if status:
+            self.status = encrypt_data(status)
+            self.hashed_status = hash_data(status)
 
         # Pricing - ENCRYPTED
         # NOTE: Enterprise can be custom -> price=None

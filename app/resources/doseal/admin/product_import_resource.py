@@ -29,7 +29,7 @@ class ProductsBulkResource(MethodView):
     def post(self, data):
         user_info = g.get("current_user", {}) or {}
         auth_business_id = str(user_info.get("business_id"))
-        role = decrypt_data(user_info.get("account_type")) if user_info.get("account_type") else None
+        role = user_info.get("account_type") if user_info.get("account_type") else None
 
         mode = (data.get("mode") or "upsert").lower()
         dry_run = int(data.get("dry_run") or 0) == 1

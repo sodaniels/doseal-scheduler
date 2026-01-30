@@ -489,7 +489,7 @@ class CreateManualPayment(MethodView):
         """Create manual payment and subscription."""
         
         user_info = g.get("current_user", {})
-        account_type = decrypt_data(user_info.get("account_type"))
+        account_type = user_info.get("account_type")
         
         # Only admin/super_admin can create manual payments
         if account_type not in [SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]]:
