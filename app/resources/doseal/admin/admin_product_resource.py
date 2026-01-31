@@ -77,7 +77,7 @@ class ProductResource(MethodView):
         user_id = user_info.get("user_id")
         account_type_enc = user_info.get("account_type")
         
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         manufactured_date = str(item_data.get("manufactured_date"))
         expiry_on = str(item_data.get("expiry_on"))
@@ -314,7 +314,7 @@ class ProductResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = make_log_tag(
             "product_resource.py",
@@ -401,7 +401,7 @@ class ProductResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         form_business_id = item_data.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
@@ -569,7 +569,7 @@ class ProductResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Role-aware business selection
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -700,7 +700,7 @@ class ProductsListResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         query_business_id = query_args.get("business_id")
         query_user_id = query_args.get("user_id")
@@ -800,7 +800,7 @@ class POSProductsResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         query_business_id = query_args.get("business_id")
         outlet_id = query_args.get("outlet_id")

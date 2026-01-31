@@ -25,7 +25,7 @@ class SubscriptionService:
     @staticmethod
     def create_subscription( business_id, user_id, user__id, package_id,  payment_method=None, 
                             payment_reference=None, auto_renew=True, processing_callback=True, 
-                            payment_done=False):
+                            payment_done=False, billing_period=None):
         """
         Create a new subscription for a business.
         

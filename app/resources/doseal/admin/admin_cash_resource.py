@@ -66,7 +66,7 @@ class OpenSessionResource(MethodView):
         user_id = user_info.get("user_id")
         user__id = str(user_info.get("_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         agent_id = user_info.get("agent_id")
         admin_id = user_info.get("_id")
         
@@ -168,7 +168,7 @@ class CloseSessionResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         user__id = user_info.get("_id")
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         requested_business_id = json_data.get("business_id")
@@ -274,7 +274,7 @@ class CurrentSessionResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         user__id = user_info.get("_id")
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")
@@ -360,7 +360,7 @@ class SessionsListResource(MethodView):
         user__id = user_info.get("_id")
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")
@@ -448,7 +448,7 @@ class CashMovementResource(MethodView):
         user_id = user_info.get("user_id")
         user__id = user_info.get("_id")
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         agent_id = user_info.get("agent_id")
         admin_id = user_info.get("admin_id")
         
@@ -566,7 +566,7 @@ class MovementsListResource(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")
@@ -658,7 +658,7 @@ class SessionSummaryResource(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")

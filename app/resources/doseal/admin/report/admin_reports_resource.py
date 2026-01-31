@@ -59,7 +59,7 @@ class SalesSummaryReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")
@@ -149,7 +149,7 @@ class SalesByProductReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -225,7 +225,7 @@ class SalesByCashierReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -301,7 +301,7 @@ class CurrentStockReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -378,7 +378,7 @@ class StockMovementReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -452,7 +452,7 @@ class StockValuationReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -520,7 +520,7 @@ class ReorderReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -593,7 +593,7 @@ class TopCustomersReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -671,7 +671,7 @@ class CustomerPurchaseHistoryReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -752,7 +752,7 @@ class CustomerSegmentationReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -822,7 +822,7 @@ class CustomerRetentionReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -893,7 +893,7 @@ class NewVsReturningCustomersReport(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -971,7 +971,7 @@ class CustomerAnalyticsDashboard(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         query_business_id = query_args.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
@@ -1085,7 +1085,7 @@ class OperationalReportsResource(MethodView):
 
         account_type_enc = user_info.get("account_type")
         account_type = (
-            decrypt_data(account_type_enc) if account_type_enc else None
+            account_type_enc if account_type_enc else None
         )
 
         # Query params
@@ -1381,7 +1381,7 @@ class InventoryOptimizationReportsResource(MethodView):
 
         account_type_enc = user_info.get("account_type")
         account_type = (
-            decrypt_data(account_type_enc) if account_type_enc else None
+            account_type_enc if account_type_enc else None
         )
 
         # Query params

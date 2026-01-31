@@ -114,7 +114,7 @@ class StoreResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # business_id from form (only honoured for system_owner/super_admin)
         form_business_id = store_data.get("business_id")
@@ -268,7 +268,7 @@ class StoreResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][SingleStoreResource][get]"
@@ -652,7 +652,7 @@ class StoreResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Query filters (used differently by role)
         query_business_id = item_data.get("business_id")
@@ -773,7 +773,7 @@ class UnitResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -887,7 +887,7 @@ class UnitResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][UnitResource][get]"
@@ -973,7 +973,7 @@ class UnitResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         form_business_id = item_data.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
@@ -1072,7 +1072,7 @@ class UnitResource(MethodView):
 
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # For now, same behaviour as Store: admins can choose business_id via query,
         # others are bound to their own business.
@@ -1237,7 +1237,7 @@ class UnitListResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][UnitListResource][get]"
@@ -1372,7 +1372,7 @@ class CategoryResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -1486,7 +1486,7 @@ class CategoryResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][CategoryResource][get]"
@@ -1663,7 +1663,7 @@ class CategoryResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][CategoryResource][delete]"
@@ -1948,7 +1948,7 @@ class SubCategoryResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -2110,7 +2110,7 @@ class SubCategoryResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][SubCategoryResource][get]"
@@ -2213,7 +2213,7 @@ class SubCategoryResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -2354,7 +2354,7 @@ class SubCategoryResource(MethodView):
 
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # For admin roles, allow targeting another business via query param
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -2518,7 +2518,7 @@ class SubCategoriesResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][SubCategoriesResource][get]"
@@ -2659,7 +2659,7 @@ class BrandResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -2774,7 +2774,7 @@ class BrandResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][BrandResource][get]"
@@ -2883,7 +2883,7 @@ class BrandResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -2986,7 +2986,7 @@ class BrandResource(MethodView):
 
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # For admin roles, allow targeting another business via query param
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -3155,7 +3155,7 @@ class BrandsResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][BrandsResource][get]"
@@ -3293,7 +3293,7 @@ class VariantResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -3450,7 +3450,7 @@ class VariantResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][VariantResource][get]"
@@ -3553,7 +3553,7 @@ class VariantResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -3691,7 +3691,7 @@ class VariantResource(MethodView):
 
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # For admin roles, allow targeting another business via query param
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -3866,7 +3866,7 @@ class VariantsResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][VariantsResource][get]"
@@ -4003,7 +4003,7 @@ class TaxResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -4118,7 +4118,7 @@ class TaxResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][TaxResource][get]"
@@ -4224,7 +4224,7 @@ class TaxResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -4327,7 +4327,7 @@ class TaxResource(MethodView):
 
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # For admin roles, allow targeting another business via query param
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -4433,7 +4433,7 @@ class TaxesResource(MethodView):
 
         account_type_enc = user_info.get("account_type")
         try:
-            account_type = decrypt_data(account_type_enc) if account_type_enc else None
+            account_type = account_type_enc if account_type_enc else None
         except Exception:
             account_type = None  # fallback to "other staff" behaviour if decryption fails
 
@@ -4574,7 +4574,7 @@ class WarrantyResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         if not auth_business_id or not user_info.get("user_id"):
             return prepared_response(False, "UNAUTHORIZED", "Authentication token is required")
@@ -4691,7 +4691,7 @@ class WarrantyResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][WarrantyResource][get]"
@@ -4798,7 +4798,7 @@ class WarrantyResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         if not warranty_id:
             return prepared_response(False, "BAD_REQUEST", "warranty_id must be provided.")
@@ -4901,7 +4901,7 @@ class WarrantyResource(MethodView):
 
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         if not warranty_id:
             Log.info(f"[admin_setup_resource.py][WarrantyResource][delete]"
@@ -5008,7 +5008,7 @@ class WarrantiesResource(MethodView):
 
         account_type_enc = user_info.get("account_type")
         try:
-            account_type = decrypt_data(account_type_enc) if account_type_enc else None
+            account_type = account_type_enc if account_type_enc else None
         except Exception:
             account_type = None  # fallback to "other staff" behaviour if decryption fails
 
@@ -5568,7 +5568,7 @@ class SupplierListResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][SupplierListResource][get]"
@@ -5705,7 +5705,7 @@ class TagResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -5820,7 +5820,7 @@ class TagResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = (
             f"[admin_setup_resource.py][TagResource][get]"
@@ -5925,7 +5925,7 @@ class TagResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -6029,7 +6029,7 @@ class TagResource(MethodView):
 
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # For admin roles, allow targeting another business via query param
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -6209,7 +6209,7 @@ class GiftCardResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = item_data.get("business_id")
@@ -6371,7 +6371,7 @@ class GiftCardResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Initial log_tag (target_business will be refined after role-based resolution)
         log_tag = make_log_tag(
@@ -6492,7 +6492,7 @@ class GiftCardResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -6601,7 +6601,7 @@ class GiftCardResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Admins may delete from any business using ?business_id=
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -6769,7 +6769,7 @@ class GiftCardListResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         log_tag = make_log_tag(
             "admin_setup_resource.py",
@@ -6961,7 +6961,7 @@ class OutletResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = item_data.get("business_id")
@@ -7113,7 +7113,7 @@ class OutletResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Provisional log_tag
         log_tag = make_log_tag(
@@ -7267,7 +7267,7 @@ class OutletResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -7435,7 +7435,7 @@ class OutletResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Admins may delete from any business using ?business_id=
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -7624,7 +7624,7 @@ class BusinessLocationResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = item_data.get("business_id")
@@ -7754,7 +7754,7 @@ class BusinessLocationResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Initial log_tag (target business will be refined after role-based resolution)
         log_tag = make_log_tag(
@@ -7886,7 +7886,7 @@ class BusinessLocationResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -8005,7 +8005,7 @@ class BusinessLocationResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Admins may delete from any business using ?business_id=
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -8121,7 +8121,7 @@ class BusinessLocationResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Provisional log_tag (will update after target_business_id is set)
         log_tag = make_log_tag(
@@ -8321,7 +8321,7 @@ class CompositeVariantResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = variant_data.get("business_id")
@@ -8481,7 +8481,7 @@ class CompositeVariantResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Initial log_tag (target business refined after role resolution)
         log_tag = make_log_tag(
@@ -8605,7 +8605,7 @@ class CompositeVariantResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = item_data.get("business_id")
@@ -8748,7 +8748,7 @@ class CompositeVariantResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Admins may delete from any business using ?business_id=
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -8946,7 +8946,7 @@ class CompositeVariantListResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Provisional log_tag before we resolve target_business_id
         log_tag = make_log_tag(

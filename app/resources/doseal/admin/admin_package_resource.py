@@ -13,7 +13,6 @@ from ....utils.json_response import prepared_response
 from ....utils.helpers import make_log_tag
 from ....utils.logger import Log
 from ....constants.service_code import SYSTEM_USERS
-from ....utils.crypt import decrypt_data
 
 blp_package = Blueprint("packages", __name__, description="Subscription package management")
 
@@ -24,9 +23,6 @@ class ListPackages(MethodView):
     
     def get(self):
         """Get all active subscription packages."""
-        
-        
-        
         try:
             page = request.args.get("page", 1, type=int)
             per_page = request.args.get("per_page", 50, type=int)
@@ -104,7 +100,6 @@ class CreatePackage(MethodView):
         user_info = g.get("current_user", {})
         account_type = user_info.get("account_type")
         
-        
         business_id = str(user_info.get("business_id"))
         user_id = str(user_info.get("_id"))
         
@@ -164,6 +159,7 @@ class CreatePackage(MethodView):
                 business_id=business_id,
                 **json_data
             )
+            
             
             package_id = package.save()
             

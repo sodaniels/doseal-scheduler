@@ -888,7 +888,7 @@ def can_access_business(target_business_id: str | ObjectId) -> bool:
     """
     user_info = g.get("current_user", {}) or {}
     account_type_enc = user_info.get("account_type")
-    account_type = decrypt_data(account_type_enc) if account_type_enc else None
+    account_type = account_type_enc if account_type_enc else None
 
     user_business_id = user_info.get("business_id")
 
@@ -970,7 +970,7 @@ def resolve_target_business_id(args, kwargs):
     auth_business_id = str(user.get("business_id"))
 
     account_type_enc = user.get("account_type")
-    role = decrypt_data(account_type_enc) if account_type_enc else None
+    role = account_type_enc if account_type_enc else None
 
     # item_data is usually args[1]
     item_data = args[1] if len(args) > 1 and isinstance(args[1], dict) else {}

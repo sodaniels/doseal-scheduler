@@ -20,11 +20,11 @@ OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES venv/bin/rq worker publish
 venv/bin/rqscheduler
 
 
-curl -i "https://3099947c25c3.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3YTE3ODYxNzlmNWRhMTVkNTBkN2M4IiwiZXhwIjoxNzY5ODQ0MTIxLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.hQRFAd0o81O-FB-BGfeMEsXA0w3l9UjHLIb7nUlFjQo"
+curl -i "https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3YTE3ODYxNzlmNWRhMTVkNTBkN2M4IiwiZXhwIjoxNzY5OTk2OTg4LCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.A4T1ijZNorg81aeRbcJRymW-2pte13L3pWDuPfa9R1c"
 
-https://3099947c25c3.ngrok-free.app/social/api/v1/social/oauth/facebook/start
-https://3099947c25c3.ngrok-free.app/social/api/v1/social/oauth/facebook/callback
+https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/start
+https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/callback
 
-https://3099947c25c3.ngrok-free.app/social/api/v1/social/oauth/instagram/start
-https://3099947c25c3.ngrok-free.app/social/api/v1/social/oauth/instagram/callback
+https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/instagram/start
+https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/instagram/callback

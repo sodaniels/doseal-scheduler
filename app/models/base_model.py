@@ -61,7 +61,7 @@ class BaseModel:
         permissions = g.current_user.get("permissions", {})
 
         if g.current_user.get("account_type"):
-            account_type = decrypt_data(g.current_user.get("account_type"))
+            account_type = g.current_user.get("account_type")
 
         # decide model_name
         model_name = (custom_model_name or cls.__name__).lower()

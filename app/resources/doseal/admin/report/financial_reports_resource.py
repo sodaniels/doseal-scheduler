@@ -54,7 +54,7 @@ class PaymentMethodsReportResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
         account_type = (
-            FinancialReportService.decrypt_data(account_type_enc)
+            FinancialReportService.account_type_enc
             if account_type_enc
             else None
         ) if hasattr(FinancialReportService, "decrypt_data") else (
@@ -151,7 +151,7 @@ class CashFlowReportResource(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         query_business_id = query_args.get("business_id")
         outlet_id = query_args.get("outlet_id")
@@ -230,7 +230,7 @@ class TaxReportResource(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         query_business_id = query_args.get("business_id")
         outlet_id = query_args.get("outlet_id")
@@ -312,7 +312,7 @@ class ProfitLossReportResource(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         query_business_id = query_args.get("business_id")
         outlet_id = query_args.get("outlet_id")
@@ -396,7 +396,7 @@ class ZReportResource(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         query_business_id = query_args.get("business_id")
         outlet_id = query_args.get("outlet_id")
@@ -489,7 +489,7 @@ class FinancialAnalyticsDashboard(MethodView):
         user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         query_business_id = query_args.get("business_id")
         outlet_id = query_args.get("outlet_id")

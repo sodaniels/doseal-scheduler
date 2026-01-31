@@ -99,7 +99,7 @@ class CustomerResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = customer_data.get("business_id")
@@ -259,7 +259,7 @@ class CustomerResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Initial log_tag (target_business will be refined after role-based resolution)
         log_tag = make_log_tag(
@@ -389,7 +389,7 @@ class CustomerResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -536,7 +536,7 @@ class CustomerResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Admins may delete from any business using ?business_id=
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -720,7 +720,7 @@ class CustomerResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Provisional log_tag before we resolve target_business_id
         log_tag = make_log_tag(
@@ -885,7 +885,7 @@ class CustomerGroupResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = customer_group_data.get("business_id")
@@ -1013,7 +1013,7 @@ class CustomerGroupResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Initial log_tag (target_business will be refined after role-based resolution)
         log_tag = make_log_tag(
@@ -1141,7 +1141,7 @@ class CustomerGroupResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for system_owner/super_admin
         form_business_id = item_data.get("business_id")
@@ -1253,7 +1253,7 @@ class CustomerGroupResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Admins may delete from any business using ?business_id=
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
@@ -1426,7 +1426,7 @@ class CustomerGroupResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Provisional log_tag before we resolve target_business_id
         log_tag = make_log_tag(

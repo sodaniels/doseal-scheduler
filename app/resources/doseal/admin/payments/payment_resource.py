@@ -50,7 +50,7 @@ class InitiatePayment(MethodView):
         
         
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         log_tag = make_log_tag(
             "payment_resource.py",
@@ -215,7 +215,7 @@ class InitiatePayment(MethodView):
         
         
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         log_tag = make_log_tag(
             "payment_resource.py",

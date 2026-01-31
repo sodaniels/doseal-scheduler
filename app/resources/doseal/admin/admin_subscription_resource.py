@@ -34,7 +34,7 @@ class Subscribe(MethodView):
         user_info = g.get("current_user", {})
         
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         auth_business_id = str(user_info.get("business_id"))
         user_id = user_info.get("user_id")
@@ -113,7 +113,7 @@ class GetCurrentSubscription(MethodView):
         user_info = g.get("current_user", {})
         
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         auth_business_id = str(user_info.get("business_id"))
         user_id = user_info.get("_id")
@@ -170,7 +170,7 @@ class CancelSubscription(MethodView):
         user_info = g.get("current_user", {})
         
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         auth_business_id = str(user_info.get("business_id"))
         user_id = user_info.get("_id")
@@ -243,7 +243,7 @@ class RenewSubscription(MethodView):
         user_info = g.get("current_user", {})
         
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         auth_business_id = str(user_info.get("business_id"))
         user_id = user_info.get("_id")

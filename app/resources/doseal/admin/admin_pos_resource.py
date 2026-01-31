@@ -359,7 +359,7 @@ class POSCartInitiateResource(MethodView):
         admin_id = str(user_info.get("_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         tenant_id_enc = user_info.get("tenant_id")
         tenant_id = decrypt_data(decrypt_data(tenant_id_enc)) if tenant_id_enc else None
@@ -485,7 +485,7 @@ class POSCartExecuteResource(MethodView):
         admin_id = str(user_info.get("_id"))
 
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         tenant_id_enc = user_info.get("tenant_id")
         tenant_id = decrypt_data(decrypt_data(tenant_id_enc)) if tenant_id_enc else None

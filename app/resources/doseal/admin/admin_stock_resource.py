@@ -77,7 +77,7 @@ class StockHistoryResource(MethodView):
         
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")
@@ -202,7 +202,7 @@ class StockLevelsResource(MethodView):
         
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")
@@ -358,7 +358,7 @@ class StockDetailResource(MethodView):
         
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")
@@ -536,7 +536,7 @@ class StockSummaryResource(MethodView):
         
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
         
         # Role-aware business selection
         query_business_id = query_args.get("business_id")
@@ -776,7 +776,7 @@ class StockTransferResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         agent_id = user_info.get("agent_id")
         admin_id = user_info.get("_id")

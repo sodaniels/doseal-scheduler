@@ -258,7 +258,7 @@ class VoidSaleResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
-        account_type = decrypt_data(account_type_enc) if account_type_enc else None
+        account_type = account_type_enc if account_type_enc else None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = query_args.get("business_id") or json_data.get("business_id")
@@ -437,7 +437,7 @@ class VoidSaleResource(MethodView):
             auth_user__id = str(user_info.get("_id"))
             auth_business_id = str(user_info.get("business_id"))
             account_type_enc = user_info.get("account_type")
-            account_type = decrypt_data(account_type_enc) if account_type_enc else None
+            account_type = account_type_enc if account_type_enc else None
 
             agent_id = user_info.get("agent_id")
             admin_id = user_info.get("admin_id")
