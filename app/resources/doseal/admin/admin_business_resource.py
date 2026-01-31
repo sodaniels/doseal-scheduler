@@ -198,7 +198,7 @@ def token_required(f):
     return decorated
 
 
-@blp_business_auth.route("/register", methods=["POST"])
+@blp_business_auth.route("/auth/register", methods=["POST"])
 class RegisterBusinessResource(MethodView):
     decorators = [register_rate_limiter()]
     

@@ -2325,7 +2325,7 @@ class AvailableRoleResource(MethodView):
             return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred.{str(e)}")
 
 
-@blp_system_admin_user.route("/login", methods=["POST"])
+@blp_system_admin_user.route("/auth/login", methods=["POST"])
 class LoginBusinessResource(MethodView):
     # decorators = [
     #     login_ip_limiter(),
@@ -2480,7 +2480,7 @@ class LoginBusinessResource(MethodView):
         )
         
 
-@blp_system_admin_user.route("/logout", methods=["POST"])
+@blp_system_admin_user.route("/auth/logout", methods=["POST"])
 class LogoutResource(MethodView):
     @token_required
     @logout_rate_limiter("logout")
