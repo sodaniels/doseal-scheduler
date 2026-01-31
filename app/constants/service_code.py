@@ -280,3 +280,10 @@ SYSTEM_USERS = {
     "STAFF": "staff",
 }
 
+BUSINESS_FIELDS = [
+    "account_type", "business_name", "start_date", "business_contact",
+    "country", "city", "state", "postcode", "landmark", "currency",
+    "website", "alternate_contact_number", "time_zone", "prefix",
+    "first_name", "last_name", "username", "email",
+]
+

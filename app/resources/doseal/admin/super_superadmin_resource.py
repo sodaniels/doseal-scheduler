@@ -24,7 +24,7 @@ from ....utils.crypt import encrypt_data, decrypt_data, hash_data
 
 from ....utils.helpers import (
     validate_and_format_phone_number, create_token_response_admin, 
-    generate_tokens
+    generate_tokens, safe_decrypt
 )
 
 from ....utils.rate_limits import (
@@ -35,6 +35,7 @@ from ....utils.rate_limits import (
     crud_delete_limiter,
     logout_rate_limiter
 )
+from ....utils.helpers import resolve_target_business_id_from_payload
 
 from ....utils.json_response import prepared_response
 from ....utils.essentials import Essensial
@@ -49,7 +50,7 @@ from ....constants.service_code import (
     HTTP_STATUS_CODES, PERMISSION_FIELDS_FOR_ADMINS, 
     PERMISSION_FIELDS_FOR_ADMIN_ROLE,
     PERMISSION_FIELDS_FOR_AGENT_ROLE,
-    SYSTEM_USERS
+    SYSTEM_USERS, BUSINESS_FIELDS
 )
 
 from ....models.business_model import Client, Token
@@ -2479,7 +2480,132 @@ class LoginBusinessResource(MethodView):
             log_tag=log_tag, 
         )
         
+@blp_system_admin_user.route("/auth/me", methods=["GET"])
+class CurrentUserResource(MethodView):
+    
+    @token_required
+    @blp_system_admin_user.response(200)
+    @blp_system_admin_user.doc(
+        summary="Get current authenticated user",
+        description="This endpoint returns the profile information of the currently authenticated user based on their JWT token.",
+        responses={
+            200: {
+                "description": "Successfully retrieved user profile",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "data": {
+                                "id": "user_id_here",
+                                "email": "johndoe@example.com",
+                                "fullname": "John Doe",
+                                "client_id": "client_id_here",
+                                "account_type": "admin",
+                                "email_verified": True
+                            }
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized - Invalid or missing token",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Missing or invalid authentication token"
+                        }
+                    }
+                }
+            },
+            404: {
+                "description": "User not found",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 404,
+                            "message": "User not found"
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = '[super_superadmin_resource.py][CurrentUserResource][get]'
+        
+        body = request.get_json(silent=True) or {}
+        
+        user = g.get("current_user", {}) or {}
+        target_business_id = resolve_target_business_id_from_payload(body)
 
+        auth_user__id = str(user.get("_id") or "")
+        account_type = user.get("account_type")
+        
+        Log.info(f"{log_tag} [{client_ip}] fetching user profile for user_id: {auth_user__id}")
+        
+        # Get user from database
+        user = User.get_by_id(auth_user__id, target_business_id)
+        
+        if user is None:
+            Log.info(f"{log_tag} [{client_ip}] user not found")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["NOT_FOUND"],
+                "message": "User not found"
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+        
+        # Decrypt sensitive fields
+        client_id = decrypt_data(user["client_id"])
+        
+        # Get business info
+        business = Business.get_business_by_client_id(client_id)
+        
+        decrypte_full_name = decrypt_data(user.get("fullname"))
+        
+        business_info = dict()
+    
+        business_info = {key: safe_decrypt(business.get(key)) for key in BUSINESS_FIELDS}
+        
+        # Token is for 24 hours
+        response = {
+            "fullname": decrypte_full_name,
+            "admin_id": str(user.get("_id")),
+            "business_id": target_business_id,
+            "profile": business_info
+        }
+        
+        try:
+            role_id = user.get("role") if user.get("role") else None
+            
+            role = None
+            
+            if role_id is not None:
+                role =  Role.get_by_id(role_id=role_id, business_id=target_business_id, is_logging_in=True)
+                
+            
+            if role is not None:
+                # retreive the permissions for the user
+                permissions = role.get("permissions")
+
+        except Exception as e:
+            Log.info(f"{log_tag} [helpers.py][{client_ip}]: error retreiving permissions for user: {e}")
+        
+        
+        response["account_type"] = account_type
+
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]) :
+            response["permissions"] = {}
+        else:
+            response["permissions"] = permissions
+            
+        return jsonify(response), HTTP_STATUS_CODES["OK"]
+        
+        
 @blp_system_admin_user.route("/auth/logout", methods=["POST"])
 class LogoutResource(MethodView):
     @token_required

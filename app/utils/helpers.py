@@ -22,7 +22,7 @@ from ..models.admin.super_superadmin_model import Role
 from ..extensions.db import db
 
 from ..constants.service_code import (
-    HTTP_STATUS_CODES, SYSTEM_USERS
+    HTTP_STATUS_CODES, SYSTEM_USERS, BUSINESS_FIELDS
 )
 
 from ..utils.redis import remove_redis
@@ -676,33 +676,33 @@ def create_token_response_admin(user, client_ip, account_type, log_tag):
         refresh_time_to_live
     )
     
-    business = Business.get_business_by_id(user.get("business_id"))
-    business["_id"] = str(business.get("_id"))
+    # business = Business.get_business_by_id(user.get("business_id"))
+    # business["_id"] = str(business.get("_id"))
     
-    business.pop("user_id", None)
+    # business.pop("user_id", None)
     
-    business_info = dict()
+    # business_info = dict()
     
-    business_info = {key: safe_decrypt(business.get(key)) for key in FIELDS}
+    # business_info = {key: safe_decrypt(business.get(key)) for key in BUSINESS_FIELDS}
     
     # Token is for 24 hours
     response = {
         'access_token': access_token, 
         'token_type': 'Bearer', 
         'expires_in': access_token_time_to_live, 
-        "fullname": decrypte_full_name,
-        "admin_id": str(user.get("_id")),
-        "business_id": str(user.get("business_id")),
-        "profile": business_info
+        # "fullname": decrypte_full_name,
+        # "admin_id": str(user.get("_id")),
+        # "business_id": str(user.get("business_id")),
+        # "profile": business_info
     }
     
     
-    response["account_type"] = account_type
+    # response["account_type"] = account_type
 
-    if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]) :
-        response["permissions"] = {}
-    else:
-        response["permissions"] = permissions
+    # if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]) :
+    #     response["permissions"] = {}
+    # else:
+    #     response["permissions"] = permissions
         
     return jsonify(response)
 
@@ -718,12 +718,6 @@ def safe_decrypt(value, decrypt=decrypt_data):
     except Exception:
         return None
 
-FIELDS = [
-    "account_type", "business_name", "start_date", "business_contact",
-    "country", "city", "state", "postcode", "landmark", "currency",
-    "website", "alternate_contact_number", "time_zone", "prefix",
-    "first_name", "last_name", "username", "email",
-]
 
 def create_token_response_system_user(user, subscriber_id, client_ip, log_tag, redisKey):
     user_data = {}
