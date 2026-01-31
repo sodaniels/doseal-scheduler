@@ -13,7 +13,9 @@ from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 from ...models.social.scheduled_post import ScheduledPost
 from ...utils.logger import Log
-from ...utils.media.cloudinary_client import upload_image_file, upload_video_file
+from ...utils.media.cloudinary_client import (
+    upload_image_file, upload_video_file
+)
 
 
 blp_scheduled_posts = Blueprint("scheduled_posts", __name__)

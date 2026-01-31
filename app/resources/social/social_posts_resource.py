@@ -1,75 +1,103 @@
-# app/resources/social/social_posts_resource.py
-import time
-from flask import request, g, jsonify
 from flask.views import MethodView
-from flask_smorest import Blueprint
+from flask import request, jsonify, g
+from ...constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
+from ...models.social.social_account import SocialAccount
 from ...utils.logger import Log
-from ...utils.json_response import prepared_response
-# from ...models.social_scheduled_post import SocialScheduledPost
-from ...tasks.queue import social_scheduler
-from ...tasks.social_publish_jobs import publish_scheduled_post
+from ..doseal.admin.admin_business_resource import token_required
+from build.lib.app.utils.json_response import prepared_response
+from ...utils.helpers import make_log_tag
+from flask_smorest import Blueprint
 
-from ...resources.doseal.admin.admin_business_resource import token_required
+blp_social_posts = Blueprint("social_posts", __name__)
 
-blp_social_posts = Blueprint("Social Posts", __name__, description="Schedule Social Posts")
-
-@blp_social_posts.route("/social/posts", methods=["POST"])
+@blp_social_posts.route("/social/accounts", methods=["GET"])
 class SocialPostsResource(MethodView):
     @token_required
-    def post(self):
-        user = g.get("current_user", {})
-        business_id = str(user.get("business_id"))
-        user__id = str(user.get("_id"))
+    def get(self):
         client_ip = request.remote_addr
+        user = g.get("current_user", {}) or {}
 
-        payload = request.get_json() or {}
+        auth_business_id = str(user.get("business_id") or "")
+        auth_user__id = str(user.get("_id") or "")
+        account_type = user.get("account_type")
 
-        # expected:
-        # {
-        #  "text": "...",
-        #  "link": "...",
-        #  "media": [{"type":"image","url":"https://..."}],
-        #  "platforms":[{"platform":"meta","destination_id":"...","destination_type":"page"}],
-        #  "scheduled_for":"2026-01-23T20:30:00Z"
-        # }
+        if not auth_business_id or not auth_user__id:
+            return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
-        scheduled_for = payload.get("scheduled_for")
-        platforms = payload.get("platforms", [])
+        body = request.get_json(silent=True) or {}
 
-        if not scheduled_for or not platforms:
-            return prepared_response(False, "BAD_REQUEST", "scheduled_for and platforms are required.")
+        # Optional: allow SYSTEM_OWNER / SUPER_ADMIN to act on another business
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = str(form_business_id)
+        else:
+            target_business_id = auth_business_id
+
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+            
+        log_tag = make_log_tag(
+            "social_posts_resource.py",
+            "SocialPostsResource",
+            "get",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
 
         try:
-            start = time.time()
+            # 1) Load ALL social accounts for this business
+            accounts = SocialAccount.get_all_by_business_id(target_business_id)
 
-            post = SocialScheduledPost(
-                business_id=business_id,
-                user__id=user__id,
-                text=payload.get("text"),
-                link=payload.get("link"),
-                media=payload.get("media", []),
-                platforms=platforms,
-                scheduled_for=scheduled_for,
-                timezone=payload.get("timezone", "Europe/London"),
-                metadata=payload.get("metadata", {}),
-            )
-            post_id = post.save()
+            if not accounts:
+                Log.info(f"{log_tag} No connected social accounts for this business.")
+                return prepared_response(False, "BAD_REQUEST", f"No connected social accounts for this business.")
+            
+            # 2) Optional filter (if your UI passes platform="facebook"/"instagram"/...)
+            platform = (body.get("platform") or "").strip().lower()
+            if platform:
+                accounts = [a for a in accounts if (a.get("platform") or "").lower() == platform]
 
-            # enqueue job at scheduled time
-            # rq-scheduler expects python datetime; store utc and parse before scheduling
-            from datetime import datetime, timezone
-            run_at = datetime.fromisoformat(scheduled_for.replace("Z", "+00:00")).astimezone(timezone.utc)
+            if not accounts:
+                Log.info(f"{log_tag} No connected social accounts match your filter.")
+                return prepared_response(False, "BAD_REQUEST", f"No connected social accounts match your filter.")
 
-            social_scheduler.enqueue_at(run_at, publish_scheduled_post, post_id)
+            # ✅ Now you have all accounts in `accounts`
+            # You can either:
+            # - return them
+            # - or create/publish posts against them
 
-            Log.info(f"[social_posts][{client_ip}] scheduled post_id={post_id} run_at={run_at.isoformat()}")
+            safe_accounts = []
+            for a in accounts:
+                safe_accounts.append({
+                    "id": a.get("_id"),
+                    "platform": a.get("platform"),
+                    "destination_id": a.get("destination_id"),
+                    "destination_type": a.get("destination_type"),
+                    "destination_name": a.get("destination_name"),
+                    "platform_username": a.get("platform_username"),
+                    "created_at": a.get("created_at"),
+                })
 
             return jsonify({
                 "success": True,
-                "message": "Post scheduled successfully",
-                "data": {"post_id": post_id}
-            }), 200
+                "message": "Social accounts loaded successfully",
+                "data": {
+                    "business_id": target_business_id,
+                    "accounts": safe_accounts
+                }
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
-            Log.error(f"[social_posts][{client_ip}] error={str(e)}")
-            return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to schedule post.")
+            Log.info(f"{log_tag} Failed: {e}")
+            return jsonify({
+                "success": False,
+                "message": "Failed to load social accounts",
+                "error": str(e),
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]

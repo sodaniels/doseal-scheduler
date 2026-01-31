@@ -5,6 +5,7 @@ from ..base_model import BaseModel
 from ...extensions import db as db_ext
 from ...utils.crypt import encrypt_data, decrypt_data
 from ...utils.logger import Log
+from typing import List, Dict, Any, Optional
 
 
 class SocialAccount(BaseModel):
@@ -132,6 +133,23 @@ class SocialAccount(BaseModel):
         return items
 
     # -------------------- Write helpers --------------------
+    
+    @classmethod
+    def get_all_by_business_id(cls, business_id: str) -> List[Dict[str, Any]]:
+        """
+        Return all social accounts for a business (plain docs).
+        """
+        bid = ObjectId(business_id) if not isinstance(business_id, ObjectId) else business_id
+        col = db_ext.get_collection(cls.collection_name)
+        items = list(col.find({"business_id": bid}).sort("created_at", -1))
+
+        # Normalise IDs
+        for x in items:
+            x["_id"] = str(x["_id"])
+            x["business_id"] = str(x["business_id"])
+            if x.get("user__id") is not None:
+                x["user__id"] = str(x["user__id"])
+        return items
 
     @classmethod
     def upsert_destination(
@@ -200,3 +218,5 @@ class SocialAccount(BaseModel):
         )
         col.create_index([("business_id", 1), ("user__id", 1), ("platform", 1), ("created_at", -1)])
         return True
+    
+    
