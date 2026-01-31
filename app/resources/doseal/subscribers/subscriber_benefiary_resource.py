@@ -138,6 +138,7 @@ class SubscribersSubscribersBeneficiaryResource(MethodView):
         },
         security=[{"Bearer": []}],  # Bearer token authentication is required
     )
+    
     def post(self, item_data):  
         
         validate_payment_details(item_data)

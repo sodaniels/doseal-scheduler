@@ -981,6 +981,19 @@ def resolve_target_business_id(args, kwargs):
 
     return auth_business_id
 
+def resolve_target_business_id_from_payload(payload: dict | None = None):
+    user = g.get("current_user", {}) or {}
+
+    auth_business_id = str(user.get("business_id"))
+    role = user.get("account_type")
+
+    payload = payload or {}
+    form_business_id = payload.get("business_id")
+
+    if role in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+        return str(form_business_id)
+
+    return auth_business_id
 
 
 

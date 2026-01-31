@@ -481,3 +481,34 @@ class ScheduledPostStoredSchema(Schema):
 
     created_at = fields.DateTime()
     updated_at = fields.DateTime()
+    
+
+class ListScheduledPostsQuerySchema(Schema):
+    page = fields.Int(load_default=1)
+    per_page = fields.Int(load_default=20)
+
+    status = fields.Str(required=False)
+
+    # ✅ allow: ?platform=instagram&platform=facebook
+    platform = fields.List(fields.Str(), required=False)
+
+    # optional date filters
+    date_from = fields.Str(required=False)
+    date_to = fields.Str(required=False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

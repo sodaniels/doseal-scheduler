@@ -1,9 +1,13 @@
+
+
 from datetime import datetime, timezone
 from bson import ObjectId
 from pymongo import ReturnDocument
+from typing import Optional, Dict, Any, List, Union
 
 from ..base_model import BaseModel
 from ...extensions import db as db_ext
+from ...utils.logger import Log
 
 
 class ScheduledPost(BaseModel):
@@ -265,6 +269,108 @@ class ScheduledPost(BaseModel):
         )
         return res.modified_count > 0
 
+
+    # ----------------------------------------
+    # LIST BY BUSINESS
+    # ----------------------------------------
+    @classmethod
+    def list_by_business_id(
+        cls,
+        *,
+        business_id: str,
+        page: int = 1,
+        per_page: int = 20,
+        status: Optional[str] = None,
+
+        # ✅ platform filter means destination platform(s)
+        platform: Optional[Union[str, List[str]]] = None,
+
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+
+        log_tag = f"[scheduled_post.py][ScheduledPost][list_by_business_id][business_id={business_id}]"
+
+        try:
+            collection = db_ext.get_collection(cls.collection_name)
+
+            query: Dict[str, Any] = {"business_id": ObjectId(str(business_id))}
+
+            # -----------------------------
+            # OPTIONAL FILTERS
+            # -----------------------------
+            if status:
+                query["status"] = status
+
+            # ✅ platform(s) => match destinations[].platform
+            if platform:
+                if isinstance(platform, str):
+                    # allow "instagram,facebook" OR single "instagram"
+                    platform_list = [p.strip().lower() for p in platform.split(",") if p.strip()]
+                else:
+                    platform_list = [str(p).strip().lower() for p in platform if str(p).strip()]
+
+                if platform_list:
+                    query["destinations"] = {
+                        "$elemMatch": {"platform": {"$in": platform_list}}
+                    }
+
+            # ✅ date range (correct field)
+            if date_from or date_to:
+                q = {}
+                if date_from:
+                    q["$gte"] = cls._parse_dt(date_from)
+                if date_to:
+                    q["$lte"] = cls._parse_dt(date_to)
+                query["scheduled_at_utc"] = q
+
+            # -----------------------------
+            # PAGINATION
+            # -----------------------------
+            page = max(int(page), 1)
+            per_page = min(max(int(per_page), 1), 100)
+            skip = (page - 1) * per_page
+
+            total_count = collection.count_documents(query)
+
+            cursor = (
+                collection.find(query)
+                .sort("scheduled_at_utc", -1)
+                .skip(skip)
+                .limit(per_page)
+            )
+
+            items = list(cursor)
+
+            for doc in items:
+                doc["_id"] = str(doc["_id"])
+                doc["business_id"] = str(doc["business_id"])
+                doc["user__id"] = str(doc["user__id"])
+
+                for k in ("created_at", "updated_at", "scheduled_at_utc"):
+                    if doc.get(k) and hasattr(doc[k], "isoformat"):
+                        doc[k] = doc[k].isoformat()
+
+            total_pages = (total_count + per_page - 1) // per_page
+
+            return {
+                "items": items,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "current_page": page,
+                "per_page": per_page,
+            }
+
+        except Exception as e:
+            Log.error(f"{log_tag} ERROR: {e}")
+            return {
+                "items": [],
+                "total_count": 0,
+                "total_pages": 0,
+                "current_page": page,
+                "per_page": per_page,
+            }     
+            
     @classmethod
     def ensure_indexes(cls):
         col = db_ext.get_collection(cls.collection_name)
