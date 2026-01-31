@@ -1,3 +1,5 @@
+# app/routes/social/oauth_facebook_resource.py
+
 import os
 import json
 import secrets
@@ -227,6 +229,67 @@ class FacebookConnectPageResource(MethodView):
             enforcer.release(counter_name="social_accounts", qty=1, period="billing")
             Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
             return jsonify({"success": False, "message": "Failed to connect page"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+@blp_meta_oauth.route("/social/facebook/pages", methods=["GET"])
+class FacebookPagesResource(MethodView):
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        
+        body = request.get_json(silent=True) or {}
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        account_type = user_info.get("account_type")
+        
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+            
+        log_tag = make_log_tag(
+            "oauth_facebook_resource.py",
+            "FacebookConnectPageResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+
+        selection_key = request.args.get("selection_key")
+        if not selection_key:
+            return jsonify({"success": False, "message": "selection_key is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        raw = get_redis(f"fb_select:{selection_key}")
+        
+    
+        if not raw:
+            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        doc = _safe_json_load(raw, default={}) or {}
+        owner = doc.get("owner") or {}
+        pages = doc.get("pages") or []
+
+        # Ensure the logged-in user matches the owner stored in Redis
+        user = g.get("current_user", {}) or {}
+        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
+            Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
+            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        safe_pages = []
+        for p in pages:
+            safe_pages.append({
+                "page_id": p.get("id"),
+                "name": p.get("name"),
+                "category": p.get("category"),
+                "tasks": p.get("tasks", []),
+            })
+
+        return jsonify({"success": True, "data": {"pages": safe_pages}}), HTTP_STATUS_CODES["OK"]
 
 
 # -------------------------------------------------------------------

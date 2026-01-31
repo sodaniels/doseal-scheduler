@@ -1,3 +1,4 @@
+# app/utils/schedule_helper
 
 import os
 import json
@@ -109,14 +110,6 @@ def _load_selection(provider: str, selection_key: str) -> dict:
     return _safe_json_load(raw, default={}) if raw else {}
 
 
-def _delete_selection(provider: str, selection_key: str):
-    key = f"{provider}_select:{selection_key}"
-    try:
-        remove_redis(key)
-    except Exception:
-        pass
-
-
 def _redirect_to_frontend(path: str, selection_key: str):
     """
     Redirects to your frontend page with selection_key
@@ -133,6 +126,13 @@ def _redirect_to_frontend(path: str, selection_key: str):
         }), HTTP_STATUS_CODES["OK"]
 
     return redirect(f"{frontend_url}{path}?selection_key={selection_key}")
+
+def _delete_selection(provider: str, selection_key: str):
+    key = f"{provider}_select:{selection_key}"
+    try:
+        remove_redis(key)
+    except Exception:
+        pass
 
 
 def _require_x_env(log_tag: str):

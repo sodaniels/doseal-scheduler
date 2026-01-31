@@ -62,7 +62,6 @@ from .doseal.billpay_resource import blp_billpay
 #socials
 from .social.oauth_facebook_resource import blp_meta_oauth
 from .social.facebook_webhook_resource import blp_fb_webhook
-from .social.facebook_connect_page import blp_fb_connect
 from .social.scheduled_posts_resource import blp_scheduled_posts
 from .social.oauth_x_resource import blp_x_oauth
 from .social.oauth_tiktok_resource import blp_tiktok_oauth
@@ -82,7 +81,6 @@ __all__ = [
     #-------------------
     "blp_meta_oauth",
     "blp_fb_webhook",
-    "blp_fb_connect",
     "blp_scheduled_posts",
     "blp_x_oauth",
     "blp_tiktok_oauth",

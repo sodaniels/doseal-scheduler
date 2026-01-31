@@ -46,43 +46,43 @@ blp_fb_connect = Blueprint("Facebook Connect", __name__, description="Connect a 
 # Returns safe page fields (no tokens)
 # -------------------------------------------------------------------
 
-@blp_fb_connect.route("/social/facebook/pages", methods=["GET"])
-class FacebookPagesResource(MethodView):
-    @token_required
-    def get(self):
-        client_ip = request.remote_addr
-        log_tag = f"[oauth_facebook.py][FacebookPagesResource][get][{client_ip}]"
+# @blp_fb_connect.route("/social/facebook/pages", methods=["GET"])
+# class FacebookPagesResource(MethodView):
+#     @token_required
+#     def get(self):
+#         client_ip = request.remote_addr
+#         log_tag = f"[oauth_facebook.py][FacebookPagesResource][get][{client_ip}]"
 
-        selection_key = request.args.get("selection_key")
-        if not selection_key:
-            return jsonify({"success": False, "message": "selection_key is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+#         selection_key = request.args.get("selection_key")
+#         if not selection_key:
+#             return jsonify({"success": False, "message": "selection_key is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        raw = get_redis(f"fb_pages:{selection_key}")
+#         raw = get_redis(f"fb_pages:{selection_key}")
         
     
-        if not raw:
-            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["NOT_FOUND"]
+#         if not raw:
+#             return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["NOT_FOUND"]
 
-        doc = _safe_json_load(raw, default={}) or {}
-        owner = doc.get("owner") or {}
-        pages = doc.get("pages") or []
+#         doc = _safe_json_load(raw, default={}) or {}
+#         owner = doc.get("owner") or {}
+#         pages = doc.get("pages") or []
 
-        # Ensure the logged-in user matches the owner stored in Redis
-        user = g.get("current_user", {}) or {}
-        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
-            Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
-            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+#         # Ensure the logged-in user matches the owner stored in Redis
+#         user = g.get("current_user", {}) or {}
+#         if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
+#             Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
+#             return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
-        safe_pages = []
-        for p in pages:
-            safe_pages.append({
-                "page_id": p.get("id"),
-                "name": p.get("name"),
-                "category": p.get("category"),
-                "tasks": p.get("tasks", []),
-            })
+#         safe_pages = []
+#         for p in pages:
+#             safe_pages.append({
+#                 "page_id": p.get("id"),
+#                 "name": p.get("name"),
+#                 "category": p.get("category"),
+#                 "tasks": p.get("tasks", []),
+#             })
 
-        return jsonify({"success": True, "data": {"pages": safe_pages}}), HTTP_STATUS_CODES["OK"]
+#         return jsonify({"success": True, "data": {"pages": safe_pages}}), HTTP_STATUS_CODES["OK"]
 
 
 # -------------------------------------------------------------------
@@ -90,159 +90,159 @@ class FacebookPagesResource(MethodView):
 # POST /social/facebook/connect-page
 # body: { "selection_key": "...", "page_id": "..." }
 # -------------------------------------------------------------------
-@blp_fb_connect.route("/social/facebook/connect-page", methods=["POST"])
-class FacebookConnectPageResource(MethodView):
-    @token_required
-    def post(self):
-        client_ip = request.remote_addr
-        user_info = g.get("current_user", {}) or {}
+# @blp_fb_connect.route("/social/facebook/connect-page", methods=["POST"])
+# class FacebookConnectPageResource(MethodView):
+#     @token_required
+#     def post(self):
+#         client_ip = request.remote_addr
+#         user_info = g.get("current_user", {}) or {}
 
-        body = request.get_json(silent=True) or {}
-        selection_key = body.get("selection_key")
-        page_id = body.get("page_id")
+#         body = request.get_json(silent=True) or {}
+#         selection_key = body.get("selection_key")
+#         page_id = body.get("page_id")
         
-        auth_user__id = str(user_info.get("_id"))
-        auth_business_id = str(user_info.get("business_id"))
-        user_id = user_info.get("user_id")
-        account_type = user_info.get("account_type")
+#         auth_user__id = str(user_info.get("_id"))
+#         auth_business_id = str(user_info.get("business_id"))
+#         user_id = user_info.get("user_id")
+#         account_type = user_info.get("account_type")
         
-        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
-        form_business_id = body.get("business_id")
-        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
-            target_business_id = form_business_id
-        else:
-            target_business_id = auth_business_id
+#         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+#         form_business_id = body.get("business_id")
+#         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+#             target_business_id = form_business_id
+#         else:
+#             target_business_id = auth_business_id
             
             
-        log_tag = make_log_tag(
-            "facebook_connect_page.py",
-            "FacebookConnectPageResource",
-            "post",
-            client_ip,
-            auth_user__id,
-            account_type,
-            auth_business_id,
-            target_business_id
-        )
+#         log_tag = make_log_tag(
+#             "facebook_connect_page.py",
+#             "FacebookConnectPageResource",
+#             "post",
+#             client_ip,
+#             auth_user__id,
+#             account_type,
+#             auth_business_id,
+#             target_business_id
+#         )
 
-        if not selection_key or not page_id:
-            return jsonify({
-                "success": False,
-                "message": "selection_key and page_id are required"
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+#         if not selection_key or not page_id:
+#             return jsonify({
+#                 "success": False,
+#                 "message": "selection_key and page_id are required"
+#             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        raw = get_redis(f"fb_pages:{selection_key}")
-        if not raw:
-            return jsonify({
-                "success": False,
-                "message": "Selection expired. Please reconnect."
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+#         raw = get_redis(f"fb_pages:{selection_key}")
+#         if not raw:
+#             return jsonify({
+#                 "success": False,
+#                 "message": "Selection expired. Please reconnect."
+#             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        doc = _safe_json_load(raw, default={}) or {}
-        owner = doc.get("owner") or {}
-        pages = doc.get("pages") or []
+#         doc = _safe_json_load(raw, default={}) or {}
+#         owner = doc.get("owner") or {}
+#         pages = doc.get("pages") or []
 
-        # Ensure logged-in user matches owner stored in Redis
-        user = g.get("current_user", {}) or {}
-        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
-            Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
-            return jsonify({
-                "success": False,
-                "message": "Not allowed for this selection_key"
-            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+#         # Ensure logged-in user matches owner stored in Redis
+#         user = g.get("current_user", {}) or {}
+#         if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
+#             Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
+#             return jsonify({
+#                 "success": False,
+#                 "message": "Not allowed for this selection_key"
+#             }), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
-        # Find selected page
-        selected = next((p for p in pages if str(p.get("id")) == str(page_id)), None)
-        if not selected:
-            return jsonify({
-                "success": False,
-                "message": "Invalid page_id for this selection_key"
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+#         # Find selected page
+#         selected = next((p for p in pages if str(p.get("id")) == str(page_id)), None)
+#         if not selected:
+#             return jsonify({
+#                 "success": False,
+#                 "message": "Invalid page_id for this selection_key"
+#             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        page_access_token = selected.get("access_token")
-        if not page_access_token:
-            return jsonify({
-                "success": False,
-                "message": "Page token not found. Reconnect and try again."
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+#         page_access_token = selected.get("access_token")
+#         if not page_access_token:
+#             return jsonify({
+#                 "success": False,
+#                 "message": "Page token not found. Reconnect and try again."
+#             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        business_id = owner.get("business_id")
-        user__id = owner.get("user__id")
+#         business_id = owner.get("business_id")
+#         user__id = owner.get("user__id")
         
-        # ---- PLAN ENFORCER (scoped to target business) ----
-        enforcer = QuotaEnforcer(target_business_id)
+#         # ---- PLAN ENFORCER (scoped to target business) ----
+#         enforcer = QuotaEnforcer(target_business_id)
         
-        # ✅ 2) RESERVE QUOTA ONLY WHEN WE ARE ABOUT TO CREATE
-        try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",   # monthly plans => month bucket, yearly => year bucket
-                reason="social_accounts:create",
-            )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} plan limit reached: {e.meta}")
-            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+#         # ✅ 2) RESERVE QUOTA ONLY WHEN WE ARE ABOUT TO CREATE
+#         try:
+#             enforcer.reserve(
+#                 counter_name="social_accounts",
+#                 limit_key="max_social_accounts",
+#                 qty=1,
+#                 period="billing",   # monthly plans => month bucket, yearly => year bucket
+#                 reason="social_accounts:create",
+#             )
+#         except PlanLimitError as e:
+#             Log.info(f"{log_tag} plan limit reached: {e.meta}")
+#             return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
-        try:
-            ok = SocialAccount.upsert_destination(
-                business_id=business_id,
-                user__id=user__id,
-                platform="facebook",
+#         try:
+#             ok = SocialAccount.upsert_destination(
+#                 business_id=business_id,
+#                 user__id=user__id,
+#                 platform="facebook",
 
-                destination_id=str(page_id),
-                destination_type="page",
-                destination_name=selected.get("name"),
+#                 destination_id=str(page_id),
+#                 destination_type="page",
+#                 destination_name=selected.get("name"),
 
-                access_token_plain=page_access_token,
-                refresh_token_plain=None,
-                token_expires_at=None,
+#                 access_token_plain=page_access_token,
+#                 refresh_token_plain=None,
+#                 token_expires_at=None,
 
-                scopes=["pages_show_list", "pages_read_engagement", "pages_manage_posts"],
-                platform_user_id=str(page_id),
-                platform_username=selected.get("name"),
-                meta={
-                    "page_id": str(page_id),
-                    "category": selected.get("category"),
-                    "tasks": selected.get("tasks", []),
-                },
-            )
+#                 scopes=["pages_show_list", "pages_read_engagement", "pages_manage_posts"],
+#                 platform_user_id=str(page_id),
+#                 platform_username=selected.get("name"),
+#                 meta={
+#                     "page_id": str(page_id),
+#                     "category": selected.get("category"),
+#                     "tasks": selected.get("tasks", []),
+#                 },
+#             )
 
-            if not ok:
-                Log.info(f"{log_tag} SocialAccount.upsert_destination returned not acknowledged")
-                return jsonify({
-                    "success": False,
-                    "message": "Failed to connect page"
-                }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+#             if not ok:
+#                 Log.info(f"{log_tag} SocialAccount.upsert_destination returned not acknowledged")
+#                 return jsonify({
+#                     "success": False,
+#                     "message": "Failed to connect page"
+#                 }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-        except Exception as e:
-            Log.info(f"{log_tag} Failed to upsert SocialAccount destination: {e}")
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-            Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect page"
-            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+#         except Exception as e:
+#             Log.info(f"{log_tag} Failed to upsert SocialAccount destination: {e}")
+#             enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+#             Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
+#             return jsonify({
+#                 "success": False,
+#                 "message": "Failed to connect page"
+#             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-        # One-time selection key after success
-        try:
-            remove_redis(f"fb_pages:{selection_key}")
-        except Exception:
-            pass
+#         # One-time selection key after success
+#         try:
+#             remove_redis(f"fb_pages:{selection_key}")
+#         except Exception:
+#             pass
 
-        return jsonify({
-            "success": True,
-            "message": "Facebook Page connected successfully",
-            "data": {
-                "platform": "facebook",
-                "destination_type": "page",
-                "destination_id": str(page_id),
-                "destination_name": selected.get("name"),
-            }
-        }), HTTP_STATUS_CODES["OK"]
+#         return jsonify({
+#             "success": True,
+#             "message": "Facebook Page connected successfully",
+#             "data": {
+#                 "platform": "facebook",
+#                 "destination_type": "page",
+#                 "destination_id": str(page_id),
+#                 "destination_name": selected.get("name"),
+#             }
+#         }), HTTP_STATUS_CODES["OK"]
 
-# -------------------------------------------------------------------
+# # -------------------------------------------------------------------
 
 
 @staticmethod
