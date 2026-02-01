@@ -625,7 +625,7 @@ def create_token_response_admin(user, client_ip, account_type, log_tag):
     
     user.pop("password", None) 
                                 
-    decrypte_full_name = decrypt_data(user.get("fullname"))
+    # decrypte_full_name = decrypt_data(user.get("fullname"))
     
     business_id = str(user['business_id'])
     cash_session_id = str(user.get("cash_session_id"))

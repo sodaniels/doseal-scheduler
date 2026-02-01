@@ -21,7 +21,7 @@ venv/bin/rqscheduler
 
 
 curl -i "https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3YTE3ODYxNzlmNWRhMTVkNTBkN2M4IiwiZXhwIjoxNzY5OTk2OTg4LCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.A4T1ijZNorg81aeRbcJRymW-2pte13L3pWDuPfa9R1c"
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3ZjA1YTgzN2Q5NDcyZTZmNDNlOGJiIiwiZXhwIjoxNzcwMTQ4Mjg0LCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.urP90qUR9KufbElOgY1k1pdEkAZJL6SyBSLHpJ6qRS0"
 
 https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/start
 https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/callback

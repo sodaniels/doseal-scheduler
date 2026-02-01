@@ -162,7 +162,6 @@ def get_countries():
                 "message": f"Failed to retreive countries: {str(e)}"
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-
 # get twilio webhook
 def twilio_status_webhook():
     # --- Verify Twilio signature (strongly recommended) ---

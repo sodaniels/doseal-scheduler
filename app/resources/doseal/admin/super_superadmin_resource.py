@@ -2406,6 +2406,21 @@ class LoginBusinessResource(MethodView):
         client_ip = request.remote_addr
         log_tag = '[super_superadmin_resource.py][LoginBusinessResource][post]'
         Log.info(f"{log_tag} [{client_ip}][{user_data['email']}] initiating loging request")
+        
+        client_ip = request.remote_addr
+    
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized request."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
     
         # Check if the user exists based on email
         user = User.get_user_by_email(user_data["email"])
