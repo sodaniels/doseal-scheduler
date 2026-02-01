@@ -28,3 +28,14 @@ https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/callback
 
 https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/instagram/start
 https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/instagram/callback
+
+
+https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/start
+https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/callback
+
+https://scheduler.doseal.org/social/api/v1/social/oauth/instagram/start
+https://scheduler.doseal.org/social/api/v1/social/oauth/instagram/callback
+
+curl -i "https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3ZjA1YTgzN2Q5NDcyZTZmNDNlOGJiIiwiZXhwIjoxNzcwMTU2ODUyLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.fZWfi4ays5cG4EPZBRHWs2QvqrnIZQFx8bIiEcxXFI4"
+
