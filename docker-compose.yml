@@ -1,12 +1,14 @@
 version: "3.9"
 
 services:
+  # ----------------------------
+  # MAIN API APP
+  # ----------------------------
   app:
     build:
       context: .
       dockerfile: docker/app.Dockerfile
 
-    # Expose only locally so Nginx can proxy to it
     ports:
       - "127.0.0.1:9090:9090"
 
@@ -48,6 +50,10 @@ services:
 
     restart: always
 
+
+  # ----------------------------
+  # RQ WORKER
+  # ----------------------------
   worker:
     build:
       context: .
@@ -75,8 +81,15 @@ services:
     command: >
       sh -c "rq worker publish --url redis://redis:6379/0"
 
+    volumes:
+      - ./storage/logs:/app/storage/logs
+
     restart: always
 
+
+  # ----------------------------
+  # RQ SCHEDULER
+  # ----------------------------
   scheduler:
     build:
       context: .
@@ -102,10 +115,17 @@ services:
         condition: service_healthy
 
     command: >
-      sh -c "rqscheduler --url redis://redis:6379/0"
+      sh -c "rq-scheduler --url redis://redis:6379/0 --interval 1"
+
+    volumes:
+      - ./storage/logs:/app/storage/logs
 
     restart: always
 
+
+  # ----------------------------
+  # REDIS
+  # ----------------------------
   redis:
     image: redis:alpine
 
@@ -122,6 +142,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+
 
 volumes:
   redis_data:
