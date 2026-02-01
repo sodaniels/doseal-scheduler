@@ -5,6 +5,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+.vscode
 *$py.class
 mtoapitest.egg-info/
 #Don't push docker file since the servers has different port
