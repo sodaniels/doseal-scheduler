@@ -7,7 +7,7 @@ from ...utils.logger import Log
 from ...utils.helpers import resolve_target_business_id_from_payload
 from ...schemas.social.scheduled_posts_schema import ListScheduledPostsQuerySchema
 from ..doseal.admin.admin_business_resource import token_required
-from build.lib.app.utils.json_response import prepared_response
+from ...utils.json_response import prepared_response
 from ...utils.helpers import make_log_tag
 from flask_smorest import Blueprint
 
