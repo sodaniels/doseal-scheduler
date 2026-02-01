@@ -94,34 +94,19 @@ services:
     build:
       context: .
       dockerfile: docker/app.Dockerfile
-
     env_file:
       - .env
-
     environment:
-      DB_USERNAME: ${DB_USERNAME}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_CLUSTER: ${DB_CLUSTER}
-      DB_NAME: ${DB_NAME}
-
+      REDIS_URL: redis://redis:6379/0
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_URL: redis://redis:6379/0
-
       APP_LOG_DIR: /app/storage/logs
-
     depends_on:
       redis:
         condition: service_healthy
-
     command: >
-      sh -c "rq-scheduler --url redis://redis:6379/0 --interval 1"
-
-    volumes:
-      - ./storage/logs:/app/storage/logs
-
+      sh -c "rqscheduler --url redis://redis:6379/0"
     restart: always
-
 
   # ----------------------------
   # REDIS
