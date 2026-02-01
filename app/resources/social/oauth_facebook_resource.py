@@ -4,7 +4,7 @@ import os
 import json
 import secrets
 from urllib.parse import urlencode
-from build.lib.app.utils.json_response import prepared_response
+from ...utils.json_response import prepared_response
 import requests
 from flask.views import MethodView
 from flask import request, jsonify, redirect, g
