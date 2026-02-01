@@ -1,0 +1,109 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    # Expose ONLY to localhost so Nginx on the server can reverse proxy to it
+    ports:
+      - "127.0.0.1:7007:7007"
+    env_file:
+      - .env
+    environment:
+      # DB (loaded from .env as well, but kept here for clarity)
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_CLUSTER: ${DB_CLUSTER}
+      DB_NAME: ${DB_NAME}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379/0
+
+      # Logs
+      APP_LOG_DIR: /app/storage/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+      gunicorn wsgi:application
+      -b 0.0.0.0:7007
+      --workers 4
+      --timeout 120
+      --log-level info
+      --access-logfile -
+      --error-logfile -
+      --forwarded-allow-ips='*'
+      "
+    volumes:
+      - ./storage/logs:/app/storage/logs
+    restart: always
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_CLUSTER: ${DB_CLUSTER}
+      DB_NAME: ${DB_NAME}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379/0
+
+      APP_LOG_DIR: /app/storage/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    # IMPORTANT: forces rq to use redis service, not localhost
+    command: >
+      sh -c "rq worker publish --url ${REDIS_URL}"
+    restart: always
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_CLUSTER: ${DB_CLUSTER}
+      DB_NAME: ${DB_NAME}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379/0
+
+      APP_LOG_DIR: /app/storage/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    # IMPORTANT: forces rqscheduler to use redis service, not localhost
+    command: >
+      sh -c "rqscheduler --url ${REDIS_URL}"
+    restart: always
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  redis_data:
