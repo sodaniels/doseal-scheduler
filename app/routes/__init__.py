@@ -93,18 +93,16 @@ from app.constants.service_code import ALLOWED_IPS
 def register_social_routes(app, api):
     blueprints = [
         blp_preauth,
-        blp_subscriber_registration,
-        blp_subscriber_login,
+        blp_business_auth,
+        blp_system_admin_user,
+        blp_admin_role,
         blp_essentials,
-        blp_subscriber_beneficiary,
-        blp_subscriber_transaction,
-        blp_billpay,
-        blp_fb_webhook,
         blp_scheduled_posts,
         blp_meta_oauth,
         blp_x_oauth,
         blp_tiktok_oauth,
-        blp_social_posts
+        blp_social_posts,
+        blp_fb_webhook,
         
     ]
 

@@ -42,121 +42,134 @@ from ...schemas.essentials_schema import (
 from ...utils.helpers import generate_tokens
 from ...schemas.business_schema import OAuthCredentialsSchema
 
-
+from ...utils.rate_limits import (
+    public_read_limiter,
+    generic_limiter,
+    crud_read_limiter,
+    transaction_user_limiter,
+)
 blp_preauth= Blueprint("Pre Auth", __name__, description="Pre Auth Management")
 
 blp_essentials= Blueprint("Essentials", __name__, description="Essentials Management")
 
-@blp_preauth.route("/oauth/token", methods=["POST"])
-class OAuthTokenResource(MethodView):
-    @blp_preauth.arguments(OAuthCredentialsSchema, location="json")
-    @blp_preauth.doc(
-        summary="Generate an OAuth token",
-        description="This endpoint authenticates a client using `client_id` and `client_secret`. "
-                    "If authentication is successful, it returns a Bearer token valid for 24 hours.",
-        responses={
-            200: {
-                "description": "Successful authentication",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "access_token": "eyJhbGciOiJIUzI1...",
-                            "token_type": "Bearer",
-                            "expires_in": 86400
-                        }
-                    }
-                }
-            },
-            401: {
-                "description": "Invalid credentials or access revoked",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "message": "Invalid client credentials"
-                        }
-                    }
-                }
-            },
-            422:{
-            "description": "Validation error: Missing required fields",
-                "content": {
-                "application/json": {
-                    "example": {
-                        "code": 422,
-                        "errors": {
-                            "json": {
-                                "client_id": [
-                                    "Client ID is required"
-                                ],
-                                "client_secret": [
-                                    "Client secret is required"
-                                ]
-                            }
-                        },
-                        "status": "Unprocessable Entity"
-                    }
-                }
-                }
-            }
-        }
-    )
-    def post(self, item_data):
-        client_ip = request.remote_addr
+# @blp_preauth.route("/oauth/token", methods=["POST"])
+# class OAuthTokenResource(MethodView):
+#     @public_read_limiter(
+#         entity_name="countries",
+#         limit_str="5 per minute; 20 per hour",
+#     )
+#     @blp_preauth.arguments(OAuthCredentialsSchema, location="json")
+#     @blp_preauth.doc(
+#         summary="Generate an OAuth token",
+#         description="This endpoint authenticates a client using `client_id` and `client_secret`. "
+#                     "If authentication is successful, it returns a Bearer token valid for 24 hours.",
+#         responses={
+#             200: {
+#                 "description": "Successful authentication",
+#                 "content": {
+#                     "application/json": {
+#                         "example": {
+#                             "access_token": "eyJhbGciOiJIUzI1...",
+#                             "token_type": "Bearer",
+#                             "expires_in": 86400
+#                         }
+#                     }
+#                 }
+#             },
+#             401: {
+#                 "description": "Invalid credentials or access revoked",
+#                 "content": {
+#                     "application/json": {
+#                         "example": {
+#                             "message": "Invalid client credentials"
+#                         }
+#                     }
+#                 }
+#             },
+#             422:{
+#             "description": "Validation error: Missing required fields",
+#                 "content": {
+#                 "application/json": {
+#                     "example": {
+#                         "code": 422,
+#                         "errors": {
+#                             "json": {
+#                                 "client_id": [
+#                                     "Client ID is required"
+#                                 ],
+#                                 "client_secret": [
+#                                     "Client secret is required"
+#                                 ]
+#                             }
+#                         },
+#                         "status": "Unprocessable Entity"
+#                     }
+#                 }
+#                 }
+#             }
+#         }
+#     )
+#     def post(self, item_data):
+#         client_ip = request.remote_addr
         
-        log_tag = f'[essentials_resource.py][OAuthTokenResource][post][{client_ip}]'
+#         log_tag = f'[essentials_resource.py][OAuthTokenResource][post][{client_ip}]'
         
-        # verify that the request contain valid key and secret
-        app_key = request.headers.get('x-app-key')
-        app_secret = request.headers.get('x-app-secret')
+#         # verify that the request contain valid key and secret
+#         app_key = request.headers.get('x-app-key')
+#         app_secret = request.headers.get('x-app-secret')
         
-        server_app_key = os.getenv("X_APP_KEY")
-        server_app_secret = os.getenv("X_APP_SECRET")
+#         server_app_key = os.getenv("X_APP_KEY")
+#         server_app_secret = os.getenv("X_APP_SECRET")
         
-        if str(app_key) != server_app_key or app_secret != server_app_secret:
-            Log.info(f"{log_tag}[{client_ip}] invalid x-app-key or x-app-secret in header")
-            return prepared_response(False, "UNAUTHORIZED", f"Unauthorized request.")
+#         if str(app_key) != server_app_key or app_secret != server_app_secret:
+#             Log.info(f"{log_tag}[{client_ip}] invalid x-app-key or x-app-secret in header")
+#             return prepared_response(False, "UNAUTHORIZED", f"Unauthorized request.")
         
         
-        client_id = item_data.get('client_id')
-        truncated_client_id = client_id[:7] + "..." if client_id else None
+#         client_id = item_data.get('client_id')
+#         truncated_client_id = client_id[:7] + "..." if client_id else None
         
-        Log.info(f"{log_tag} [{truncated_client_id}] request from IP: {client_ip}")
-        Log.info(f"{log_tag} [{truncated_client_id}][{client_ip}]")
+#         Log.info(f"{log_tag} [{truncated_client_id}] request from IP: {client_ip}")
+#         Log.info(f"{log_tag} [{truncated_client_id}][{client_ip}]")
 
-        # Validate client credentials
-        client = Client.retrieve_client(client_id)
-        if not client:
-            abort(401, message="Invalid client credentials")
+#         # Validate client credentials
+#         client = Client.retrieve_client(client_id)
+#         if not client:
+#             abort(401, message="Invalid client credentials")
             
-        business = Business.get_business(client_id)
-        if not business:
-            abort(401, message="Your access has been revoked")
+#         business = Business.get_business(client_id)
+#         if not business:
+#             abort(401, message="Your access has been revoked")
         
-        #FOR AUTOMATED TESTING   
-        business_id = str(business.get("_id"))
-        set_redis('automated_test_business_id', business_id)
-        #FOR AUTOMATED TESTING
+#         #FOR AUTOMATED TESTING   
+#         business_id = str(business.get("_id"))
+#         set_redis('automated_test_business_id', business_id)
+#         #FOR AUTOMATED TESTING
             
-        email = decrypt_data(business["email"])
+#         email = decrypt_data(business["email"])
             
-        # Check if the user exists based on email
-        user = User.get_user_by_email(email)
-        if user is None:
-            Log.info(f"{log_tag} [{client_ip}][{business['email']}]: login email does not exist")
-            return prepared_response(False, "UNAUTHORIZED", f"Invalid access.")
+#         # Check if the user exists based on email
+#         user = User.get_user_by_email(email)
+#         if user is None:
+#             Log.info(f"{log_tag} [{client_ip}][{business['email']}]: login email does not exist")
+#             return prepared_response(False, "UNAUTHORIZED", f"Invalid access.")
             
         
-        # Generate both access token and refresh token using the user object
-        permissions = None
-        access_token, refresh_token = generate_tokens(user, permissions)
-        Token.create_token(client_id, access_token, refresh_token, 190900, 604800)
+#         # Generate both access token and refresh token using the user object
+#         permissions = None
+#         access_token, refresh_token = generate_tokens(user, permissions)
+#         Token.create_token(client_id, access_token, refresh_token, 190900, 604800)
 
-        # Token is for 24 hours
-        return jsonify({'access_token': access_token, 'token_type': 'Bearer', 'expires_in': 86400})
+#         # Token is for 24 hours
+#         return jsonify({'access_token': access_token, 'token_type': 'Bearer', 'expires_in': 86400})
 
 
 @blp_preauth.route("/tenants", methods=["GET"])
 class TenantResource(MethodView):
+    @public_read_limiter(
+        entity_name="tenants",
+        limit_str="30 per minute; 300 per hour",
+    )
     @blp_preauth.doc(
         summary="Retrieve tenants",
         description="""
@@ -281,7 +294,10 @@ class TenantResource(MethodView):
                        
 @blp_preauth.route("/countries", methods=["GET"])
 class CountryResource(MethodView):
-    token_required
+    @public_read_limiter(
+        entity_name="countries",
+        limit_str="30 per minute; 300 per hour",
+    )
     @blp_preauth.doc(
         summary="Retrieve countries",
         description="""
@@ -414,6 +430,10 @@ class CountryResource(MethodView):
 
 @blp_essentials.route("/post-codes", methods=["GET"])
 class PostCodeResource(MethodView):
+    @public_read_limiter(
+        entity_name="post-codes",
+        limit_str="30 per minute; 300 per hour",
+    )
     @token_required
     @blp_essentials.doc(
         summary="Retrieve a list of postcode addresses",
@@ -505,7 +525,7 @@ class PostCodeResource(MethodView):
         log_tag = '[internal_controller.py][PostcodeResource][get]'
         client_ip = request.remote_addr
         user_info = g.get("current_user", {})
-        user_id = user_info.get("_id")
+        user_id = str(user_info.get("_id"))
         
         try:
             Log.info(f"{log_tag} IP: {client_ip}")
@@ -516,6 +536,8 @@ class PostCodeResource(MethodView):
             country_iso2 = rate_data.get("country_iso2")
             post_code = rate_data.get("post_code")
             
+            Log.info(f"country_iso2: {country_iso2}")
+        
             # Start the timer for performance measurement
             start_time = time.time()
 

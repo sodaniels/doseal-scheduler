@@ -108,9 +108,10 @@ class ApiService:
             searchTerm = post_code.lower()
             noSpacesSearchterm = searchTerm.replace(" ", "")
             
-            api_key = os.getenv("POST_CODER_API_KEY")
+            api_key = os.getenv("POSTCODER_API_KEY")
             
-            endpoint = f'/{api_key}/address/{country_code}/{noSpacesSearchterm}'
+            
+            endpoint = f'{api_key}/address/{country_code}/{noSpacesSearchterm}?identifier=SignupForm'
             
             Log.info(f"{log_tag} Initiating [POST] request to https://ws.postcoder.com")
 
@@ -129,6 +130,10 @@ class ApiService:
                 }
         except Exception as e:
             Log.error(f"Error while retrieving post code address: {str(e)}")
-            return {"error": str(e)}
+            return {
+                    "success": False,
+                    "status_code": 400,
+                    "message": "An error occurred"
+                }
         
 

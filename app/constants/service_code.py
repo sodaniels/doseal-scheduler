@@ -126,60 +126,140 @@ PERMISSION_FIELDS_FOR_AGENTS = [
     "balance",
 ]
 
+
 PERMISSION_FIELDS_FOR_ADMINS = [
     "dashboard",
-    "store",
-    "unit",
-    "category",
-    "brand",
-    "subcategory",
-    "variant",
-    "tax",
-    "warranty",
-    "supplier",
-    "tag",
-    "product",
-    "customer",
-    "customergroup",
-    "giftcard",
-    "outlet",
-    "sale",
-    "expense",
-    "discount",
-    "businesslocation",
-    "sellingpricegroup",
-    "compositvariant",
-    "role",
+
+    # Social core
+    "socialaccounts",
+    "scheduledposts",
+    "drafts",
+    "calendar",
+
+    # Content
+    "medialibrary",
+    "contenttemplates",
+    "hashtagsets",
+
+    # Engagement
+    "inbox",
+    "comments",
+
+    # Insights
+    "analytics",
+    "reports",
+
+    # Workflow
+    "approvals",
+
+    # Team / security
+    "team",
+    "roles",
     "systemuser",
+
+    # Integrations / infra
+    "integrations",
+    "webhooks",
+
+    # Billing
+    "billing",
+    "subscription",
+
+    # Audit / config
+    "auditlogs",
+    "settings",
     "admin",
 ]
 
 PERMISSION_FIELDS_FOR_ADMIN_ROLE = {
+
+    # --------------------
+    # Dashboard
+    # --------------------
     "dashboard": ["read"],
-    "store": ["read", "create", "update", "delete", "import", "export"],
-    "unit": ["read", "create", "update", "delete", "import", "export"],
-    "category": ["read", "create", "update", "delete", "import", "export"],
-    "subcategory": ["read", "create", "update", "delete", "import", "export"],
-    "brand": ["read", "create", "update", "delete", "import", "export"],
-    "variant": ["read", "create", "update", "delete", "import", "export"],
-    "tax": ["read", "create", "update", "delete", "import", "export"],
-    "warranty": ["read", "create", "update", "delete", "import", "export"],
-    "supplier": ["read", "create", "update", "delete", "import", "export"],
-    "tag": ["read", "create", "update", "delete", "import", "export"],
-    "product": ["read", "create", "update", "delete", "import", "export"],
-    "customer": ["read", "create", "update", "delete", "import", "export"],
-    "customergroup": ["read", "create", "update", "delete", "import", "export"],
-    "giftcard": ["read", "create", "update", "delete", "import", "export"],
-    "outlet": ["read", "create", "update", "delete", "import", "export"],
-    "sale": ["read", "create", "void", "refund", "reprint", "export"],
-    "roles": ["read", "create", "update", "delete", "import", "export"],
-    "expense": ["read", "create", "update", "delete", "import", "export"],
-    "discount": ["read", "create", "update", "delete", "import", "export"],
-    "businesslocation": ["read", "create", "update", "delete", "import", "export"],
-    "sellingpricegroup": ["read", "create", "update", "delete", "import", "export"],
-    "compositvariant": ["read", "create", "update", "delete", "import", "export"],
-    "systemuser": ["read", "create", "update", "delete", "import", "export"],
-    "admin": ["read", "create", "update", "delete", "import", "export"],
+
+    # --------------------
+    # Social Accounts
+    # --------------------
+    "socialaccounts": ["read", "create", "update", "delete"],
+
+    # --------------------
+    # Posts / Scheduling
+    # --------------------
+    "scheduledposts": [
+        "read",
+        "create",
+        "update",
+        "delete",
+        "approve",
+        "cancel",
+        "publish",
+        "export",
+    ],
+
+    "drafts": ["read", "create", "update", "delete"],
+
+    "calendar": ["read"],
+
+    # --------------------
+    # Media / Content
+    # --------------------
+    "medialibrary": ["read", "create", "update", "delete", "upload"],
+
+    "contenttemplates": ["read", "create", "update", "delete"],
+
+    "hashtagsets": ["read", "create", "update", "delete"],
+
+    # --------------------
+    # Engagement
+    # --------------------
+    "inbox": ["read", "reply", "assign", "tag", "resolve"],
+
+    "comments": ["read", "reply", "hide", "delete"],
+
+    # --------------------
+    # Analytics
+    # --------------------
+    "analytics": ["read", "export"],
+
+    "reports": ["read", "create", "export", "schedule"],
+
+    # --------------------
+    # Approval flows
+    # --------------------
+    "approvals": ["read", "create", "update", "delete", "approve", "reject"],
+
+    # --------------------
+    # Team / Roles
+    # --------------------
+    "team": ["read", "create", "update", "delete"],
+
+    "roles": ["read", "create", "update", "delete"],
+
+    "systemuser": ["read", "create", "update", "delete"],
+
+    # --------------------
+    # Integrations
+    # --------------------
+    "integrations": ["read", "create", "update", "delete"],
+
+    "webhooks": ["read", "create", "update", "delete"],
+
+    # --------------------
+    # Billing
+    # --------------------
+    "billing": ["read", "update"],
+
+    "subscription": ["read", "update", "cancel"],
+
+    # --------------------
+    # Audit / Settings
+    # --------------------
+    "auditlogs": ["read", "export"],
+
+    "settings": ["read", "update"],
+
+    "admin": ["read", "create", "update", "delete"],
 }
 
 PERMISSION_FIELDS_FOR_AGENT_ROLE = {

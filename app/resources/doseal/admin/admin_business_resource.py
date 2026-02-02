@@ -35,7 +35,7 @@ from ....utils.redis import (
     set_redis_with_expiry, set_redis
 )
 from ....constants.service_code import (
-    HTTP_STATUS_CODES, SYSTEM_USERS
+    HTTP_STATUS_CODES, SYSTEM_USERS, BUSINESS_FIELDS
 )
 from tasks import (
     send_user_registration_email, 
@@ -45,12 +45,19 @@ from ....utils.generators import (
     generate_reset_token,
     generate_confirm_email_token
 )
-from ....utils.rate_limits import (
-    register_rate_limiter,
+
+from ....utils.helpers import (
+    validate_and_format_phone_number, create_token_response_admin, 
+    generate_tokens, safe_decrypt
 )
 from ....utils.file_upload import upload_file
 
-
+from ....utils.rate_limits import (
+    login_ip_limiter, login_user_limiter,
+    register_rate_limiter, logout_rate_limiter,
+    profile_retrieval_limiter 
+)
+from ....utils.helpers import resolve_target_business_id_from_payload
 
 SECRET_KEY = os.getenv("SECRET_KEY") 
 
@@ -449,3 +456,369 @@ class RegisterBusinessResource(MethodView):
                 "error": str(e)
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+@blp_business_auth.route("/auth/login", methods=["POST"])
+class LoginBusinessResource(MethodView):
+    @login_ip_limiter("login")
+    @login_user_limiter("login")
+    @blp_business_auth.arguments(LoginSchema, location="form")
+    @blp_business_auth.response(200, LoginSchema)
+    @blp_business_auth.doc(
+        summary="Login to an existing business account",
+        description="This endpoint allows a business to log in using their email and password. A valid email and password are required. On successful login, an access token is returned for subsequent authorized requests.",
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": LoginSchema,  # Assuming you have a LoginSchema to validate the input data
+                    "example": {
+                        "email": "johndoe@example.com",
+                        "password": "SecurePass123"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "Login successful, returns an access token",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "access_token": "your_access_token_here",
+                            "token_type": "Bearer",
+                            "expires_in": 86400  # The token expiration time in seconds (1 day)
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Invalid login data",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid email or password"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized request",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid authentication credentials"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def post(self, user_data):
+        client_ip = request.remote_addr
+        log_tag = '[admin_business_resource.py][LoginBusinessResource][post]'
+        Log.info(f"{log_tag} [{client_ip}][{user_data['email']}] initiating loging request")
+        
+        client_ip = request.remote_addr
+    
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized request."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+    
+        # Check if the user exists based on email
+        user = User.get_user_by_email(user_data["email"])
+        if user is None:
+           Log.info(f"{log_tag} [{client_ip}][{user_data['email']}]: login email does not exist")
+           return prepared_response(
+                False,
+                "UNAUTHORIZED",
+                "Invalid email or password",
+            )
+           
+        
+        fullname = decrypt_data(user["fullname"])
+        
+        # Check if the user's email is not verified
+        if User.email_verification_needed(user_data["email"]):
+            Log.info(f"{log_tag} [{client_ip}][{user_data['email']}]: email needs verification")
+            try:
+                base_url = os.getenv("BACK_END_BASE_URL")
+                token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
+                reset_url = generate_confirm_email_token(base_url, token)
+                
+                update_code = User.update_auth_code(user_data["email"], token)
+    
+                if update_code:
+                    Log.info(f"{log_tag} [post]\t reset_url: {reset_url}")
+                    send_user_registration_email(user_data["email"], fullname, reset_url)
+            except Exception as e:
+                Log.info(f"{log_tag} \t An error occurred sending emails: {e}")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Email needs verification.",
+                "hint": "Verification email has been sent to user"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+
+        # Check if the user's credentials are not correct
+        if not User.verify_password(user_data["email"], user_data["password"]):
+            Log.info(f"{log_tag} [{client_ip}][{user_data['email']}]: email and password combination failed")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Invalid email or password",
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+            
+            
+        Log.info(f"{log_tag} [{client_ip}][{user_data['email']}]: login info matched")
+        
+        client_id = decrypt_data(user["client_id"])
+        
+        business = Business.get_business_by_client_id(client_id)
+        if not business: 
+            abort(401, message="Your access has been revoked. Contact your administrator")
+            
+        # Log.info(f"business: {business}")
+        
+        account_type = business.get("account_type")
+        
+        decrypted_data = decrypt_data(account_type)
+
+        # when user was not found
+        if user is None:
+            Log.info(f"{log_tag}[{client_ip}] user not found.") 
+            return prepared_response(False, "NOT_FOUND", f"User not found.")
+        
+        # proceed to create token when user payload was created
+        return create_token_response_admin(
+            user=user,
+            account_type=decrypted_data,
+            client_ip=client_ip, 
+            log_tag=log_tag, 
+        )
+        
+@blp_business_auth.route("/me", methods=["GET"])
+class CurrentUserResource(MethodView):
+    
+    @profile_retrieval_limiter("me")
+    @token_required
+    @blp_business_auth.response(200)
+    @blp_business_auth.doc(
+        summary="Get current authenticated user",
+        description="This endpoint returns the profile information of the currently authenticated user based on their JWT token.",
+        responses={
+            200: {
+                "description": "Successfully retrieved user profile",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "data": {
+                                "id": "user_id_here",
+                                "email": "johndoe@example.com",
+                                "fullname": "John Doe",
+                                "client_id": "client_id_here",
+                                "account_type": "admin",
+                                "email_verified": True
+                            }
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized - Invalid or missing token",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Missing or invalid authentication token"
+                        }
+                    }
+                }
+            },
+            404: {
+                "description": "User not found",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 404,
+                            "message": "User not found"
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = '[admin_business_resource.py][CurrentUserResource][get]'
+        
+        body = request.get_json(silent=True) or {}
+        
+        user = g.get("current_user", {}) or {}
+        target_business_id = resolve_target_business_id_from_payload(body)
+
+        auth_user__id = str(user.get("_id") or "")
+        account_type = user.get("account_type")
+        
+        Log.info(f"{log_tag} [{client_ip}] fetching user profile for user_id: {auth_user__id}")
+        
+        # Get user from database
+        user = User.get_by_id(auth_user__id, target_business_id)
+        
+        if user is None:
+            Log.info(f"{log_tag} [{client_ip}] user not found")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["NOT_FOUND"],
+                "message": "User not found"
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+        
+        # Decrypt sensitive fields
+        client_id = decrypt_data(user["client_id"])
+        
+        # Get business info
+        business = Business.get_business_by_client_id(client_id)
+        
+        decrypte_full_name = decrypt_data(user.get("fullname"))
+        
+        business_info = dict()
+    
+        business_info = {key: safe_decrypt(business.get(key)) for key in BUSINESS_FIELDS}
+        
+        # Token is for 24 hours
+        response = {
+            "fullname": decrypte_full_name,
+            "admin_id": str(user.get("_id")),
+            "business_id": target_business_id,
+            "profile": business_info
+        }
+        
+        try:
+            role_id = user.get("role") if user.get("role") else None
+            
+            role = None
+            
+            if role_id is not None:
+                role =  Role.get_by_id(role_id=role_id, business_id=target_business_id, is_logging_in=True)
+                
+            
+            if role is not None:
+                # retreive the permissions for the user
+                permissions = role.get("permissions")
+
+        except Exception as e:
+            Log.info(f"{log_tag} [helpers.py][{client_ip}]: error retreiving permissions for user: {e}")
+        
+        
+        response["account_type"] = account_type
+
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]) :
+            response["permissions"] = {}
+        else:
+            response["permissions"] = permissions
+            
+        return jsonify(response), HTTP_STATUS_CODES["OK"]
+        
+        
+@blp_business_auth.route("/logout", methods=["POST"])
+class LogoutResource(MethodView):
+    @logout_rate_limiter("logout")
+    @token_required
+    @blp_business_auth.doc(
+        summary="Logout from account",
+        description="This endpoint allows a user to logout by invalidating their access token. A valid access token must be provided in the Authorization header.",
+        security=[{"BearerAuth": []}],
+        responses={
+            200: {
+                "description": "Logout successful",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Successfully logged out."
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized - Invalid or missing token",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid or expired token."
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred."
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def post(self):
+        client_ip = request.remote_addr
+        auth_header = request.headers.get('Authorization')
+        log_tag = '[admin_business_resource.py][LogoutResource][post]'
+
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return prepared_response(False, "UNAUTHORIZED", f"Authorization token is missing or invalid.")
+        
+        access_token = auth_header.split(' ')[1]
+        
+        try:
+            # Delete or invalidate the token from database
+            token_deleted = Token.delete_token(access_token)
+
+            if token_deleted:
+                Log.info(f"{log_tag} [{client_ip}]: token invalidated successfully.")
+                return prepared_response(False, "OK", f"Successfully logged out.")
+                
+            else:
+                Log.info(f"{log_tag}[{client_ip}]: token invalidation failed.")
+                return prepared_response(False, "UNAUTHORIZED", f"Invalid or expired token.")
+                
+        except Exception as e:
+            Log.error(f"{log_tag}[{client_ip}]: logout error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred. {str(e)}")
+         
