@@ -28,12 +28,10 @@ from ....utils.helpers import (
 )
 
 from ....utils.rate_limits import (
-    login_ip_limiter, 
-    login_user_limiter,
-    crud_read_limiter, 
-    crud_write_limiter,
-    crud_delete_limiter,
-    logout_rate_limiter
+    login_ip_limiter, login_user_limiter,
+    crud_read_limiter, crud_write_limiter,
+    crud_delete_limiter, logout_rate_limiter,
+    profile_retrieval_limiter 
 )
 from ....utils.helpers import resolve_target_business_id_from_payload
 
@@ -85,8 +83,9 @@ blp_expense = Blueprint("Expense", __name__,  description="Expense Management")
 @blp_admin_role.route("/role", methods=["POST", "GET", "PATCH", "DELETE"])
 class RoleResource(MethodView):
     # ------------------------- CREATE ROLE (POST) ---------------------------- #
-    @token_required
+    
     @crud_write_limiter("role")
+    @token_required
     @blp_admin_role.arguments(RoleSchema, location="json")
     @blp_admin_role.response(201, RoleSchema)
     @blp_admin_role.doc(
@@ -227,8 +226,9 @@ class RoleResource(MethodView):
             )
 
     # ---------------------- GET SINGLE ROLE (role-aware) ---------------------- #
-    @token_required
+    
     @crud_read_limiter("role")
+    @token_required
     @blp_admin_role.arguments(RoleIdQuerySchema, location="query")
     @blp_admin_role.response(200, RoleSchema)
     @blp_admin_role.doc(
@@ -350,8 +350,8 @@ class RoleResource(MethodView):
             )
 
     # ---------------------- UPDATE ROLE (role-aware PATCH) ---------------------- #
-    @token_required
     @crud_write_limiter("role")
+    @token_required
     @blp_admin_role.arguments(RoleUpdateSchema, location="json")
     @blp_admin_role.response(200, RoleUpdateSchema)
     @blp_admin_role.doc(
@@ -472,8 +472,8 @@ class RoleResource(MethodView):
             )
 
     # ---------------------- DELETE ROLE (role-aware) ---------------------- #
-    @token_required
     @crud_delete_limiter("role")
+    @token_required
     @blp_admin_role.arguments(RoleIdQuerySchema, location="query")
     @blp_admin_role.response(200)
     @blp_admin_role.doc(
@@ -572,8 +572,8 @@ class RoleResource(MethodView):
 @blp_admin_role.route("/roles", methods=["GET"])
 class RoleListResource(MethodView):
 
-    @token_required
     @crud_read_limiter("role")
+    @token_required
     @blp_admin_role.arguments(BusinessIdAndUserIdQuerySchema, location="query")
     @blp_admin_role.response(200, RolesSchema)
     @blp_admin_role.doc(
@@ -826,8 +826,9 @@ class ExpenseResource(MethodView):
     # ------------------------------------------------------------------
     # POST expense (role-aware business selection)
     # ------------------------------------------------------------------
-    @token_required
+    
     @crud_write_limiter("expense")
+    @token_required
     @blp_expense.arguments(ExpenseSchema, location="form")
     @blp_expense.response(201, ExpenseSchema)
     @blp_expense.doc(
@@ -940,8 +941,8 @@ class ExpenseResource(MethodView):
     # ------------------------------------------------------------------
     # GET expense by expense_id (role-aware business selection)
     # ------------------------------------------------------------------
-    @token_required
     @crud_read_limiter("expense")
+    @token_required
     @blp_expense.arguments(ExpenseIdQuerySchema, location="query")
     @blp_expense.response(200, ExpenseSchema)
     @blp_expense.doc(
@@ -1028,8 +1029,8 @@ class ExpenseResource(MethodView):
     # ------------------------------------------------------------------
     # PATCH expense (role-aware business selection)
     # ------------------------------------------------------------------
-    @token_required
     @crud_write_limiter("expense")
+    @token_required
     @blp_expense.arguments(ExpenseUpdateSchema, location="form")
     @blp_expense.response(200, ExpenseUpdateSchema)
     @blp_expense.doc(
@@ -1136,8 +1137,8 @@ class ExpenseResource(MethodView):
     # ------------------------------------------------------------------
     # DELETE expense (role-aware business selection)
     # ------------------------------------------------------------------
-    @token_required
     @crud_delete_limiter("expense")
+    @token_required
     @blp_expense.arguments(ExpenseIdQuerySchema, location="query")
     @blp_expense.response(200)
     @blp_expense.doc(
@@ -1224,8 +1225,8 @@ class ExpenseResource(MethodView):
 @blp_expense.route("/expenses", methods=["GET"])
 class ExpenseResource(MethodView):
     
-    @token_required
     @crud_read_limiter("expense")
+    @token_required
     @blp_expense.arguments(BusinessIdAndUserIdQuerySchema, location="query")
     @blp_expense.response(200, BusinessIdAndUserIdQuerySchema)
     @blp_expense.doc(
@@ -1444,8 +1445,8 @@ class ExpenseResource(MethodView):
 class AdminResource(MethodView):
     
     # ------------------------- CREATE ADMIN (POST) ------------------------- #
-    @token_required
     @crud_write_limiter("admin")
+    @token_required
     @blp_system_admin_user.arguments(SystemUserSchema, location="form")
     @blp_system_admin_user.response(201, SystemUserSchema)
     @blp_system_admin_user.doc(
@@ -1647,8 +1648,8 @@ class AdminResource(MethodView):
             )
 
     # ---------------------- GET SINGLE ADMIN (role-aware) ---------------------- #
-    @token_required
     @crud_read_limiter("admin")
+    @token_required
     @blp_system_admin_user.arguments(SystemAdminIdQuerySchema, location="query")
     @blp_system_admin_user.response(200, SystemUserSchema)
     @blp_system_admin_user.doc(
@@ -1752,8 +1753,8 @@ class AdminResource(MethodView):
             )
 
     # ---------------------- UPDATE ADMIN (role-aware PUT) ---------------------- #
-    @token_required
     @crud_write_limiter("admin")
+    @token_required
     @blp_system_admin_user.arguments(SystemUserUpdateSchema, location="form")
     @blp_system_admin_user.response(200, SystemUserUpdateSchema)
     @blp_system_admin_user.doc(
@@ -1849,8 +1850,8 @@ class AdminResource(MethodView):
             )
 
     # ---------------------- DELETE ADMIN (role-aware) ---------------------- #
-    @token_required
     @crud_delete_limiter("admin")
+    @token_required
     @blp_system_admin_user.arguments(SystemAdminIdQuerySchema, location="query")
     @blp_system_admin_user.response(200)
     @blp_system_admin_user.doc(
@@ -1941,8 +1942,8 @@ class AdminResource(MethodView):
 class AdminResource(MethodView):
     
     # ---------------------- LIST SYSTEM USERS (role-aware) ---------------------- #
-    @token_required
     @crud_read_limiter("admin")
+    @token_required
     @blp_system_admin_user.arguments(AgentsQuerySchema, location="query")
     @blp_system_admin_user.response(200, SystemUserSchema)
     @blp_system_admin_user.doc(
@@ -2134,9 +2135,8 @@ class AdminResource(MethodView):
             
 @blp_admin_role.route("/available-roles", methods=["GET"])
 class AvailableRoleResource(MethodView):
-    
-    @token_required
     @crud_read_limiter("availableroles")
+    @token_required
     @blp_admin_role.doc(
         summary="Retrieve roles by agent_id",
         description="""
@@ -2328,11 +2328,8 @@ class AvailableRoleResource(MethodView):
 
 @blp_system_admin_user.route("/auth/login", methods=["POST"])
 class LoginBusinessResource(MethodView):
-    # decorators = [
-    #     login_ip_limiter(),
-    #     login_user_limiter(),
-    # ]
-    
+    @login_ip_limiter("login")
+    @login_user_limiter("login")
     @blp_system_admin_user.arguments(LoginSchema, location="form")
     @blp_system_admin_user.response(200, LoginSchema)
     @blp_system_admin_user.doc(
@@ -2498,6 +2495,7 @@ class LoginBusinessResource(MethodView):
 @blp_system_admin_user.route("/auth/me", methods=["GET"])
 class CurrentUserResource(MethodView):
     
+    @profile_retrieval_limiter("me")
     @token_required
     @blp_system_admin_user.response(200)
     @blp_system_admin_user.doc(
@@ -2623,8 +2621,8 @@ class CurrentUserResource(MethodView):
         
 @blp_system_admin_user.route("/auth/logout", methods=["POST"])
 class LogoutResource(MethodView):
-    @token_required
     @logout_rate_limiter("logout")
+    @token_required
     @blp_system_admin_user.doc(
         summary="Logout from account",
         description="This endpoint allows a user to logout by invalidating their access token. A valid access token must be provided in the Authorization header.",

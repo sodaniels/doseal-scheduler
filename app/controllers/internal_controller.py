@@ -35,6 +35,13 @@ from ..utils.essentials import Essensial
 from ..services.shop_api_service import ShopApiService
 from ..utils.json_response import prepared_response
 
+from ..utils.rate_limits import (
+    public_read_limiter,
+    generic_limiter,
+    crud_read_limiter,
+    transaction_user_limiter,
+)
+
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
 from ..models.instntmny.messages_model import Message
@@ -43,6 +50,10 @@ from ..constants.service_code import (
 )
 
 # get confirm account
+@public_read_limiter(
+    entity_name="account-confirmation",
+    limit_str="5 per minute; 20 per hour",
+)
 def get_confirm_account():
     """Returns the list of attempt objects with sessionId = {sessionId}.
     Returns the user-defined statuses data if those have been set in the Veriff environment.
@@ -110,7 +121,12 @@ def get_confirm_account():
         query_params = {"status": "Failed", "message": "Registration code expired"}
         return_url_payload = generate_return_url_with_payload(return_url, query_params)
         return redirect(f"{return_url_payload}")
+
 # get countries
+@public_read_limiter(
+    entity_name="countries",
+    limit_str="30 per minute; 300 per hour",
+)
 def get_countries():
     """Returns the list of countries.
     
@@ -123,12 +139,10 @@ def get_countries():
     
     if app_key != server_app_key:
         Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
-        response = {
-            "success": False,
-            "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
-            "message": "Unauthorized request."
-        }
-        return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        return prepared_response(
+            status=False,
+            status_code="UNAUTHORIZED",
+        )
     
     try:
         Log.info(f"[internal_controller.py][get_countries] retrieving a list of countries IP: {client_ip}")
@@ -163,6 +177,11 @@ def get_countries():
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 # get twilio webhook
+@generic_limiter(
+    entity_name="twilio-webhook",
+    limit_str="100 per minute; 1000 per hour",
+    methods=["POST"],
+)
 def twilio_status_webhook():
     # --- Verify Twilio signature (strongly recommended) ---
     signature = request.headers.get("X-Twilio-Signature", "")
@@ -201,6 +220,10 @@ def twilio_status_webhook():
     return ("", 204)
 
 #get banks list
+@crud_read_limiter(
+    entity_name="banks",
+    limit_str="60 per minute; 600 per hour",
+)
 @token_required
 def get_banks():
     """Returns the list of banks.
@@ -247,6 +270,10 @@ def get_banks():
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 # get countries
+@public_read_limiter(
+    entity_name="tenants",
+    limit_str="30 per minute; 300 per hour",
+)
 def get_tenants():
     """Returns the list of countries.
     
@@ -259,12 +286,11 @@ def get_tenants():
     
     if app_key != server_app_key:
         Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
-        response = {
-            "success": False,
-            "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
-            "message": "Unauthorized request."
-        }
-        return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        
+        return prepared_response(
+            status=False,
+            status_code="UNAUTHORIZED",
+        )
     
     try:
         Log.info(f"[internal_controller.py][get_countries] retrieving a list of countries IP: {client_ip}")
@@ -298,6 +324,11 @@ def get_tenants():
                 "message": f"Failed to retreive countries: {str(e)}"
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+
+@transaction_user_limiter(
+    entity_name="sms",
+    limit_str="5 per minute; 30 per hour; 100 per day",
+)
 @token_required
 def post_send_sms():
     """Send sms .
@@ -330,6 +361,10 @@ def post_send_sms():
                 "message": f"Failed to send sms: {str(e)}"
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+@crud_read_limiter(
+    entity_name="corridors",
+    limit_str="60 per minute; 600 per hour",
+)
 @token_required
 def get_corridors():
     """Returns the list of corridors.

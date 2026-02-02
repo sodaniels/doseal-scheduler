@@ -1,5 +1,6 @@
 # resources/payment_resource.py
 
+import os
 from flask import g, request
 from flask.views import MethodView
 from flask_smorest import Blueprint
@@ -10,6 +11,13 @@ from ...admin.admin_business_resource import token_required
 from .....utils.json_response import prepared_response
 from .....utils.crypt import decrypt_data
 from .....utils.helpers import make_log_tag
+from .....utils.rate_limits import (
+    subscription_payment_ip_limiter,
+    subscription_payment_limiter
+)
+from .....utils.essentials import Essensial
+
+#models
 from .....models.admin.payment import Payment
 from .....models.admin.package_model import Package
 #services
@@ -36,6 +44,8 @@ payment_blp = Blueprint(
 class InitiatePayment(MethodView):
     """Initiate a payment transaction."""
     
+    # @subscription_payment_ip_limiter("subscription")
+    # @subscription_payment_limiter("subscription")
     @token_required
     @payment_blp.arguments(InitiatePaymentSchema, location="json")
     @payment_blp.response(200)
@@ -52,6 +62,8 @@ class InitiatePayment(MethodView):
         account_type_enc = user_info.get("account_type")
         account_type = account_type_enc if account_type_enc else None
         
+        payment_method = None
+        
         log_tag = make_log_tag(
             "payment_resource.py",
             "InitiatePayment",
@@ -63,10 +75,38 @@ class InitiatePayment(MethodView):
             business_id,
         )
         
+        # Determine payment_method based on tenant
+        tenant = dict()
         try:
-            package_id = json_data["package_id"]
-            billing_period = json_data["billing_period"]
-            payment_method = json_data["payment_method"]
+            tenant_id = json_data.get("tenant_id")
+            tenant = Essensial.get_tenant_by_id(tenant_id)
+            
+            if tenant is not None:
+                country_iso_3 = tenant.get("country_iso_3")
+                
+                # Configure country specific payment gateway here
+                
+                if str.upper(country_iso_3) == "GHA": #Ghana
+                    payment_method = "hubtel"
+                elif str.upper(country_iso_3) == "GBR": # United Kingdom
+                    payment_method = "hubtel" # Use hubtel for now
+                else:
+                    payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY", "hubtel")
+                
+                Log.info(f"{log_tag} Using payment gateway: {payment_method}")
+            else:
+                Log.info(f"{log_tag} No tenant information found. Using default payment.")  
+                payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY", "hubtel")
+                
+            
+        except Exception as e:
+            payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY", "hubtel")
+            Log.info(f"{log_tag} Error retrieving tenant. Error: {str(e)}")
+            
+        
+        try:
+            package_id = json_data.get("package_id")
+            billing_period = json_data.get("billing_period")
             
             # Get package to verify price
             package = Package.get_by_id(package_id)

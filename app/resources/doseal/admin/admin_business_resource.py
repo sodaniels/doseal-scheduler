@@ -47,7 +47,6 @@ from ....utils.generators import (
 )
 from ....utils.rate_limits import (
     register_rate_limiter,
-    logout_rate_limiter
 )
 from ....utils.file_upload import upload_file
 
@@ -200,8 +199,8 @@ def token_required(f):
 
 @blp_business_auth.route("/auth/register", methods=["POST"])
 class RegisterBusinessResource(MethodView):
-    decorators = [register_rate_limiter()]
     
+    @register_rate_limiter("registration")
     @blp_business_auth.arguments(BusinessSchema, location="form")
     @blp_business_auth.response(201, BusinessSchema)
     @blp_business_auth.doc(
@@ -279,6 +278,19 @@ class RegisterBusinessResource(MethodView):
         client_ip = request.remote_addr
         
         log_tag = f"[business_resource.py][RegisterBusinessResource][post][{client_ip}]"
+        
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"{log_tag} invalid x-app-key headers")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
         # Check if the business already exists based on email item_data["business_id"], key="name", value=item_data["name"]
         if Business.check_item_exists(key="email", value=business_data["email"]):

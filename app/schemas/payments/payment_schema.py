@@ -7,6 +7,10 @@ from ...utils.validation import validate_objectid
 class InitiatePaymentSchema(Schema):
     """Schema for initiating a payment."""
     
+    tenant_id = fields.Int(
+        required=True,
+        error_messages={"required": "Tenant ID is required"}
+    )
     package_id = fields.Str(
         required=True,
         validate=[validate.Length(min=1, max=36), validate_objectid],
@@ -18,11 +22,11 @@ class InitiatePaymentSchema(Schema):
         validate=validate.OneOf(["monthly", "quarterly", "yearly", "lifetime"])
     )
     
-    payment_method = fields.Str(
-        required=True,
-        validate=validate.OneOf(get_all_payment_methods()),
-        error_messages={"required": "Payment method is required"}
-    )
+    # payment_method = fields.Str(
+    #     required=True,
+    #     validate=validate.OneOf(get_all_payment_methods()),
+    #     error_messages={"required": "Payment method is required"}
+    # )
     
     # Customer details (required for some gateways)
     customer_phone = fields.Str(required=False, allow_none=True)
