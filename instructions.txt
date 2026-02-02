@@ -29,6 +29,9 @@ https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/callback
 https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/instagram/start
 https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/instagram/callback
 
+https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/threads/start
+https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/threads/callback
+
 
 curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/linkedin/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MDIxYzFhZGIyYTg3ZTM0ZDcyMzcxIiwiZXhwIjoxNzcwMjU0MDUxLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.MI9xUSL7dFFDrzXFc60YTlTR6BPyZSjgUC4QVhcmaTE"

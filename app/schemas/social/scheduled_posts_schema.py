@@ -338,6 +338,30 @@ class CreateScheduledPostSchema(Schema):
         destinations = data.get("destinations") or []
         dest_errors: List[Dict[str, Any]] = []
 
+        # LinkedIn aliases
+        LINKEDIN_TYPE_ALIASES = {
+            "profile": "author",
+            "person": "author",
+            "member": "author",
+            "user": "author",
+            "author": "author",
+            "page": "organization",
+            "company": "organization",
+            "org": "organization",
+            "organisation": "organization",
+            "organization": "organization",
+        }
+
+        # Threads aliases (Meta Threads)
+        THREADS_TYPE_ALIASES = {
+            "user": "user",
+            "profile": "user",
+            "person": "user",
+            "member": "user",
+            "author": "user",
+            "threads_user": "user",
+        }
+
         for idx, dest in enumerate(destinations):
 
             platform = (dest.get("platform") or "").lower().strip()
@@ -351,20 +375,25 @@ class CreateScheduledPostSchema(Schema):
             # ------------------------------
             if platform == "linkedin":
                 raw_type = (dest.get("destination_type") or "").lower().strip()
-                LINKEDIN_TYPE_ALIASES = {
-                    "profile": "author",
-                    "person": "author",
-                    "member": "author",
-                    "user": "author",
-                    "author": "author",
-                    "page": "organization",
-                    "company": "organization",
-                    "org": "organization",
-                    "organisation": "organization",
-                    "organization": "organization",
-                }
                 if raw_type:
                     dest["destination_type"] = LINKEDIN_TYPE_ALIASES.get(raw_type, raw_type)
+
+            # ------------------------------
+            # THREADS NORMALIZATION
+            # ------------------------------
+            elif platform == "threads":
+                raw_type = (dest.get("destination_type") or "").lower().strip()
+                # Threads in your system should behave like a "user" destination by default.
+                # If client doesn't pass destination_type, keep it empty here and let rule enforcement catch it,
+                # OR force default:
+                if raw_type:
+                    dest["destination_type"] = THREADS_TYPE_ALIASES.get(raw_type, raw_type)
+                else:
+                    dest["destination_type"] = "user"  # sensible default
+
+                # Threads placements: keep as feed unless your PLATFORM_RULES defines more.
+                if not placement:
+                    dest["placement"] = "feed"
 
             rule = PLATFORM_RULES.get(platform)
             if not rule:
@@ -544,6 +573,16 @@ class CreateScheduledPostSchema(Schema):
                         }
                     })
 
+            # ------------------------------
+            # THREADS rules (Meta Threads)
+            # ------------------------------
+            elif platform == "threads":
+                # Threads is essentially "caption + optional media".
+                # If you later support Threads "reply" or "quote", add placement rules here.
+                # Keep it simple & consistent: allow text-only OR single media item depending on PLATFORM_RULES.
+                # If your rule limits media to 1, this will already be enforced by media_rule.max_items.
+                pass
+
         # ------------------------------
         # FAIL IF DEST ERRORS
         # ------------------------------
@@ -560,6 +599,9 @@ class CreateScheduledPostSchema(Schema):
             "media": parsed_media or None,
         }
         data["_normalized_media"] = parsed_media or None
+        
+        
+        
 
 class ScheduledPostStoredSchema(Schema):
     """

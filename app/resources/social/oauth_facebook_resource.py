@@ -21,13 +21,14 @@ from ..doseal.admin.admin_business_resource import token_required
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
 from ...services.social.adapters.instagram_adapter import InstagramAdapter
-from ...services.social.adapters.x_adapter import XAdapter
+from ...services.social.adapters.threads_adapter import ThreadsAdapter
 from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
 from ...utils.helpers import make_log_tag
 
 from ...utils.schedule_helper import (
     _safe_json_load, _require_env, _exchange_code_for_token, _store_state, _consume_state,
     _store_selection, _load_selection, _delete_selection, _redirect_to_frontend,
+    _exchange_code_for_token_threads
 )
 
 
@@ -581,7 +582,261 @@ class InstagramAccountsResource(MethodView):
         return jsonify({"success": True, "data": {"accounts": safe_accounts}}), HTTP_STATUS_CODES["OK"]
 
 
+# -------------------------------------------------------------------
+# THREADS: START
+# -------------------------------------------------------------------
+@blp_meta_oauth.route("/social/oauth/threads/start", methods=["GET"])
+class ThreadsOauthStartResource(MethodView):
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[oauth_meta.py][ThreadsOauthStartResource][get][{client_ip}]"
 
+        redirect_uri = _require_env("THREADS_REDIRECT_URI", log_tag)
+        meta_app_id = _require_env("THREADS_APP_ID", log_tag)
+        if not redirect_uri or not meta_app_id:
+            return jsonify({"success": False, "message": "Server OAuth config missing"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+        user = g.get("current_user", {}) or {}
+        owner = {"business_id": str(user.get("business_id")), "user__id": str(user.get("_id"))}
+        if not owner["business_id"] or not owner["user__id"]:
+            return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        state = secrets.token_urlsafe(24)
+        _store_state(owner, state, "threads", ttl_seconds=600)
+
+        # Threads uses Meta login. Scopes can vary based on your app approval.
+        # Start with "threads_basic" and "threads_content_publish" style scopes if available.
+        # If your Meta app uses different scope names, update here.
+        params = {
+            "client_id": meta_app_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "response_type": "code",
+            "scope": "threads_basic,threads_content_publish",
+        }
+        
+        Log.info(f"{log_tag} THREADS_APP_ID={os.getenv('THREADS_APP_ID')}")
+
+        url = "https://www.facebook.com/v20.0/dialog/oauth?" + urlencode(params)
+        Log.info(f"{log_tag} Redirecting to Threads OAuth consent screen")
+        return redirect(url)
+
+
+# -------------------------------------------------------------------
+# THREADS: CALLBACK
+# -------------------------------------------------------------------
+@blp_meta_oauth.route("/social/oauth/threads/callback", methods=["GET"])
+class ThreadsOauthCallbackResource(MethodView):
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[oauth_meta.py][ThreadsOauthCallbackResource][get][{client_ip}]"
+
+        error = request.args.get("error")
+        if error:
+            return jsonify({
+                "success": False,
+                "message": "OAuth authorization failed",
+                "error": error,
+                "error_reason": request.args.get("error_reason"),
+                "error_description": request.args.get("error_description"),
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        code = request.args.get("code")
+        state = request.args.get("state")
+        if not code or not state:
+            return jsonify({"success": False, "message": "Missing code/state"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        state_doc = _consume_state(state, "threads")
+        owner = (state_doc or {}).get("owner") or {}
+        if not owner.get("business_id") or not owner.get("user__id"):
+            return jsonify({"success": False, "message": "Invalid/expired OAuth state"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        redirect_uri = _require_env("THREADS_REDIRECT_URI", log_tag)
+        if not redirect_uri:
+            return jsonify({"success": False, "message": "THREADS_REDIRECT_URI missing"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+        try:
+            # Reuse your helper to exchange code => token
+            token_data = _exchange_code_for_token_threads(code=code, redirect_uri=redirect_uri, log_tag=log_tag)
+            access_token = token_data.get("access_token")
+            if not access_token:
+                return jsonify({"success": False, "message": "Missing access_token from Threads OAuth"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+            # Fetch Threads user id. Graph field names can vary; safest is /me?fields=id
+            me = requests.get(
+                f"https://graph.facebook.com/v19.0/me",
+                params={"fields": "id,name", "access_token": access_token},
+                timeout=30,
+            )
+            me_payload = _safe_json_load(me.text, default={}) if me.text else {}
+            try:
+                me_payload = me.json()
+            except Exception:
+                pass
+
+            threads_user_id = str(me_payload.get("id") or "")
+            name = me_payload.get("name") or "Threads Account"
+
+            if not threads_user_id:
+                Log.info(f"{log_tag} Could not determine threads user id: {me_payload}")
+                return jsonify({"success": False, "message": "Could not fetch Threads user id"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+            # Store selection (like the others)
+            selection_key = secrets.token_urlsafe(24)
+            _store_selection(
+                provider="threads",
+                selection_key=selection_key,
+                payload={
+                    "owner": owner,
+                    "account": {
+                        "platform": "threads",
+                        "destination_type": "user",
+                        "destination_id": threads_user_id,
+                        "name": name,
+                        "access_token": access_token,
+                        "scopes": (token_data.get("scope") or ""),
+                    },
+                },
+                ttl_seconds=300,
+            )
+
+            return _redirect_to_frontend("/connect/threads", selection_key)
+
+        except Exception as e:
+            Log.info(f"{log_tag} Failed: {e}")
+            return jsonify({"success": False, "message": "Could not fetch Threads account"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+# -------------------------------------------------------------------
+# THREADS: ACCOUNT (selection screen)
+# -------------------------------------------------------------------
+@blp_meta_oauth.route("/social/threads/accounts", methods=["GET"])
+class ThreadsAccountsResource(MethodView):
+    @token_required
+    def get(self):
+        selection_key = request.args.get("selection_key")
+        if not selection_key:
+            return jsonify({"success": False, "message": "selection_key is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        raw = get_redis(f"threads_select:{selection_key}")
+        if not raw:
+            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        doc = _safe_json_load(raw, default={}) or {}
+        owner = doc.get("owner") or {}
+        account = doc.get("account") or {}
+
+        # Ensure the logged-in user matches owner stored
+        user = g.get("current_user", {}) or {}
+        if (
+            str(user.get("business_id")) != str(owner.get("business_id"))
+            or str(user.get("_id")) != str(owner.get("user__id"))
+        ):
+            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        safe_accounts = [{
+            "threads_user_id": account.get("destination_id"),
+            "name": account.get("name"),
+        }]
+
+        return jsonify({"success": True, "data": {"accounts": safe_accounts}}), HTTP_STATUS_CODES["OK"]
+
+
+# -------------------------------------------------------------------
+# THREADS: CONNECT ACCOUNT
+# -------------------------------------------------------------------
+@blp_meta_oauth.route("/social/threads/connect-account", methods=["POST"])
+class ThreadsConnectAccountResource(MethodView):
+    @token_required
+    def post(self):
+        client_ip = request.remote_addr
+
+        body = request.get_json(silent=True) or {}
+        selection_key = body.get("selection_key")
+        threads_user_id = body.get("threads_user_id")
+
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        account_type = user_info.get("account_type")
+
+        if not selection_key or not threads_user_id:
+            return jsonify({"success": False, "message": "selection_key and threads_user_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        sel = _load_selection("threads", selection_key)
+        if not sel:
+            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        owner = sel.get("owner") or {}
+        account = sel.get("account") or {}
+
+        user = g.get("current_user", {}) or {}
+        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
+            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        if str(account.get("destination_id")) != str(threads_user_id):
+            return jsonify({"success": False, "message": "Invalid threads_user_id for this selection_key"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Optional business override for system roles
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+
+        log_tag = make_log_tag(
+            "oauth_facebook_resource.py",
+            "ThreadsConnectAccountResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+
+        # Plan enforcement
+        enforcer = QuotaEnforcer(target_business_id)
+        try:
+            enforcer.reserve(
+                counter_name="social_accounts",
+                limit_key="max_social_accounts",
+                qty=1,
+                period="billing",
+                reason="social_accounts:create",
+            )
+        except PlanLimitError as e:
+            Log.info(f"{log_tag} plan limit reached: {e.meta}")
+            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+
+        try:
+            SocialAccount.upsert_destination(
+                business_id=owner["business_id"],
+                user__id=owner["user__id"],
+                platform="threads",
+                destination_id=str(account.get("destination_id")),
+                destination_type="user",
+                destination_name=account.get("name") or "Threads Account",
+                access_token_plain=account.get("access_token"),
+                refresh_token_plain=None,
+                token_expires_at=None,
+                scopes=["threads_basic", "threads_content_publish"],
+                platform_user_id=str(account.get("destination_id")),
+                platform_username=account.get("name"),
+                meta={
+                    "threads_user_id": str(account.get("destination_id")),
+                    "name": account.get("name"),
+                },
+            )
+
+            _delete_selection("threads", selection_key)
+            return jsonify({"success": True, "message": "Threads account connected successfully"}), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.info(f"{log_tag} Failed to upsert: {e}")
+            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({"success": False, "message": "Failed to connect Threads"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
 

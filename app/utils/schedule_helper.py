@@ -39,6 +39,47 @@ def _require_env(key: str, log_tag: str):
         Log.info(f"{log_tag} ENV missing: {key}")
     return val
 
+def _exchange_code_for_token_threads(*, code: str, redirect_uri: str, log_tag: str) -> dict:
+    """
+    Exchange OAuth code for Threads user access token.
+
+    Uses the Threads Meta App credentials.
+    """
+
+    threads_app_id = _require_env("THREADS_APP_ID", log_tag)
+    threads_app_secret = _require_env("THREADS_APP_SECRET", log_tag)
+
+    if not threads_app_id or not threads_app_secret:
+        raise Exception("THREADS_APP_ID or THREADS_APP_SECRET not set")
+
+    # Meta OAuth token endpoint (Threads uses Graph OAuth)
+    token_url = os.getenv(
+        "META_OAUTH_TOKEN_URL",
+        "https://graph.facebook.com/v20.0/oauth/access_token",
+    )
+
+    params = {
+        "client_id": threads_app_id,
+        "client_secret": threads_app_secret,
+        "redirect_uri": redirect_uri,
+        "code": code,
+        "grant_type": "authorization_code",
+    }
+
+    resp = requests.get(token_url, params=params, timeout=30)
+
+    try:
+        data = resp.json()
+    except Exception:
+        raise Exception(f"{log_tag} Threads token exchange returned non-JSON: {resp.text}")
+
+    if resp.status_code != 200:
+        raise Exception(f"{log_tag} Threads token exchange failed: {data}")
+
+    if not data.get("access_token"):
+        raise Exception(f"{log_tag} Threads token exchange missing access_token: {data}")
+
+    return data
 
 def _exchange_code_for_token(*, code: str, redirect_uri: str, log_tag: str) -> dict:
     """

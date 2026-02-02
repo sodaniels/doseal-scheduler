@@ -14,6 +14,7 @@ from ...services.social.adapters.instagram_adapter import InstagramAdapter
 from ...services.social.adapters.x_adapter import XAdapter
 from ...services.social.adapters.tiktok_adapter import TikTokAdapter
 from ...services.social.adapters.linkedin_adapter import LinkedInAdapter
+from ...services.social.adapters.threads_adapter import ThreadsAdapter
 from ...utils.logger import Log
 
 from .appctx import run_in_app_context
@@ -931,6 +932,75 @@ def _publish_to_linkedin(
     r["raw"] = adapter_resp.get("raw")
     return r
 
+
+# -----------------------------
+# LinkedIn publisher (USES LinkedInAdapter)
+# -----------------------------
+def _get_threads_access_token(post: dict, destination_id: str) -> str:
+    acct = SocialAccount.get_destination(
+        post["business_id"],
+        post["user__id"],
+        "threads",
+        destination_id,
+    )
+    if not acct or not acct.get("access_token_plain"):
+        raise Exception(f"Missing threads destination token for destination_id={destination_id}")
+    return acct["access_token_plain"]
+
+def _publish_to_threads(
+    *,
+    post: dict,
+    dest: dict,
+    text: str,
+    link: Optional[str],
+    media: List[dict],
+) -> Dict[str, Any]:
+    r = {
+        "platform": "threads",
+        "destination_id": str(dest.get("destination_id") or ""),
+        "destination_type": dest.get("destination_type") or "user",
+        "placement": (dest.get("placement") or "feed").lower(),
+        "status": "failed",
+        "provider_post_id": None,
+        "error": None,
+        "raw": None,
+    }
+
+    threads_user_id = r["destination_id"]
+    if not threads_user_id:
+        r["error"] = "Missing destination_id"
+        return r
+
+    # Threads: start with text-only. Media needs specific endpoint support.
+    if media:
+        r["error"] = "Threads media posting not implemented yet (text-only supported)."
+        return r
+
+    access_token = _get_threads_access_token(post, threads_user_id)
+    caption = (text or "").strip()
+
+    log_tag = f"[jobs.py][_publish_to_threads][{post.get('business_id')}][{post.get('_id') or post.get('post_id')}]"
+
+    resp = ThreadsAdapter.publish_post(
+        threads_user_id=threads_user_id,
+        access_token=access_token,
+        text=caption,
+        link=link,
+        log_tag=log_tag,
+    )
+
+    if resp.get("success"):
+        r["status"] = "success"
+        r["provider_post_id"] = resp.get("provider_post_id")
+        r["raw"] = resp.get("raw")
+        return r
+
+    r["error"] = resp.get("error") or "Threads publish failed"
+    r["raw"] = resp.get("raw")
+    return r
+
+
+
 # -----------------------------
 # Main job
 # -----------------------------
@@ -984,6 +1054,9 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
             elif platform == "linkedin":
                 r = _publish_to_linkedin(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+
+            elif platform == "threads":
+                r = _publish_to_threads(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
             else:
                 r = {
