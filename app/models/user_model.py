@@ -242,6 +242,61 @@ class User(BaseModel):
             print("❌ Password mismatch")
             return False
 
+    @classmethod
+    def verify_change_password(cls, user_doc: dict, plain_password) -> bool:
+        """
+        Compare plaintext password with stored bcrypt hash.
+        Supports hash stored as str or bytes.
+        """
+        try:
+            stored_hash = (user_doc or {}).get("password")
+
+            if not stored_hash or not plain_password:
+                return False
+
+            # ---- ensure types ----
+            if not isinstance(plain_password, str):
+                Log.info(f"[user_model.py][verify_password] plain_password not str: {type(plain_password)}")
+                return False
+
+            # bcrypt hash may be str or bytes
+            if isinstance(stored_hash, str):
+                stored_hash = stored_hash.encode("utf-8")
+
+            return bcrypt.checkpw(
+                plain_password.encode("utf-8"),
+                stored_hash,
+            )
+
+        except Exception as e:
+            Log.info(f"[user_model.py][verify_password] error: {e}")
+            return False
+    
+    @classmethod
+    def update_password(cls, *, user_id: str, business_id: str, new_password: str) -> bool:
+        """
+        Update password for a user within a business scope.
+        """
+        log_tag = f"[user_model.py][User][update_password][user_id={user_id}][business_id={business_id}]"
+
+        try:
+            col = db.get_collection(cls.collection_name)
+
+            hashed = bcrypt.hashpw(
+                new_password.encode("utf-8"),
+                bcrypt.gensalt()
+            ).decode("utf-8")
+
+            res = col.update_one(
+                {"_id": ObjectId(user_id), "business_id": ObjectId(business_id)},
+                {"$set": {"password": hashed, "updated_at": datetime.utcnow()}}
+            )
+            return res.modified_count > 0
+
+        except Exception as e:
+            Log.info(f"{log_tag} error: {e}")
+            return False
+        
     @staticmethod
     def email_verification_needed(email):
         """

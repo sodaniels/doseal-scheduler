@@ -21,6 +21,8 @@ from ....models.business_model import Business
 from ....schemas.business_schema import BusinessSchema
 from ....schemas.business_schema import OAuthCredentialsSchema
 from ....schemas.login_schema import LoginSchema
+from ....schemas.social.change_password_schema import ChangePasswordSchema
+
 from ....utils.helpers import generate_tokens
 from ....models.business_model import Client, Token
 from ....models.user_model import User
@@ -205,6 +207,9 @@ def token_required(f):
     return decorated
 
 
+#-------------------------------------------------------
+# REGISTER
+#-------------------------------------------------------
 @blp_business_auth.route("/auth/register", methods=["POST"])
 class RegisterBusinessResource(MethodView):
     
@@ -472,7 +477,9 @@ class RegisterBusinessResource(MethodView):
                 "error": str(e)
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-
+#-------------------------------------------------------
+# LOGIN
+#-------------------------------------------------------
 @blp_business_auth.route("/auth/login", methods=["POST"])
 class LoginBusinessResource(MethodView):
     @login_ip_limiter("login")
@@ -638,7 +645,174 @@ class LoginBusinessResource(MethodView):
             client_ip=client_ip, 
             log_tag=log_tag, 
         )
-        
+  
+#-------------------------------------------------------
+# CHANGE PASSWORD
+#------------------------------------------------------- 
+@blp_business_auth.route("/change-password", methods=["POST"])
+class ChangePasswordResource(MethodView):
+
+    @profile_retrieval_limiter("change_password")
+    @token_required
+    @blp_business_auth.arguments(ChangePasswordSchema, location="form")
+    @blp_business_auth.doc(
+        summary="Change password for the current authenticated user",
+        description="""
+            Change the password of the currently authenticated user.
+
+            **How it works**
+            - The user must provide `current_password` and `new_password`.
+            - The API verifies `current_password` against the stored bcrypt hash.
+            - If valid, the API hashes `new_password` and updates the user record.
+
+            **Notes**
+            - Requires a valid Bearer token.
+            - Password update is enforced within the resolved business scope.
+        """,
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": ChangePasswordSchema,
+                    "example": {
+                        "current_password": "OldPassword123",
+                        "new_password": "NewStrongPassword123"
+                    }
+                }
+            },
+        },
+        responses={
+            200: {
+                "description": "Password changed successfully",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Password changed successfully."
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Bad request / validation error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid input data"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized / wrong current password",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Current password is incorrect."
+                        }
+                    }
+                }
+            },
+            404: {
+                "description": "User not found",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 404,
+                            "message": "User not found"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        },
+        security=[{"Bearer": []}],
+    )
+    def post(self, payload):
+        client_ip = request.remote_addr
+        log_tag = "[admin_business_resource.py][ChangePasswordResource][post]"
+
+        try:
+            body = request.get_json(silent=True) or {}
+
+            auth_user = g.get("current_user", {}) or {}
+            auth_user__id = str(auth_user.get("_id") or "")
+            auth_business_id = str(auth_user.get("business_id") or "")
+            account_type = auth_user.get("account_type")
+
+            if not auth_user__id or not auth_business_id:
+                Log.info(f"{log_tag} [{client_ip}] unauthorized: missing auth ids")
+                return prepared_response(False, "UNAUTHORIZED", "Unauthorized.")
+
+            target_business_id = resolve_target_business_id_from_payload(body)
+
+            Log.info(
+                f"{log_tag} [{client_ip}] change password request "
+                f"user_id={auth_user__id} business_id={target_business_id} account_type={account_type}"
+            )
+
+            # 1) Load user in target business scope
+            user_doc = User.get_by_id(auth_user__id, target_business_id)
+            if not user_doc:
+                Log.info(f"{log_tag} [{client_ip}] user not found")
+                return prepared_response(False, "NOT_FOUND", "User not found.")
+
+            current_password = payload.get("current_password")
+            new_password = payload.get("new_password")
+
+            if not current_password or not new_password:
+                return prepared_response(False, "BAD_REQUEST", "current_password and new_password are required.")
+
+            if current_password == new_password:
+                return prepared_response(False, "BAD_REQUEST", "New password must be different from current password.")
+
+            # 2) Verify current password
+            if not User.verify_change_password(user_doc, current_password):
+                Log.info(f"{log_tag} [{client_ip}] wrong current password for user_id={auth_user__id}")
+                return prepared_response(False, "UNAUTHORIZED", "Current password is incorrect.")
+
+            # 3) Update password
+            updated = User.update_password(
+                user_id=auth_user__id,
+                business_id=target_business_id,
+                new_password=new_password,
+            )
+
+            if not updated:
+                Log.info(f"{log_tag} [{client_ip}] password update failed for user_id={auth_user__id}")
+                return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to change password.")
+
+            Log.info(f"{log_tag} [{client_ip}] password changed successfully for user_id={auth_user__id}")
+            return prepared_response(True, "OK", "Password changed successfully.")
+
+        except PyMongoError as e:
+            Log.info(f"{log_tag} [{client_ip}] PyMongoError: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected database error occurred.", errors=str(e))
+        except Exception as e:
+            Log.info(f"{log_tag} [{client_ip}] Unexpected error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
+           
+#-------------------------------------------------------
+# ME
+#-------------------------------------------------------     
 @blp_business_auth.route("/me", methods=["GET"])
 class CurrentUserResource(MethodView):
     
@@ -767,7 +941,9 @@ class CurrentUserResource(MethodView):
             
         return jsonify(response), HTTP_STATUS_CODES["OK"]
         
-        
+#-------------------------------------------------------
+# LOGOUT
+#-------------------------------------------------------  
 @blp_business_auth.route("/logout", methods=["POST"])
 class LogoutResource(MethodView):
     @logout_rate_limiter("logout")
