@@ -749,10 +749,6 @@ class CurrentUserResource(MethodView):
                 # role =  Role.get_by_id(role_id=role_id)
                 role = Role.get_by_id(role_id=role_id, business_id=target_business_id, is_logging_in=True)
                 
-                Log.info(f"role: {role}")
-                
-                
-            
             if role is not None:
                 # retreive the permissions for the user
                 permissions = role.get("permissions")
