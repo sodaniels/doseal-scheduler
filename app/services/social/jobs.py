@@ -16,6 +16,7 @@ from ...services.social.adapters.facebook_adapter import FacebookAdapter
 from ...services.social.adapters.instagram_adapter import InstagramAdapter
 from ...services.social.adapters.x_adapter import XAdapter
 from ...services.social.adapters.tiktok_adapter import TikTokAdapter
+from ...services.social.adapters.linkedin_adapter import LinkedInAdapter
 from ...utils.logger import Log
 
 from .appctx import run_in_app_context
@@ -865,7 +866,142 @@ def _publish_to_tiktok(
     return r
 
 
+# ---------------------------------------------
+# LinkedIn publisher (UPDATED to match TikTokAdapter)
+# ---------------------------------------------
+def _linkedin_headers(access_token: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "X-Restli-Protocol-Version": "2.0.0",
+        "Content-Type": "application/json",
+    }
 
+
+def _get_linkedin_access_token(post: dict, destination_id: str, destination_type: str) -> Dict[str, str]:
+    """
+    For LinkedIn we store:
+      access_token_plain  -> access_token
+      refresh_token_plain -> refresh_token (optional)
+    """
+    acct = SocialAccount.get_destination(
+        post["business_id"],
+        post["user__id"],
+        "linkedin",
+        destination_id
+    )
+    if not acct:
+        raise Exception(f"Missing LinkedIn destination for destination_id={destination_id}")
+
+    access_token = acct.get("access_token_plain")
+    if not access_token:
+        raise Exception("Missing LinkedIn access_token (reconnect LinkedIn account).")
+
+    return {"access_token": access_token}
+
+
+def _linkedin_author_urn(destination_type: str, destination_id: str) -> str:
+    """
+    destination_type:
+      - "author" -> urn:li:person:{destination_id}
+      - "organization" -> urn:li:organization:{destination_id}
+    """
+    dt = (destination_type or "").strip().lower()
+    if dt == "author":
+        return f"urn:li:person:{destination_id}"
+    if dt == "organization":
+        return f"urn:li:organization:{destination_id}"
+    raise Exception("linkedin destination_type must be 'author' or 'organization'")
+
+
+def _publish_to_linkedin(
+    *,
+    post: dict,
+    dest: dict,
+    text: str,
+    link: Optional[str],
+    media: List[dict],
+) -> Dict[str, Any]:
+    r = {
+        "platform": "linkedin",
+        "destination_id": str(dest.get("destination_id") or ""),
+        "destination_type": (dest.get("destination_type") or "").lower().strip(),
+        "placement": (dest.get("placement") or "feed").lower(),
+        "status": "failed",
+        "provider_post_id": None,
+        "error": None,
+        "raw": None,
+    }
+
+    destination_id = r["destination_id"]
+    destination_type = r["destination_type"]
+
+    if not destination_id:
+        r["error"] = "Missing destination_id"
+        return r
+
+    if destination_type not in ("author", "organization"):
+        r["error"] = "linkedin destination_type must be 'author' or 'organization'"
+        return r
+
+    # NOTE: LinkedIn media posting needs registerUpload flow.
+    # If you want it, I’ll give you the full implementation.
+    if media:
+        r["error"] = "LinkedIn media posting not implemented (requires registerUpload flow)."
+        return r
+
+    tokens = _get_linkedin_access_token(post, destination_id, destination_type)
+    access_token = tokens["access_token"]
+
+    log_tag = f"[jobs.py][_publish_to_linkedin][{post.get('business_id')}][{post.get('_id') or post.get('post_id')}]"
+
+    # Build caption (append link into text to keep it simple and consistent)
+    caption = _build_caption(text, link).strip()
+
+    # LinkedIn: create a basic text share using ugcPosts
+    try:
+        author_urn = _linkedin_author_urn(destination_type, destination_id)
+
+        payload = {
+            "author": author_urn,
+            "lifecycleState": "PUBLISHED",
+            "specificContent": {
+                "com.linkedin.ugc.ShareContent": {
+                    "shareCommentary": {"text": caption or ""},
+                    "shareMediaCategory": "NONE",
+                }
+            },
+            "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
+        }
+
+        url = "https://api.linkedin.com/v2/ugcPosts"
+        resp = requests.post(url, headers=_linkedin_headers(access_token), json=payload, timeout=30)
+
+        if resp.status_code >= 400:
+            # IMPORTANT: if publishing to organization without permissions, LinkedIn often returns 403
+            # similar to your organizationAcls error.
+            r["error"] = f"LinkedIn publish failed ({resp.status_code})"
+            r["raw"] = _safe_json(resp)
+            Log.info(f"{log_tag} publish failed: {resp.status_code} {resp.text}")
+            return r
+
+        # LinkedIn may return 201 with headers like x-restli-id or location
+        provider_post_id = resp.headers.get("x-restli-id") or resp.headers.get("location")
+        r["status"] = "success"
+        r["provider_post_id"] = provider_post_id
+        r["raw"] = _safe_json(resp)
+        return r
+
+    except Exception as e:
+        r["error"] = str(e)
+        Log.info(f"{log_tag} exception: {e}")
+        return r
+
+
+def _safe_json(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return {"text": getattr(resp, "text", None)}
 
 # -----------------------------
 # Main job
@@ -880,7 +1016,6 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
     log_tag = f"[jobs.py][_publish_scheduled_post][{business_id}][{post_id}]"
 
-    # Mark as publishing (reset provider_results/error every run)
     ScheduledPost.update_status(
         post_id,
         post["business_id"],
@@ -897,15 +1032,11 @@ def _publish_scheduled_post(post_id: str, business_id: str):
     text = (content.get("text") or "").strip()
     link = content.get("link")
 
-    # IMPORTANT:
-    # If your ScheduledPost.content.media is a list meant for ALL destinations, keep this.
-    # If each destination has its own media, prefer dest.get("media") fallback.
     global_media = _as_list(content.get("media"))
 
     for dest in post.get("destinations") or []:
         platform = (dest.get("platform") or "").strip().lower()
 
-        # allow per-destination overrides
         dest_text = ((dest.get("text") or "")).strip() or text
         dest_link = dest.get("link") or link
         dest_media = _as_list(dest.get("media")) or global_media
@@ -923,6 +1054,9 @@ def _publish_scheduled_post(post_id: str, business_id: str):
             elif platform == "tiktok":
                 r = _publish_to_tiktok(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
+            elif platform == "linkedin":
+                r = _publish_to_linkedin(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+
             else:
                 r = {
                     "platform": platform,
@@ -935,7 +1069,6 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     "raw": None,
                 }
 
-            # Ensure shape
             if not isinstance(r, dict):
                 r = {
                     "platform": platform,
@@ -948,7 +1081,6 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     "raw": None,
                 }
 
-            # Enforce required keys (safe defaults)
             r.setdefault("platform", platform)
             r.setdefault("destination_id", str(dest.get("destination_id") or ""))
             r.setdefault("destination_type", dest.get("destination_type"))
@@ -981,7 +1113,6 @@ def _publish_scheduled_post(post_id: str, business_id: str):
             any_failed = True
             Log.info(f"{log_tag} destination failed: {rr}")
 
-    # Decide overall status
     if any_success and not any_failed:
         overall_status = ScheduledPost.STATUS_PUBLISHED
         overall_error = None
@@ -1006,7 +1137,6 @@ def _publish_scheduled_post(post_id: str, business_id: str):
         provider_results=results,
         error=overall_error,
     )
- 
     
 def publish_scheduled_post(post_id: str, business_id: str):
     return run_in_app_context(_publish_scheduled_post, post_id, business_id)

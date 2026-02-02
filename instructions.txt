@@ -33,3 +33,10 @@ https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/instagram/callbac
 curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/linkedin/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MDIxYzFhZGIyYTg3ZTM0ZDcyMzcxIiwiZXhwIjoxNzcwMjU0MDUxLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.MI9xUSL7dFFDrzXFc60YTlTR6BPyZSjgUC4QVhcmaTE"
 
+
+
+  ##ADDING A NEW INTEGRATION
+  1. CREATE the oauth_[name]_resource.py file that have the three essential endpoints. /start, /callback, /connect-account
+  2. CREATE the [name]_adapter.py file 
+  3. Update the server/social/job.py with helper functions and final udpate to _publish_scheduled_post
+

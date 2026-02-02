@@ -94,63 +94,165 @@ def _fetch_linkedin_userinfo(access_token: str, log_tag: str) -> dict:
         return {}
 
 
-def _fetch_linkedin_admin_organizations(access_token: str, log_tag: str, limit: int = 50) -> list:
+def _fetch_linkedin_admin_organizations(
+    access_token: str,
+    log_tag: str,
+    limit: int = 50
+) -> list:
     """
-    Tries to list organizations/pages where the user has admin role.
-    Note: LinkedIn access to organization APIs can require additional approval.
+    List LinkedIn organizations/pages where the user has an admin role.
 
-    We attempt:
-      GET https://api.linkedin.com/v2/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&count=50
+    IMPORTANT:
+    - Many LinkedIn apps are NOT approved for org APIs. In that case LinkedIn returns 403:
+      {"code":"ACCESS_DENIED","message":"Not enough permissions ... organizationAcls ..."}
+      We treat that as a normal situation and return [].
 
-    Then for each org URN or id we try to fetch name via:
-      GET https://api.linkedin.com/v2/organizations/{id}
+    Steps:
+      1) GET /v2/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&count=...
+      2) Parse organization URNs -> extract org IDs
+      3) For each org ID, GET /v2/organizations/{id} to retrieve the name
 
-    If permissions are missing, returns [] gracefully.
+    Returns:
+      [
+        {"id": "12345", "name": "My Company"},
+        ...
+      ]
     """
-    acls_url = (
-        "https://api.linkedin.com/v2/organizationAcls?"
-        + urlencode({"q": "roleAssignee", "role": "ADMINISTRATOR", "state": "APPROVED", "count": str(limit)})
-    )
 
-    resp = requests.get(acls_url, headers=_linkedin_headers(access_token), timeout=30)
-    if resp.status_code >= 400:
-        # Missing permissions is common. Just return empty.
-        Log.info(f"{log_tag} organizationAcls not available: {resp.status_code} {resp.text}")
+    def _safe_json(resp: requests.Response) -> dict:
+        try:
+            return resp.json() or {}
+        except Exception:
+            return {}
+
+    def _extract_org_id(org_value) -> str | None:
+        """
+        org can be:
+          - "urn:li:organization:12345"
+          - {"urn": "urn:li:organization:12345"}  (rare)
+          - {"id": "12345"} (rare)
+        """
+        if not org_value:
+            return None
+
+        if isinstance(org_value, str):
+            if "urn:li:organization:" in org_value:
+                return org_value.split(":")[-1].strip() or None
+            # sometimes already an ID
+            if org_value.strip().isdigit():
+                return org_value.strip()
+            return None
+
+        if isinstance(org_value, dict):
+            urn = org_value.get("urn") or org_value.get("organization") or org_value.get("value")
+            if isinstance(urn, str) and "urn:li:organization:" in urn:
+                return urn.split(":")[-1].strip() or None
+            _id = org_value.get("id")
+            if _id is not None:
+                return str(_id).strip() or None
+
+        return None
+
+    if not access_token:
+        Log.info(f"{log_tag} missing access_token; cannot fetch organizations")
         return []
 
-    payload = {}
+    # safety bounds
     try:
-        payload = resp.json()
+        limit = int(limit)
     except Exception:
-        payload = {}
+        limit = 50
+    limit = max(1, min(limit, 100))
 
+    acls_url = (
+        "https://api.linkedin.com/v2/organizationAcls?"
+        + urlencode(
+            {
+                "q": "roleAssignee",
+                "role": "ADMINISTRATOR",
+                "state": "APPROVED",
+                "count": str(limit),
+            }
+        )
+    )
+
+    try:
+        resp = requests.get(acls_url, headers=_linkedin_headers(access_token), timeout=30)
+    except Exception as e:
+        Log.info(f"{log_tag} organizationAcls request error: {e}")
+        return []
+
+    # ✅ Most common "not approved" case
+    if resp.status_code == 403:
+        Log.info(f"{log_tag} organizationAcls not permitted (403). Returning empty organizations list.")
+        return []
+
+    # Token invalid/expired etc.
+    if resp.status_code in (401,):
+        Log.info(f"{log_tag} organizationAcls unauthorized (401). Token may be invalid/expired.")
+        return []
+
+    # Other errors
+    if resp.status_code >= 400:
+        Log.info(f"{log_tag} organizationAcls failed: {resp.status_code} {resp.text}")
+        return []
+
+    payload = _safe_json(resp)
     elements = payload.get("elements") or []
-    org_ids = []
+
+    # Collect unique org IDs
+    org_ids: list[str] = []
+    seen = set()
 
     for el in elements:
-        org = el.get("organization")
-        # org can be "urn:li:organization:12345"
-        if isinstance(org, str) and "urn:li:organization:" in org:
-            org_id = org.split(":")[-1]
-            if org_id:
-                org_ids.append(org_id)
+        if not isinstance(el, dict):
+            continue
 
-    orgs = []
+        org_value = el.get("organization")
+        org_id = _extract_org_id(org_value)
+        if not org_id:
+            continue
+
+        if org_id not in seen:
+            seen.add(org_id)
+            org_ids.append(org_id)
+
+        if len(org_ids) >= limit:
+            break
+
+    if not org_ids:
+        return []
+
+    orgs: list[dict] = []
+
     for org_id in org_ids[:limit]:
         org_url = f"https://api.linkedin.com/v2/organizations/{org_id}"
-        org_resp = requests.get(org_url, headers=_linkedin_headers(access_token), timeout=30)
-        if org_resp.status_code >= 400:
-            continue
+
         try:
-            org_doc = org_resp.json()
-        except Exception:
+            org_resp = requests.get(org_url, headers=_linkedin_headers(access_token), timeout=30)
+        except Exception as e:
+            Log.info(f"{log_tag} organizations/{org_id} request error: {e}")
             continue
 
-        name = org_doc.get("localizedName") or org_doc.get("name") or org_id
+        if org_resp.status_code == 403:
+            # Not permitted to fetch org details (still treat as normal)
+            Log.info(f"{log_tag} organizations/{org_id} not permitted (403). Skipping.")
+            continue
+
+        if org_resp.status_code >= 400:
+            continue
+
+        org_doc = _safe_json(org_resp)
+
+        name = (
+            org_doc.get("localizedName")
+            or (org_doc.get("name") if isinstance(org_doc.get("name"), str) else None)
+            or org_id
+        )
+
         orgs.append({"id": str(org_id), "name": name})
 
     return orgs
-
 
 # -------------------------------------------------------------------
 # LinkedIn: START (OAuth2 Authorization Code)
