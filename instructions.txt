@@ -20,22 +20,16 @@ OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES venv/bin/rq worker publish
 venv/bin/rqscheduler
 
 
-curl -i "https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
+curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3ZmQxN2I3Y2NiOGZkNzdlN2U4MzljIiwiZXhwIjoxNzcwMjAwNDYyLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.t9B_mBzKXjCyr8Ftma8l4WHw-ud7YW3ZShyIxM7lI4o"
 
-https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/start
-https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/facebook/callback
+https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/start
+https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/callback
 
-https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/instagram/start
-https://5c8fd6d48a07.ngrok-free.app/social/api/v1/social/oauth/instagram/callback
+https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/instagram/start
+https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/instagram/callback
 
 
-https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/start
-https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/callback
-
-https://scheduler.doseal.org/social/api/v1/social/oauth/instagram/start
-https://scheduler.doseal.org/social/api/v1/social/oauth/instagram/callback
-
-curl -i "https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/start" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3ZjA1YTgzN2Q5NDcyZTZmNDNlOGJiIiwiZXhwIjoxNzcwMTU2ODUyLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.fZWfi4ays5cG4EPZBRHWs2QvqrnIZQFx8bIiEcxXFI4"
+curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/linkedin/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MDIxYzFhZGIyYTg3ZTM0ZDcyMzcxIiwiZXhwIjoxNzcwMjU0MDUxLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.MI9xUSL7dFFDrzXFc60YTlTR6BPyZSjgUC4QVhcmaTE"
 

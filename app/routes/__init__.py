@@ -70,6 +70,7 @@ from ..resources import (
     blp_x_oauth,
     blp_tiktok_oauth,
     blp_social_posts,
+    blp_linkedin_oauth,
 )
 
 
@@ -103,7 +104,7 @@ def register_social_routes(app, api):
         blp_tiktok_oauth,
         blp_social_posts,
         blp_fb_webhook,
-        
+        blp_linkedin_oauth,
     ]
 
     for blueprint in blueprints:

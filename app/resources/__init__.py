@@ -66,6 +66,7 @@ from .social.scheduled_posts_resource import blp_scheduled_posts
 from .social.oauth_x_resource import blp_x_oauth
 from .social.oauth_tiktok_resource import blp_tiktok_oauth
 from .social.social_posts_resource import blp_social_posts
+from .social.oauth_linkedin_resource import blp_linkedin_oauth
 
 
 __all__ = [
@@ -86,6 +87,7 @@ __all__ = [
     "blp_x_oauth",
     "blp_tiktok_oauth",
     "blp_social_posts",
+    "blp_linkedin_oauth",
     #-------------------
     #ADMIN ROUTES
     #-------------------
