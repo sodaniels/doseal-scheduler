@@ -58,6 +58,7 @@ from ....utils.rate_limits import (
     profile_retrieval_limiter 
 )
 from ....utils.helpers import resolve_target_business_id_from_payload
+from ....services.seeders.social_role_seeder import SocialRoleSeeder
 
 SECRET_KEY = os.getenv("SECRET_KEY") 
 
@@ -375,6 +376,19 @@ class RegisterBusinessResource(MethodView):
                     user_client_id = user.save()
                     
                     if user_client_id:
+                        
+                        #Seed roles for business
+                        try:
+                            SocialRoleSeeder.seed_defaults(
+                                business_id=str(business_id),
+                                admin_user__id=str(user_client_id) if isinstance(user_client_id, str) else str(user_client_id),
+                                admin_user_id=str(user_data.get("user_id") or ""),
+                                admin_email=str(user_data.get("email") or ""),
+                                admin_name=str(user_data.get("fullname") or "Admin"),
+                            )
+                        except Exception as e:
+                            Log.info(f"{log_tag} default social roles seeding failed: {e}")
+                            
                         #update business with user_id
                         try:
                             data = {
@@ -455,6 +469,7 @@ class RegisterBusinessResource(MethodView):
                 "message": "An unexpected error occurred",
                 "error": str(e)
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
 
 @blp_business_auth.route("/auth/login", methods=["POST"])
 class LoginBusinessResource(MethodView):

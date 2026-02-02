@@ -15,6 +15,18 @@ from ...constants.service_code import (
     PERMISSION_FIELDS_FOR_ADMIN_ROLE
 )
 
+def _zero_permission_for(field: str) -> list:
+    """
+    Build a zero-permission entry for a permission field based on
+    PERMISSION_FIELDS_FOR_ADMIN_ROLE[field] actions.
+    """
+    actions = PERMISSION_FIELDS_FOR_ADMIN_ROLE.get(field, [])
+    if not actions:
+        # safe fallback if someone forgot to register actions for a field
+        return [{"read": "0"}]
+    return [{a: "0" for a in actions}]
+
+
 class Role(BaseModel):
     collection_name = "roles"
 
@@ -35,8 +47,12 @@ class Role(BaseModel):
         """
         Role model with encrypted core fields and optional permission fields.
 
-        Only permission fields explicitly provided in kwargs (matching
+        ✅ Only permission fields explicitly provided in kwargs (matching
         PERMISSION_FIELDS_FOR_ADMINS) are stored.
+
+        Why:
+          - Avoid storing huge permission payloads full of zeros in Mongo.
+          - You return "zero permissions" dynamically at read time for fields not stored.
         """
         # Normalise admin_id / created_by to ObjectId where present
         admin_id_obj = ObjectId(admin_id) if admin_id else None
@@ -117,6 +133,10 @@ class Role(BaseModel):
         """
         Retrieve a role by _id and business_id (business-scoped),
         decrypting fields and expanding permissions.
+
+        NOTE:
+          - If a permission field was NOT stored in Mongo, we return
+            a "zero permission" structure based on PERMISSION_FIELDS_FOR_ADMIN_ROLE.
         """
         try:
             role_id_obj = ObjectId(role_id)
@@ -147,10 +167,8 @@ class Role(BaseModel):
         email = decrypt_data(data["email"]) if data.get("email") else None
         status = decrypt_data(data["status"]) if data.get("status") else None
 
-        # Permissions
-        ZERO_PERMISSION = [{"view": "0", "add": "0", "edit": "0", "delete": "0"}]
+        # Permissions (dynamic ZERO permissions)
         permissions = {}
-
         for field in PERMISSION_FIELDS_FOR_ADMINS:
             encrypted_permissions = data.get(field)
             if encrypted_permissions:
@@ -159,7 +177,7 @@ class Role(BaseModel):
                     for item in encrypted_permissions
                 ]
             else:
-                permissions[field] = ZERO_PERMISSION
+                permissions[field] = _zero_permission_for(field)
 
         # Clean up internal fields
         data.pop("hashed_name", None)
@@ -186,15 +204,13 @@ class Role(BaseModel):
     def get_by_business_id(cls, business_id, page=None, per_page=None):
         """
         Retrieve roles for a business (paginated), decrypting fields and expanding permissions.
-        Only roles with created_by as an ObjectId (real roles) are included.
+        Only roles with created_by present are included.
         """
         payload = super().get_by_business_id(business_id, page, per_page)
         processed = []
 
-        ZERO_PERMISSION = [{"view": "0", "add": "0", "edit": "0", "delete": "0"}]
-
         for r in payload.get("items", []):
-            # Require created_by to be present and an ObjectId (same filter as old implementation)
+            # Require created_by to be present (keeps "real roles")
             created_by_val = r.get("created_by")
             if created_by_val is None:
                 continue
@@ -228,7 +244,7 @@ class Role(BaseModel):
                         for item in encrypted_permissions
                     ]
                 else:
-                    permissions[field] = ZERO_PERMISSION
+                    permissions[field] = _zero_permission_for(field)
 
             processed.append(
                 {
@@ -256,7 +272,6 @@ class Role(BaseModel):
     def get_by_user__id_and_business_id(cls, user__id, business_id, page=None, per_page=None):
         """
         Retrieve roles created by a specific user within a business (paginated).
-        Mirrors Customer.get_by_user__id_and_business_id / Discount.get_by_user__id_and_business_id.
         """
         payload = super().get_all_by_user__id_and_business_id(
             user__id=user__id,
@@ -266,7 +281,6 @@ class Role(BaseModel):
         )
 
         processed = []
-        ZERO_PERMISSION = [{"view": "0", "add": "0", "edit": "0", "delete": "0"}]
 
         for r in payload.get("items", []):
             # Normalise IDs
@@ -298,7 +312,7 @@ class Role(BaseModel):
                         for item in encrypted_permissions
                     ]
                 else:
-                    permissions[field] = ZERO_PERMISSION
+                    permissions[field] = _zero_permission_for(field)
 
             processed.append(
                 {
@@ -320,7 +334,7 @@ class Role(BaseModel):
         return payload
 
     # -------------------------------------------------
-    # EXISTING CHECK METHODS (mostly unchanged)
+    # EXISTING CHECK METHODS
     # -------------------------------------------------
     @classmethod
     def check_item_exists(cls, admin_id, key, value):
@@ -339,13 +353,12 @@ class Role(BaseModel):
             existing_item = collection.find_one(query)
             return bool(existing_item)
         except Exception as e:
-            print(f"Error occurred: {e}")
+            Log.info(f"[Role.check_item_exists] error: {e}")
             return False
 
     @classmethod
     def check_role_exists(cls, admin_id, name_key, name_value, email_key, email_value):
         try:
-            # Hash the name and email values
             hashed_name_key = hash_data(name_value)
             hashed_email_key = hash_data(email_value)
 
@@ -357,14 +370,10 @@ class Role(BaseModel):
 
             collection = db.get_collection(cls.collection_name)
             existing_item = collection.find_one(query)
-
             return bool(existing_item)
 
-        except PermissionError as pe:
-            print(f"Permission error: {pe}")
-            return False
         except Exception as e:
-            print(f"Error occurred while checking role existence: {e}")
+            Log.info(f"[Role.check_role_exists] error: {e}")
             return False
 
     # -------------------------------------------------

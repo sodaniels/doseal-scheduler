@@ -81,8 +81,6 @@ def get_confirm_account():
         if user_from_auth.get("_id") is not None:
             
             business = Business.get_business(decrypt_data(user_from_auth.get("client_id")))
-     
-            Log.info(f"business: {business}")
             
             update_status = User.update_user_status(user_from_auth["email_hashed"])
             
