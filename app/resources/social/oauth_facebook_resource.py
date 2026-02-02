@@ -230,6 +230,9 @@ class FacebookConnectPageResource(MethodView):
             Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
             return jsonify({"success": False, "message": "Failed to connect page"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+# -------------------------------------------------------------------
+# FACEBOOK: PAGES
+# -------------------------------------------------------------------
 @blp_meta_oauth.route("/social/facebook/pages", methods=["GET"])
 class FacebookPagesResource(MethodView):
     @token_required
