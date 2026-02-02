@@ -5,10 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import time, os
 import requests
-import json
 import math
-from datetime import datetime, timedelta
-
 
 from ...models.social.scheduled_post import ScheduledPost
 from ...models.social.social_account import SocialAccount
@@ -53,6 +50,17 @@ def _is_ig_not_ready_error(err: Exception | str) -> bool:
     )
 
 
+def _download_media_bytes(url: str) -> tuple[bytes, str]:
+    """
+    Download media from Cloudinary (or any HTTPS URL).
+    Returns: (bytes, content_type)
+    """
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    content_type = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+    return r.content, content_type
+
+
 # -----------------------------
 # Token fetchers
 # -----------------------------
@@ -79,15 +87,80 @@ def _get_instagram_token(post: dict, ig_user_id: str) -> str:
         raise Exception(f"Missing instagram destination token for destination_id={ig_user_id}")
     return acct["access_token_plain"]
 
-def _download_media_bytes(url: str) -> tuple[bytes, str]:
+
+def _get_x_oauth_tokens(post: dict, destination_id: str) -> Dict[str, str]:
     """
-    Download media from Cloudinary (or any HTTPS URL).
-    Returns: (bytes, content_type)
+    For X we stored:
+      access_token_plain  -> oauth_token
+      refresh_token_plain -> oauth_token_secret
     """
-    r = requests.get(url, stream=True, timeout=60)
-    r.raise_for_status()
-    content_type = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
-    return r.content, content_type
+    acct = SocialAccount.get_destination(post["business_id"], post["user__id"], "x", destination_id)
+    if not acct:
+        raise Exception(f"Missing X destination for destination_id={destination_id}")
+
+    oauth_token = acct.get("access_token_plain")
+    oauth_token_secret = acct.get("refresh_token_plain")
+    if not oauth_token or not oauth_token_secret:
+        raise Exception("Missing X oauth_token/oauth_token_secret (reconnect X account).")
+
+    return {"oauth_token": oauth_token, "oauth_token_secret": oauth_token_secret}
+
+
+def _get_tiktok_tokens(post: dict, destination_id: str) -> Dict[str, Any]:
+    """
+    Reads stored SocialAccount for platform=tiktok, destination_id=open_id.
+
+    Stored fields:
+      access_token_plain  -> access_token
+      refresh_token_plain -> refresh_token
+
+    Returns:
+      {
+        "access_token": str,
+        "refresh_token": Optional[str],
+        "_acct": dict (full SocialAccount record)
+      }
+    """
+    acct = SocialAccount.get_destination(
+        post["business_id"],
+        post["user__id"],
+        "tiktok",
+        destination_id,
+    )
+    if not acct:
+        raise Exception(f"Missing tiktok destination for destination_id={destination_id}")
+
+    access_token = acct.get("access_token_plain")
+    if not access_token:
+        raise Exception(f"Missing TikTok access_token_plain (reconnect TikTok) destination_id={destination_id}")
+
+    return {
+        "access_token": access_token,
+        "refresh_token": acct.get("refresh_token_plain"),
+        "_acct": acct,
+    }
+
+
+def _get_linkedin_access_token(post: dict, destination_id: str) -> str:
+    """
+    For LinkedIn we store:
+      access_token_plain  -> access_token
+      refresh_token_plain -> refresh_token (optional, depending on your app)
+    """
+    acct = SocialAccount.get_destination(
+        post["business_id"],
+        post["user__id"],
+        "linkedin",
+        destination_id,
+    )
+    if not acct:
+        raise Exception(f"Missing LinkedIn destination for destination_id={destination_id}")
+
+    access_token = acct.get("access_token_plain")
+    if not access_token:
+        raise Exception("Missing LinkedIn access_token (reconnect LinkedIn account).")
+
+    return access_token
 
 
 # -----------------------------
@@ -116,7 +189,6 @@ def _ig_create_wait_publish(
 
     status_code = (status_payload.get("status_code") or "").upper()
     if status_code != "FINISHED":
-        # still in progress after timeout
         raise Exception(f"Instagram container not ready: {status_payload}")
 
     last_publish_err: Optional[Exception] = None
@@ -264,9 +336,7 @@ def _publish_to_instagram(
     caption = _build_caption(text, link)
     access_token = _get_instagram_token(post, ig_user_id)
 
-    # -----------------
     # REEL
-    # -----------------
     if placement == "reel":
         if len(media) != 1:
             raise Exception("Instagram reel requires exactly 1 media item (video).")
@@ -298,9 +368,7 @@ def _publish_to_instagram(
         r["raw"] = {"create": create_resp, **flow}
         return r
 
-    # -----------------
     # STORY
-    # -----------------
     if placement == "story":
         if len(media) != 1:
             raise Exception("Instagram story requires exactly 1 media item.")
@@ -342,9 +410,7 @@ def _publish_to_instagram(
         r["raw"] = {"create": create_resp, **flow}
         return r
 
-    # -----------------
     # FEED
-    # -----------------
     if placement == "feed":
         if len(media) < 1:
             raise Exception("Instagram feed requires at least 1 media item.")
@@ -357,7 +423,7 @@ def _publish_to_instagram(
             if not url:
                 raise Exception("Instagram feed requires media.url.")
 
-            # ✅ IMPORTANT: feed video uses REELS with share_to_feed=True
+            # feed video uses REELS with share_to_feed=True
             if mtype == "video":
                 create_resp = InstagramAdapter.create_reel_container(
                     ig_user_id=ig_user_id,
@@ -447,26 +513,9 @@ def _publish_to_instagram(
     raise Exception("Invalid instagram placement. Use feed|reel|story.")
 
 
-#------------------------------
+# -----------------------------
 # X publisher
-#------------------------------
-def _get_x_oauth_tokens(post: dict, destination_id: str) -> Dict[str, str]:
-    """
-    For X we stored:
-      access_token_plain  -> oauth_token
-      refresh_token_plain -> oauth_token_secret
-    """
-    acct = SocialAccount.get_destination(post["business_id"], post["user__id"], "x", destination_id)
-    if not acct:
-        raise Exception(f"Missing X destination for destination_id={destination_id}")
-
-    oauth_token = acct.get("access_token_plain")
-    oauth_token_secret = acct.get("refresh_token_plain")
-    if not oauth_token or not oauth_token_secret:
-        raise Exception("Missing X oauth_token/oauth_token_secret (reconnect X account).")
-
-    return {"oauth_token": oauth_token, "oauth_token_secret": oauth_token_secret}
-
+# -----------------------------
 def _publish_to_x(
     *,
     post: dict,
@@ -504,13 +553,9 @@ def _publish_to_x(
     if len(tweet_text) > 280:
         tweet_text = tweet_text[:277] + "..."
 
-    # -----------------------------------------
-    # Upload media (download bytes first)
-    # -----------------------------------------
     media_ids: List[str] = []
 
     if media:
-        # detect if video exists (X: 1 video max)
         has_video = any(((m.get("asset_type") or "").lower() == "video") for m in media)
         if has_video:
             media = [next(m for m in media if (m.get("asset_type") or "").lower() == "video")]
@@ -521,14 +566,10 @@ def _publish_to_x(
             if not url:
                 continue
 
-            raw_bytes, content_type = _download_media_bytes(url)
+            _raw_bytes, _content_type = _download_media_bytes(url)
 
-            # category
             category = "tweet_image" if mtype == "image" else "tweet_video"
 
-            # IMPORTANT:
-            # - images: upload + get media_id
-            # - video: chunk upload + finalize + wait processing => then media_id
             mid = XAdapter.upload_media(
                 consumer_key=consumer_key,
                 consumer_secret=consumer_secret,
@@ -541,9 +582,6 @@ def _publish_to_x(
 
             media_ids.append(str(mid))
 
-    # -----------------------------------------
-    # Create tweet (only after video ready)
-    # -----------------------------------------
     resp = XAdapter.create_tweet(
         consumer_key=consumer_key,
         consumer_secret=consumer_secret,
@@ -562,46 +600,9 @@ def _publish_to_x(
 
 
 # -----------------------------
-# TikTok token fetcher (UPDATED)
+# TikTok helpers/publisher
 # -----------------------------
-def _get_tiktok_tokens(post: dict, destination_id: str) -> Dict[str, Any]:
-    """
-    Reads your stored SocialAccount for platform=tiktok, destination_id=open_id.
-
-    Stored fields:
-      access_token_plain  -> access_token
-      refresh_token_plain -> refresh_token
-
-    Returns:
-      {
-        "access_token": str,
-        "refresh_token": Optional[str],
-        "_acct": dict (full SocialAccount record)
-      }
-    """
-    acct = SocialAccount.get_destination(
-        post["business_id"],
-        post["user__id"],
-        "tiktok",
-        destination_id,
-    )
-    if not acct:
-        raise Exception(f"Missing tiktok destination for destination_id={destination_id}")
-
-    access_token = acct.get("access_token_plain")
-    if not access_token:
-        raise Exception(f"Missing TikTok access_token_plain (reconnect TikTok) destination_id={destination_id}")
-
-    return {
-        "access_token": access_token,
-        "refresh_token": acct.get("refresh_token_plain"),
-        "_acct": acct,
-    }
-
 def _is_tiktok_token_invalid(err: Exception | str) -> bool:
-    """
-    Detect token invalid/expired errors robustly across TikTok error formats.
-    """
     s = str(err).lower()
     return (
         "access_token_invalid" in s
@@ -614,6 +615,7 @@ def _is_tiktok_token_invalid(err: Exception | str) -> bool:
         or "401" in s
     )
 
+
 def _refresh_tiktok_access_token_or_raise(
     *,
     post: dict,
@@ -621,10 +623,6 @@ def _refresh_tiktok_access_token_or_raise(
     destination_type: str,
     tokens: Dict[str, Any],
 ) -> str:
-    """
-    Refresh TikTok token once and persist it to SocialAccount.
-    Returns: new_access_token
-    """
     refresh_token = tokens.get("refresh_token")
     if not refresh_token:
         raise Exception("TikTok access token invalid/expired and refresh_token is missing (reconnect TikTok).")
@@ -632,7 +630,10 @@ def _refresh_tiktok_access_token_or_raise(
     client_key = os.getenv("TIKTOK_CLIENT_KEY") or os.getenv("TIKTOK_CLIENT_ID")
     client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
     if not client_key or not client_secret:
-        raise Exception("TikTok token refresh requires TIKTOK_CLIENT_KEY (or TIKTOK_CLIENT_ID) and TIKTOK_CLIENT_SECRET in env")
+        raise Exception(
+            "TikTok token refresh requires TIKTOK_CLIENT_KEY (or TIKTOK_CLIENT_ID) "
+            "and TIKTOK_CLIENT_SECRET in env"
+        )
 
     refreshed = TikTokAdapter.refresh_access_token(
         client_key=client_key,
@@ -640,7 +641,6 @@ def _refresh_tiktok_access_token_or_raise(
         refresh_token=refresh_token,
     )
 
-    # TikTok refresh response may be {data:{...}, error:{...}} or flat.
     ref_data = refreshed.get("data") or refreshed
     new_access = ref_data.get("access_token")
     new_refresh = ref_data.get("refresh_token") or refresh_token
@@ -648,7 +648,6 @@ def _refresh_tiktok_access_token_or_raise(
     if not new_access:
         raise Exception(f"TikTok OAuth refresh failed: {refreshed}")
 
-    # Persist updated tokens (recommended)
     acct = tokens.get("_acct") or {}
     try:
         SocialAccount.upsert_destination(
@@ -667,14 +666,11 @@ def _refresh_tiktok_access_token_or_raise(
             meta=(acct.get("meta") or {}),
         )
     except Exception:
-        # don't block publishing if persistence fails
         pass
 
     return new_access
 
-# ---------------------------------------------
-# TikTok publisher (UPDATED to match TikTokAdapter)
-# ---------------------------------------------
+
 def _publish_to_tiktok(
     *,
     post: dict,
@@ -704,19 +700,14 @@ def _publish_to_tiktok(
     if not media:
         raise Exception("TikTok requires media (video or images).")
 
-    # Decide type
     images = [m for m in media if ((m.get("asset_type") or "").lower() == "image")]
     videos = [m for m in media if ((m.get("asset_type") or "").lower() == "video")]
-
-    # If both exist, prefer video (safer)
     has_video = len(videos) > 0
 
     tokens = _get_tiktok_tokens(post, destination_id)
     access_token = tokens["access_token"]
 
-    # ----------------------
-    # VIDEO FLOW
-    # ----------------------
+    # VIDEO
     if has_video:
         if len(videos) != 1:
             raise Exception("TikTok video publishing supports exactly 1 video media item.")
@@ -732,7 +723,6 @@ def _publish_to_tiktok(
 
         video_size = len(video_bytes)
 
-        # TikTok: chunk upload recommended for large videos
         chunk_size = None
         total_chunk_count = None
         if video_size > 64 * 1024 * 1024:
@@ -749,7 +739,6 @@ def _publish_to_tiktok(
                 total_chunk_count=total_chunk_count,
             )
 
-        # init (refresh once if token invalid)
         try:
             init_resp = _init_video(access_token)
         except Exception as e:
@@ -771,7 +760,6 @@ def _publish_to_tiktok(
         if not upload_url or not publish_id:
             raise Exception(f"TikTok init missing upload_url/publish_id: {init_resp}")
 
-        # upload
         if chunk_size and total_chunk_count:
             upload_resp = TikTokAdapter.upload_video_put_chunked(
                 upload_url=upload_url,
@@ -804,9 +792,7 @@ def _publish_to_tiktok(
         r["raw"] = {"init": init_resp, "upload": upload_resp, "status": status_resp}
         return r
 
-    # ----------------------
-    # PHOTO FLOW
-    # ----------------------
+    # PHOTO
     if not images:
         raise Exception("TikTok requires either a video or at least 1 image.")
 
@@ -814,7 +800,6 @@ def _publish_to_tiktok(
     if not image_urls:
         raise Exception("TikTok photo post requires media.url for images.")
 
-    # TikTok photo posts typically support multiple images (but be conservative)
     if len(image_urls) > 35:
         image_urls = image_urls[:35]
 
@@ -866,53 +851,9 @@ def _publish_to_tiktok(
     return r
 
 
-# ---------------------------------------------
-# LinkedIn publisher (UPDATED to match TikTokAdapter)
-# ---------------------------------------------
-def _linkedin_headers(access_token: str) -> Dict[str, str]:
-    return {
-        "Authorization": f"Bearer {access_token}",
-        "X-Restli-Protocol-Version": "2.0.0",
-        "Content-Type": "application/json",
-    }
-
-
-def _get_linkedin_access_token(post: dict, destination_id: str, destination_type: str) -> Dict[str, str]:
-    """
-    For LinkedIn we store:
-      access_token_plain  -> access_token
-      refresh_token_plain -> refresh_token (optional)
-    """
-    acct = SocialAccount.get_destination(
-        post["business_id"],
-        post["user__id"],
-        "linkedin",
-        destination_id
-    )
-    if not acct:
-        raise Exception(f"Missing LinkedIn destination for destination_id={destination_id}")
-
-    access_token = acct.get("access_token_plain")
-    if not access_token:
-        raise Exception("Missing LinkedIn access_token (reconnect LinkedIn account).")
-
-    return {"access_token": access_token}
-
-
-def _linkedin_author_urn(destination_type: str, destination_id: str) -> str:
-    """
-    destination_type:
-      - "author" -> urn:li:person:{destination_id}
-      - "organization" -> urn:li:organization:{destination_id}
-    """
-    dt = (destination_type or "").strip().lower()
-    if dt == "author":
-        return f"urn:li:person:{destination_id}"
-    if dt == "organization":
-        return f"urn:li:organization:{destination_id}"
-    raise Exception("linkedin destination_type must be 'author' or 'organization'")
-
-
+# -----------------------------
+# LinkedIn publisher (USES LinkedInAdapter)
+# -----------------------------
 def _publish_to_linkedin(
     *,
     post: dict,
@@ -943,71 +884,55 @@ def _publish_to_linkedin(
         r["error"] = "linkedin destination_type must be 'author' or 'organization'"
         return r
 
-    # NOTE: LinkedIn media posting needs registerUpload flow.
-    # If you want it, I’ll give you the full implementation.
-    if media:
-        r["error"] = "LinkedIn media posting not implemented (requires registerUpload flow)."
-        return r
+    # Build caption early (so it's always defined)
+    final_text = _build_caption(text, link).strip()
 
-    tokens = _get_linkedin_access_token(post, destination_id, destination_type)
-    access_token = tokens["access_token"]
+    # Get token early (so it's always defined OR we return)
+    try:
+        acct = SocialAccount.get_destination(
+            post["business_id"],
+            post["user__id"],
+            "linkedin",
+            destination_id,
+        )
+        if not acct:
+            r["error"] = f"Missing LinkedIn destination for destination_id={destination_id}"
+            return r
+
+        access_token = acct.get("access_token_plain")
+        if not access_token:
+            r["error"] = "Missing LinkedIn access_token_plain (reconnect LinkedIn)."
+            return r
+
+    except Exception as e:
+        r["error"] = f"Failed to load LinkedIn token: {str(e)}"
+        return r
 
     log_tag = f"[jobs.py][_publish_to_linkedin][{post.get('business_id')}][{post.get('_id') or post.get('post_id')}]"
 
-    # Build caption (append link into text to keep it simple and consistent)
-    caption = _build_caption(text, link).strip()
+    # Use adapter (adapter will handle media if implemented there)
+    adapter_resp = LinkedInAdapter.publish_post(
+        access_token=access_token,
+        destination_type=destination_type,
+        destination_id=destination_id,
+        text=final_text,
+        link=None,           # link already merged into final_text
+        media=media or None, # adapter decides what to do
+        log_tag=log_tag,
+    )
 
-    # LinkedIn: create a basic text share using ugcPosts
-    try:
-        author_urn = _linkedin_author_urn(destination_type, destination_id)
-
-        payload = {
-            "author": author_urn,
-            "lifecycleState": "PUBLISHED",
-            "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {"text": caption or ""},
-                    "shareMediaCategory": "NONE",
-                }
-            },
-            "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
-        }
-
-        url = "https://api.linkedin.com/v2/ugcPosts"
-        resp = requests.post(url, headers=_linkedin_headers(access_token), json=payload, timeout=30)
-
-        if resp.status_code >= 400:
-            # IMPORTANT: if publishing to organization without permissions, LinkedIn often returns 403
-            # similar to your organizationAcls error.
-            r["error"] = f"LinkedIn publish failed ({resp.status_code})"
-            r["raw"] = _safe_json(resp)
-            Log.info(f"{log_tag} publish failed: {resp.status_code} {resp.text}")
-            return r
-
-        # LinkedIn may return 201 with headers like x-restli-id or location
-        provider_post_id = resp.headers.get("x-restli-id") or resp.headers.get("location")
+    if adapter_resp.get("success"):
         r["status"] = "success"
-        r["provider_post_id"] = provider_post_id
-        r["raw"] = _safe_json(resp)
+        r["provider_post_id"] = adapter_resp.get("provider_post_id")
+        r["raw"] = adapter_resp.get("raw")
         return r
 
-    except Exception as e:
-        r["error"] = str(e)
-        Log.info(f"{log_tag} exception: {e}")
-        return r
-
-
-def _safe_json(resp):
-    try:
-        return resp.json()
-    except Exception:
-        return {"text": getattr(resp, "text", None)}
+    r["error"] = adapter_resp.get("error") or "LinkedIn publish failed"
+    r["raw"] = adapter_resp.get("raw")
+    return r
 
 # -----------------------------
 # Main job
-# -----------------------------
-# -----------------------------
-# Main job (UPDATED)
 # -----------------------------
 def _publish_scheduled_post(post_id: str, business_id: str):
     post = ScheduledPost.get_by_id(post_id, business_id)
@@ -1016,6 +941,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
     log_tag = f"[jobs.py][_publish_scheduled_post][{business_id}][{post_id}]"
 
+    # Mark as publishing (reset provider_results/error every run)
     ScheduledPost.update_status(
         post_id,
         post["business_id"],
@@ -1032,11 +958,13 @@ def _publish_scheduled_post(post_id: str, business_id: str):
     text = (content.get("text") or "").strip()
     link = content.get("link")
 
+    # global media applies to all destinations unless dest overrides
     global_media = _as_list(content.get("media"))
 
     for dest in post.get("destinations") or []:
         platform = (dest.get("platform") or "").strip().lower()
 
+        # per-destination overrides
         dest_text = ((dest.get("text") or "")).strip() or text
         dest_link = dest.get("link") or link
         dest_media = _as_list(dest.get("media")) or global_media
@@ -1069,6 +997,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     "raw": None,
                 }
 
+            # Ensure dict shape
             if not isinstance(r, dict):
                 r = {
                     "platform": platform,
@@ -1081,6 +1010,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                     "raw": None,
                 }
 
+            # Enforce required keys (safe defaults)
             r.setdefault("platform", platform)
             r.setdefault("destination_id", str(dest.get("destination_id") or ""))
             r.setdefault("destination_type", dest.get("destination_type"))
@@ -1113,6 +1043,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
             any_failed = True
             Log.info(f"{log_tag} destination failed: {rr}")
 
+    # Decide overall status
     if any_success and not any_failed:
         overall_status = ScheduledPost.STATUS_PUBLISHED
         overall_error = None
@@ -1137,6 +1068,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
         provider_results=results,
         error=overall_error,
     )
-    
+
+
 def publish_scheduled_post(post_id: str, business_id: str):
     return run_in_app_context(_publish_scheduled_post, post_id, business_id)
