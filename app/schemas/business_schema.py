@@ -62,7 +62,7 @@ class BusinessSchema(Schema):
     return_url = fields.Str(required=True, validate=validate.Length(min=5, max=200))
     callback_url = fields.Str(required=False, validate=validate.Length(min=5, max=200))
     status = fields.Str(validate=validate.OneOf(["Active", "Inactive"]), load_default="Active")
-    account_type = fields.Str(required=True, validate=validate.OneOf(["system_owner","business_owner", "super_admin"]))
+    # account_type = fields.Str(required=True, validate=validate.OneOf(["system_owner","business_owner", "super_admin"]))
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 

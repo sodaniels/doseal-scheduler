@@ -9,6 +9,18 @@ from ..utils.logger import Log # import logging
 from ..utils.crypt import encrypt_data, decrypt_data, hash_data
 from ..models.base_model import BaseModel
 from ..utils.generators import generate_coupons
+from ..constants.service_code import PERMISSION_FIELDS_FOR_ADMIN_ROLE
+
+def _zero_permission_for(field: str) -> list:
+    """
+    Build a zero-permission entry for a permission field based on
+    PERMISSION_FIELDS_FOR_ADMIN_ROLE[field] actions.
+    """
+    actions = PERMISSION_FIELDS_FOR_ADMIN_ROLE.get(field, [])
+    if not actions:
+        # safe fallback if someone forgot to register actions for a field
+        return [{"read": "0"}]
+    return [{a: "0" for a in actions}]
 
 
 #-------------------------ROLE--------------------------------------
@@ -85,8 +97,10 @@ class Role(BaseModel):
             return None
 
         data["_id"] = str(data["_id"])
+        data["user_id"] = str(data["user_id"])
+        data["admin_id"] = str(data["admin_id"])
         data["business_id"] = str(data["business_id"])
-        data["agent_id"] = str(data["agent_id"])
+        data["created_by"] = str(data["created_by"])
 
         data["name"] = decrypt_data(data["name"])
         fields = ["system_users", "beneficiaries", "senders", "expenses", "transactions",

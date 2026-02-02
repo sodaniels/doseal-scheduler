@@ -45,10 +45,10 @@ from tasks import send_user_registration_email
 from .admin_business_resource import token_required
 from ....utils.logger import Log # import logging
 from ....constants.service_code import (
-    HTTP_STATUS_CODES, PERMISSION_FIELDS_FOR_ADMINS, 
+    HTTP_STATUS_CODES, 
     PERMISSION_FIELDS_FOR_ADMIN_ROLE,
     PERMISSION_FIELDS_FOR_AGENT_ROLE,
-    SYSTEM_USERS, BUSINESS_FIELDS
+    SYSTEM_USERS
 )
 
 from ....models.business_model import Client, Token
@@ -141,19 +141,19 @@ class RoleResource(MethodView):
         )
 
         # ----------------- Normalise permissions only for provided fields ----------------- #
-        # PERMISSION_FIELDS_FOR_ADMIN_ROLE is assumed to be:
-        # { "user": ["view", "add", "edit", "delete"], "role": [...], ... }
+        # Normalise permissions only for fields PROVIDED in payload
         for perm_field, actions in PERMISSION_FIELDS_FOR_ADMIN_ROLE.items():
-            if perm_field in item_data and item_data[perm_field]:
+            if perm_field in item_data:  # <-- key change (not "and item_data[perm_field]")
+                raw_list = item_data.get(perm_field) or []
+
                 normalised_list = []
-                for entry in item_data[perm_field]:
-                    norm = {}
-                    for action in actions:
-                        norm[action] = entry.get(action, "0")
+                for entry in raw_list:
+                    entry = entry or {}
+                    norm = {action: entry.get(action, "0") for action in actions}
                     normalised_list.append(norm)
+
+                # if user passed empty list, we keep it empty so model can clear it
                 item_data[perm_field] = normalised_list
-            # If perm_field not present, we DO NOT create it with zeros here
-            # so the model won't store non-explicit permission fields.
 
         # ----------------- Duplicate check ----------------- #
         name = item_data.get("name")

@@ -131,7 +131,7 @@ def register_social_routes(app, api):
     # Root route
     @app.route('/')
     def index():
-        return {"message": "Welcome to the MTO API"}
+        return {"message": "Welcome to the Scheduler API"}
 
 
 # Admin Routes

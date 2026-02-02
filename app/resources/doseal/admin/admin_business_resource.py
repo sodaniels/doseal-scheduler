@@ -24,8 +24,8 @@ from ....schemas.login_schema import LoginSchema
 from ....utils.helpers import generate_tokens
 from ....models.business_model import Client, Token
 from ....models.user_model import User
-from ....models.superadmin_model import Role
-from ....models.admin.super_superadmin_model import Role as AdminRole
+from ....models.admin.super_superadmin_model import Role
+
 
 from ....utils.logger import Log # import logging
 from ....utils.generators import generate_client_id, generate_client_secret
@@ -287,6 +287,8 @@ class RegisterBusinessResource(MethodView):
         
         log_tag = f"[business_resource.py][RegisterBusinessResource][post][{client_ip}]"
         
+        account_type = SYSTEM_USERS["BUSINESS_OWNER"]
+        
         # Check if x-app-ky header is present and valid
         app_key = request.headers.get('x-app-key')
         server_app_key = os.getenv("X_APP_KEY")
@@ -319,7 +321,7 @@ class RegisterBusinessResource(MethodView):
         user_data["email"] = business_data.get('email')
         user_data["phone_number"] = business_data.get('business_contact')
         user_data["password"] = business_data.get('password')
-        user_data["account_type"] = business_data.get('account_type')
+        user_data["account_type"] = account_type
         
         business_data["password"] = business_data.get('password')
         
@@ -736,6 +738,7 @@ class CurrentUserResource(MethodView):
             "business_id": target_business_id,
             "profile": business_info
         }
+    
         
         try:
             role_id = user.get("role") if user.get("role") else None
@@ -743,16 +746,21 @@ class CurrentUserResource(MethodView):
             role = None
             
             if role_id is not None:
-                role =  Role.get_by_id(role_id=role_id, business_id=target_business_id, is_logging_in=True)
+                # role =  Role.get_by_id(role_id=role_id)
+                role = Role.get_by_id(role_id=role_id, business_id=target_business_id, is_logging_in=True)
+                
+                Log.info(f"role: {role}")
+                
                 
             
             if role is not None:
                 # retreive the permissions for the user
                 permissions = role.get("permissions")
+                
 
         except Exception as e:
-            Log.info(f"{log_tag} [helpers.py][{client_ip}]: error retreiving permissions for user: {e}")
-        
+            Log.info(f"{log_tag} [admin_business_resource.py][{client_ip}]: error retreiving permissions for user: {e}")
+            
         
         response["account_type"] = account_type
 
