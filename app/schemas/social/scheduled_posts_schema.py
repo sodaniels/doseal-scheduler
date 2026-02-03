@@ -188,6 +188,10 @@ class DestinationSchema(Schema):
     destination_id = fields.Str(required=True)
     destination_name = fields.Str(required=False, allow_none=True)
     channel_id = fields.Str(required=False, allow_none=True)
+    # ✅ add this
+    to = fields.Str(required=False, allow_none=True)
+    # if you already have meta, keep it
+    meta = fields.Dict(required=False, allow_none=True)
 
     placement = fields.Str(required=False, allow_none=True)
 

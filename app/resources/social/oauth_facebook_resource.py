@@ -25,6 +25,8 @@ from ...services.social.adapters.threads_adapter import ThreadsAdapter
 from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
 from ...utils.helpers import make_log_tag
 
+from ...utils.social.pre_process_checks import PreProcessCheck
+
 from ...utils.schedule_helper import (
     _safe_json_load, _require_env, _exchange_code_for_token, _store_state, _consume_state,
     _store_selection, _load_selection, _delete_selection, _redirect_to_frontend,
@@ -33,7 +35,6 @@ from ...utils.schedule_helper import (
 
 
 blp_meta_oauth = Blueprint("meta_oauth", __name__)
-
 
 
 # -------------------------------------------------------------------
@@ -45,6 +46,27 @@ class FacebookOauthStartResource(MethodView):
     def get(self):
         client_ip = request.remote_addr
         log_tag = f"[oauth_meta.py][FacebookOauthStartResource][get][{client_ip}]"
+        user_info = g.get("current_user", {}) or {}
+        admin_id = str(user_info.get("_id"))
+        business_id = str(user_info.get("business_id"))
+        
+        #####################PRE TRANSACTION CHECKS#########################
+        
+        # 1. check pre transaction requirements for agents
+        pre_check = PreProcessCheck(admin_id=admin_id, business_id=business_id)
+        initial_check_result = pre_check.initial_processs_checks()
+        
+        if initial_check_result is not None:
+            return initial_check_result
+        
+        # 2. check if agent has enough balance to cover transaction
+        # transaction_balance_check = pre_transaction_check.agent_has_sufficient_available(transaction_data.get("send_amount"))
+        # Log.info(f"{log_tag} transaction_balance_check: {transaction_balance_check}")
+        # if not transaction_balance_check:
+        #     Log.info(f"{log_tag} Insufficient funds for this transaction.")
+        #     return prepared_response(False, "BAD_REQUEST", f"Insufficient funds for this transaction") 
+        
+        #####################PRE TRANSACTION CHECKS#########################
 
         redirect_uri = _require_env("FACEBOOK_REDIRECT_URI", log_tag)
         meta_app_id = _require_env("META_APP_ID", log_tag)

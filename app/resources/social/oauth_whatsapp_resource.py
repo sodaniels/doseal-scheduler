@@ -44,7 +44,6 @@ class WhatsAppOauthStartResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
 
-        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = body.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
             target_business_id = form_business_id
@@ -79,11 +78,13 @@ class WhatsAppOauthStartResource(MethodView):
             "redirect_uri": redirect_uri,
             "state": state,
             "response_type": "code",
-            # WhatsApp permissions:
-            "scope": "whatsapp_business_management,whatsapp_business_messaging",
+
+            # ✅ IMPORTANT:
+            # /me/businesses usually needs business_management
+            # WABA/phone usage needs whatsapp_business_management + whatsapp_business_messaging
+            "scope": "business_management,whatsapp_business_management,whatsapp_business_messaging",
         }
 
-        # Meta OAuth dialog
         url = "https://www.facebook.com/v20.0/dialog/oauth?" + urlencode(params)
         Log.info(f"{log_tag} Redirecting to WhatsApp OAuth consent screen")
         return redirect(url)
@@ -126,7 +127,7 @@ class WhatsAppOauthCallbackResource(MethodView):
             token_data = _exchange_code_for_token(code=code, redirect_uri=redirect_uri, log_tag=log_tag)
             user_access_token = token_data["access_token"]
 
-            # fetch WABAs
+            # ✅ FIXED: discover via /me/businesses -> /{business_id}/owned_whatsapp_business_accounts
             wabas = WhatsAppAdapter.list_whatsapp_business_accounts(access_token=user_access_token)
 
             selection_key = secrets.token_urlsafe(24)
@@ -168,7 +169,15 @@ class WhatsAppWabasResource(MethodView):
             return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
         wabas = sel.get("wabas") or []
-        safe = [{"waba_id": w.get("id"), "name": w.get("name")} for w in wabas]
+        safe = []
+        for w in wabas:
+            safe.append({
+                "waba_id": w.get("id"),
+                "name": w.get("name"),
+                "business_id": w.get("business_id"),
+                "business_name": w.get("business_name"),
+            })
+
         return jsonify({"success": True, "data": {"wabas": safe}}), HTTP_STATUS_CODES["OK"]
 
 
@@ -230,14 +239,13 @@ class WhatsAppConnectNumberResource(MethodView):
         body = request.get_json(silent=True) or {}
         selection_key = body.get("selection_key")
         phone_number_id = body.get("phone_number_id")
-        waba_id = body.get("waba_id")  # include this from UI selection
+        waba_id = body.get("waba_id")
 
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
 
-        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = body.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
             target_business_id = form_business_id
@@ -271,7 +279,6 @@ class WhatsAppConnectNumberResource(MethodView):
         if not access_token:
             return jsonify({"success": False, "message": "Missing token in selection (reconnect)"}), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        # ---- PLAN ENFORCER ----
         enforcer = QuotaEnforcer(target_business_id)
         try:
             enforcer.reserve(
@@ -286,7 +293,6 @@ class WhatsAppConnectNumberResource(MethodView):
             return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
-            # store the token against this phone_number_id destination
             SocialAccount.upsert_destination(
                 business_id=owner["business_id"],
                 user__id=owner["user__id"],
@@ -298,7 +304,7 @@ class WhatsAppConnectNumberResource(MethodView):
                 access_token_plain=access_token,
                 refresh_token_plain=None,
                 token_expires_at=None,
-                scopes=["whatsapp_business_management", "whatsapp_business_messaging"],
+                scopes=["business_management", "whatsapp_business_management", "whatsapp_business_messaging"],
 
                 platform_user_id=str(phone_number_id),
                 platform_username=str(body.get("display_phone_number") or ""),
@@ -313,7 +319,6 @@ class WhatsAppConnectNumberResource(MethodView):
             )
 
             _delete_selection("wa", selection_key)
-
             return jsonify({"success": True, "message": "WhatsApp number connected successfully"}), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
