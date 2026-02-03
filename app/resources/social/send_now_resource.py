@@ -1,21 +1,26 @@
-# app/routes/social/send_now_resource.py
-
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from flask import jsonify, request, g
 from flask.views import MethodView
-from flask import request, jsonify, g
 from flask_smorest import Blueprint
-from marshmallow import Schema, fields, validate, ValidationError, pre_load, validates_schema
+from marshmallow import Schema, fields, validate, ValidationError, pre_load, validates_schema, INCLUDE
 
 from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 from ...utils.logger import Log
+from ...utils.helpers import make_log_tag
 
-# Reuse your existing helpers/publishers
+from ...models.social.scheduled_post import ScheduledPost
+
+# ------------------------------------------------------------------
+# Publishers
+# ------------------------------------------------------------------
 from ...services.social.jobs import (
     _as_list,
+    _build_caption,
     _publish_to_facebook,
     _publish_to_instagram,
     _publish_to_x,
@@ -26,243 +31,357 @@ from ...services.social.jobs import (
     _publish_to_threads,
 )
 
-# ----------------------------------------------------------
-# Minimal schemas (compatible with your existing job logic)
-# ----------------------------------------------------------
+# ------------------------------------------------------------------
+# Blueprint
+# ------------------------------------------------------------------
+blp_send_now = Blueprint("social_send_now", __name__)
 
-class SendNowDestinationSchema(Schema):
-    platform = fields.Str(required=True, validate=validate.Length(min=1))
-    destination_type = fields.Str(required=False, allow_none=True)
-    destination_id = fields.Str(required=True, validate=validate.Length(min=1))
-    placement = fields.Str(required=False, allow_none=True)
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+def _is_url(s: str) -> bool:
+    return s.startswith("http://") or s.startswith("https://")
 
-    # per-destination overrides
-    text = fields.Str(required=False, allow_none=True)
-    link = fields.Str(required=False, allow_none=True)
-    media = fields.Raw(required=False, allow_none=True)
 
-    # WhatsApp recipient (put it in meta to avoid "Unknown field")
-    meta = fields.Dict(required=False, allow_none=True)
+def _default_placement(dest: dict) -> str:
+    return (dest.get("placement") or "feed").lower()
+
+
+def _count_media_types(media: List[dict]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for m in media:
+        t = (m.get("asset_type") or "").lower()
+        counts[t] = counts.get(t, 0) + 1
+    return counts
+
+
+# ------------------------------------------------------------------
+# PLATFORM RULES
+# ------------------------------------------------------------------
+PLATFORM_RULES: Dict[str, Dict[str, Any]] = {
+    "facebook": {
+        "placements": {"feed", "reel", "story"},
+        "media": {"max_items": 1, "types": {"image", "video"}},
+        "requires_destination_type": {"page"},
+    },
+    "instagram": {
+        "placements": {"feed", "reel", "story"},
+        "media": {"max_items": 10, "types": {"image", "video"}},
+        "requires_destination_type": {"ig_user"},
+        "requires_media": True,
+    },
+    "threads": {
+        "placements": {"feed"},
+        "media": {"max_items": 1, "types": {"image", "video"}},
+        "requires_destination_type": {"user"},
+    },
+    "x": {
+        "placements": {"feed"},
+        "media": {"max_items": 4, "types": {"image", "video"}},
+        "requires_destination_type": {"user"},
+    },
+    "tiktok": {
+        "placements": {"feed"},
+        "media": {"max_items": 1, "types": {"video"}},
+        "requires_destination_type": {"user"},
+        "requires_media": True,
+    },
+    "linkedin": {
+        "placements": {"feed"},
+        "media": {"max_items": 1, "types": {"image", "video"}},
+        "requires_destination_type": {"author", "organization"},
+    },
+    "youtube": {
+        "placements": {"feed"},
+        "media": {"max_items": 1, "types": {"video"}},
+        "requires_destination_type": {"channel"},
+        "requires_media": True,
+    },
+    "whatsapp": {
+        "placements": {"direct"},
+        "media": {"max_items": 1, "types": {"image", "video", "document"}},
+        "requires_destination_type": {"phone_number"},
+    },
+}
+
+
+# ------------------------------------------------------------------
+# Schemas
+# ------------------------------------------------------------------
+class MediaAssetSchema(Schema):
+    class Meta:
+        unknown = INCLUDE
+        
+    asset_type = fields.Str(required=True)
+    url = fields.Str(required=True)
+    filename = fields.Str(required=False)
+    public_id = fields.Str(required=False)
+
+    @validates_schema
+    def validate_url(self, data, **kwargs):
+        if not _is_url(data["url"]):
+            raise ValidationError({"url": ["Invalid URL"]})
+
+
+class DestinationSchema(Schema):
+    platform = fields.Str(required=True)
+    destination_type = fields.Str(required=False)
+    destination_id = fields.Str(required=True)
+    placement = fields.Str(required=False)
+
+    # overrides
+    text = fields.Str(required=False)
+    link = fields.Str(required=False)
+    media = fields.Raw(required=False)
+
+    # WhatsApp
+    to = fields.Str(required=False)
+    meta = fields.Dict(required=False)
+
+    @pre_load
+    def normalize(self, data, **kwargs):
+        data["platform"] = (data.get("platform") or "").lower()
+
+        if isinstance(data.get("media"), dict):
+            data["media"] = [data["media"]]
+
+        if "placement" not in data:
+            data["placement"] = "feed"
+
+        return data
 
 
 class SendNowContentSchema(Schema):
-    text = fields.Str(required=False, allow_none=True)
-    link = fields.Str(required=False, allow_none=True)
-    media = fields.Raw(required=False, allow_none=True)
+    class Meta:
+        unknown = INCLUDE
+    text = fields.Str()
+    link = fields.Str()
+    media = fields.Raw()
+
+    @pre_load
+    def normalize(self, data, **kwargs):
+        if isinstance(data.get("media"), dict):
+            data["media"] = [data["media"]]
+        return data
 
 
 class SendNowSchema(Schema):
-    """
-    POST /social/api/v1/social/send-now
-    Mirrors CreateScheduledPostSchema but WITHOUT scheduled_at.
-    Accepts either:
-      - top-level text/link/media
-      - OR content: {text, link, media}
-    """
-    destinations = fields.List(
-        fields.Nested(SendNowDestinationSchema),
-        required=True,
-        validate=validate.Length(min=1),
-    )
+    class Meta:
+        unknown = INCLUDE
+        
+    destinations = fields.List(fields.Nested(DestinationSchema), required=True)
 
-    text = fields.Str(required=False, allow_none=True)
-    link = fields.Str(required=False, allow_none=True)
-    media = fields.Raw(required=False, allow_none=True)
+    text = fields.Str()
+    link = fields.Str()
+    media = fields.Raw()
 
-    content = fields.Nested(SendNowContentSchema, required=False)
+    content = fields.Nested(SendNowContentSchema)
 
     @pre_load
-    def merge_content(self, in_data, **kwargs):
-        if not isinstance(in_data, dict):
-            return in_data
+    def merge_content(self, data, **kwargs):
+        content = data.get("content") or {}
 
-        content = in_data.get("content") or {}
-        if not isinstance(content, dict):
-            content = {}
+        for k in ("text", "link", "media"):
+            if k not in content and data.get(k) is not None:
+                content[k] = data[k]
 
-        if "text" not in content and in_data.get("text") is not None:
-            content["text"] = in_data.get("text")
+        if isinstance(content.get("media"), dict):
+            content["media"] = [content["media"]]
 
-        if "link" not in content and in_data.get("link") is not None:
-            content["link"] = in_data.get("link")
-
-        if "media" not in content and in_data.get("media") is not None:
-            content["media"] = in_data.get("media")
-
-        # normalize global media dict -> list
-        media_val = content.get("media")
-        if isinstance(media_val, dict):
-            content["media"] = [media_val]
-
-        in_data["content"] = content
-        return in_data
+        data["content"] = content
+        return data
 
     @validates_schema
-    def validate_basic(self, data, **kwargs):
+    def validate_all(self, data, **kwargs):
         content = data.get("content") or {}
         text = (content.get("text") or "").strip()
-        media_list = content.get("media") or []
+        link = content.get("link")
 
-        if isinstance(media_list, dict):
-            media_list = [media_list]
+        media = content.get("media") or []
+        if not isinstance(media, list):
+            raise ValidationError({"content": {"media": ["must be list"]}})
 
-        if media_list and not isinstance(media_list, list):
-            raise ValidationError({"content": {"media": ["media must be an object or list"]}})
+        parsed_media = []
+        for idx, m in enumerate(media):
+            parsed_media.append(MediaAssetSchema().load(m))
 
-        if not text and not media_list:
-            raise ValidationError({"content": ["Provide at least one of text or media"]})
+        if not text and not parsed_media:
+            raise ValidationError({"content": ["text or media required"]})
+
+        dest_errors = []
+
+        for idx, dest in enumerate(data["destinations"]):
+            platform = dest["platform"]
+            placement = _default_placement(dest)
+
+            rule = PLATFORM_RULES.get(platform)
+            if not rule:
+                dest_errors.append({idx: {"platform": ["unsupported"]}})
+                continue
+
+            if placement not in rule["placements"]:
+                dest_errors.append({
+                    idx: {"placement": [f"Must be one of {sorted(rule['placements'])}"]}
+                })
+
+            if rule.get("requires_media") and not parsed_media:
+                dest_errors.append({idx: {"media": ["required"]}})
+
+            if platform == "whatsapp":
+                to_phone = dest.get("to") or (dest.get("meta") or {}).get("to")
+                if not to_phone:
+                    dest_errors.append({idx: {"to": ["recipient required"]}})
+
+        if dest_errors:
+            raise ValidationError({"destinations": dest_errors})
+
+        data["_normalized_content"] = {
+            "text": text,
+            "link": link,
+            "media": parsed_media,
+        }
 
 
-blp_send_now = Blueprint("social_send_now", __name__, url_prefix="/social/api/v1/social", description="Send Now")
-
-
+# ------------------------------------------------------------------
+# SEND NOW ENDPOINT
+# ------------------------------------------------------------------
 @blp_send_now.route("/social/send-now", methods=["POST"])
 class SendNowResource(MethodView):
+
     @token_required
     @blp_send_now.arguments(SendNowSchema)
     def post(self, payload):
-        """
-        Publishes immediately to the specified destinations and returns per-destination results.
-        """
-        client_ip = request.remote_addr
-        user = g.get("current_user", {}) or {}
-        business_id = str(user.get("business_id") or "")
-        user__id = str(user.get("_id") or "")
 
-        log_tag = f"[send_now_resource.py][SendNowResource][post][{client_ip}][{business_id}][{user__id}]"
+        user = g.get("current_user") or {}
+        business_id = str(user.get("business_id"))
+        user_id = str(user.get("_id"))
 
-        if not business_id or not user__id:
-            return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        log_tag = make_log_tag(
+            "send_now_resource.py",
+            "SendNowResource",
+            "post",
+            request.remote_addr,
+            user_id,
+            user.get("account_type"),
+            business_id,
+            business_id,
+        )
 
-        content = payload.get("content") or {}
-        text = (content.get("text") or "").strip()
+        content = payload["_normalized_content"]
+        text = content.get("text")
         link = content.get("link")
-        global_media = _as_list(content.get("media"))
+        media = _as_list(content.get("media"))
+        destinations = payload["destinations"]
 
-        # "post" object shape expected by the token fetchers (SocialAccount.get_destination)
-        pseudo_post: Dict[str, Any] = {
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+
+        # ------------------------------------------------------------------
+        # SAVE FIRST
+        # ------------------------------------------------------------------
+        doc = {
             "business_id": business_id,
-            "user__id": user__id,
-            "_id": "send-now",
+            "user__id": user_id,
+            "status": ScheduledPost.STATUS_PUBLISHING,
+            # ✅ REQUIRED by your ScheduledPost model:
+            "scheduled_at_utc": now_iso,   # or use now_dt if your model accepts datetime objects
+
+            # optional (only if your model also stores scheduled_at separately)
+            "scheduled_at": now_iso,
             "content": content,
-            "destinations": payload.get("destinations") or [],
+            "destinations": destinations,
+            "provider_results": [],
+            "error": None,
+            "meta": {"send_now": True},
         }
 
-        results: List[Dict[str, Any]] = []
+        created = ScheduledPost.create(doc)
+        post_id = str(created["_id"])
+
+        post = {
+            "_id": post_id,
+            "business_id": business_id,
+            "user__id": user_id,
+            "content": content,
+            "destinations": destinations,
+        }
+
+        # ------------------------------------------------------------------
+        # PUBLISH
+        # ------------------------------------------------------------------
+        results = []
         any_success = False
         any_failed = False
 
-        for dest in pseudo_post["destinations"]:
-            platform = (dest.get("platform") or "").strip().lower()
+        for dest in destinations:
+            platform = dest["platform"]
 
-            dest_text = (dest.get("text") or "").strip() or text
+            dest_text = dest.get("text") or text
             dest_link = dest.get("link") or link
-            dest_media = _as_list(dest.get("media")) or global_media
+            dest_media = _as_list(dest.get("media")) or media
 
             try:
                 if platform == "facebook":
-                    r = _publish_to_facebook(post=pseudo_post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+                    r = _publish_to_facebook(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
                 elif platform == "instagram":
-                    r = _publish_to_instagram(post=pseudo_post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+                    r = _publish_to_instagram(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
                 elif platform == "threads":
-                    # If you paused Threads, keep a safe failure OR call your adapter.
-                    # If you have _publish_to_threads implemented, uncomment the call.
-                    try:
-                        r = _publish_to_threads(post=pseudo_post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
-                    except NameError:
-                        r = {
-                            "platform": "threads",
-                            "destination_id": str(dest.get("destination_id") or ""),
-                            "destination_type": dest.get("destination_type"),
-                            "placement": (dest.get("placement") or "feed").lower(),
-                            "status": "failed",
-                            "provider_post_id": None,
-                            "error": "Threads publisher not wired (paused/disabled).",
-                            "raw": None,
-                        }
+                    r = _publish_to_threads(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
-                elif platform in ("twitter", "x"):
-                    # allow both names from client
-                    r = _publish_to_x(post=pseudo_post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+                elif platform == "x":
+                    r = _publish_to_x(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
                 elif platform == "tiktok":
-                    r = _publish_to_tiktok(post=pseudo_post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+                    r = _publish_to_tiktok(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
                 elif platform == "linkedin":
-                    r = _publish_to_linkedin(post=pseudo_post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+                    r = _publish_to_linkedin(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
                 elif platform == "youtube":
-                    r = _publish_to_youtube(post=pseudo_post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+                    r = _publish_to_youtube(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
                 elif platform == "whatsapp":
-                    # IMPORTANT: recipient must be in dest.meta.to
-                    r = _publish_to_whatsapp(post=pseudo_post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+                    r = _publish_to_whatsapp(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
                 else:
-                    r = {
-                        "platform": platform,
-                        "destination_id": str(dest.get("destination_id") or ""),
-                        "destination_type": dest.get("destination_type"),
-                        "placement": (dest.get("placement") or "feed").lower(),
-                        "status": "failed",
-                        "provider_post_id": None,
-                        "error": "Unsupported platform (not implemented)",
-                        "raw": None,
-                    }
-
-                if not isinstance(r, dict):
-                    r = {
-                        "platform": platform,
-                        "destination_id": str(dest.get("destination_id") or ""),
-                        "destination_type": dest.get("destination_type"),
-                        "placement": (dest.get("placement") or "feed").lower(),
-                        "status": "failed",
-                        "provider_post_id": None,
-                        "error": f"Publisher returned invalid result type: {type(r)}",
-                        "raw": None,
-                    }
-
-                # Normalize result shape
-                r.setdefault("platform", platform)
-                r.setdefault("destination_id", str(dest.get("destination_id") or ""))
-                r.setdefault("destination_type", dest.get("destination_type"))
-                r.setdefault("placement", (dest.get("placement") or "feed").lower())
-                r.setdefault("status", "failed")
-                r.setdefault("provider_post_id", None)
-                r.setdefault("error", None)
-                r.setdefault("raw", None)
-
-                results.append(r)
-
-                if r.get("status") == "success":
-                    any_success = True
-                else:
-                    any_failed = True
-                    Log.info(f"{log_tag} destination failed: {r}")
+                    raise Exception("Unsupported platform")
 
             except Exception as e:
-                rr = {
+                Log.info(f"{log_tag} Error: {str(e)}")
+                r = {
                     "platform": platform,
-                    "destination_id": str(dest.get("destination_id") or ""),
-                    "destination_type": dest.get("destination_type"),
-                    "placement": (dest.get("placement") or "feed").lower(),
+                    "destination_id": dest.get("destination_id"),
                     "status": "failed",
-                    "provider_post_id": None,
                     "error": str(e),
                     "raw": None,
                 }
-                results.append(rr)
+
+            results.append(r)
+
+            if r["status"] == "success":
+                any_success = True
+            else:
                 any_failed = True
-                Log.info(f"{log_tag} destination exception: {rr}")
 
-        # Overall status
-        if any_success and not any_failed:
-            overall = "success"
-        elif any_success and any_failed:
-            overall = "partial"
-        else:
-            overall = "failed"
+        final_status = (
+            ScheduledPost.STATUS_PUBLISHED
+            if any_success and not any_failed
+            else ScheduledPost.STATUS_FAILED
+        )
 
-        return jsonify({"success": overall != "failed", "status": overall, "results": results}), HTTP_STATUS_CODES["OK"]
+        ScheduledPost.update_status(
+            post_id,
+            business_id,
+            final_status,
+            provider_results=results,
+            error=None if any_success else "All destinations failed",
+        )
+
+        return jsonify({
+            "success": any_success,
+            "post_id": post_id,
+            "status": final_status,
+            "results": results,
+        }), HTTP_STATUS_CODES["OK"]
