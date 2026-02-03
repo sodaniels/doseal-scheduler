@@ -36,8 +36,14 @@ https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/whatsapp/start
 https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/whatsapp/callback
 
 
-curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/linkedin/start" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MDIxYzFhZGIyYTg3ZTM0ZDcyMzcxIiwiZXhwIjoxNzcwMjU0MDUxLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.MI9xUSL7dFFDrzXFc60YTlTR6BPyZSjgUC4QVhcmaTE"
+https://scheduler.doseal.org/social/api/v1/social/oauth/instagram/callback
+
+
+curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MWVkZjM5OTExZTdkYjY4MjQ5YjU0IiwiZXhwIjoxNzcwMzQxMDM0LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.irFfyvS1yTMP_MqKeDAcnPhWBlRG1JF_RimFn2QggFQ"
+
+  curl -i "https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MWYzNWJiMDg1MTFmODMyYmFkODczIiwiZXhwIjoxNzcwMzQxMjY2LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.Bq_5JREVpb0SyuxKO_-z7ne_pcrQ5PjemdcvwbryGFI"
 
 
 
