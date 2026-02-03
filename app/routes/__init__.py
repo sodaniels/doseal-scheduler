@@ -71,6 +71,7 @@ from ..resources import (
     blp_tiktok_oauth,
     blp_linkedin_oauth,
     blp_youtube_oauth,
+    blp_whatsapp_oauth,
     blp_social_posts,
 )
 
@@ -105,6 +106,7 @@ def register_social_routes(app, api):
         blp_tiktok_oauth,
         blp_linkedin_oauth,
         blp_youtube_oauth,
+        blp_whatsapp_oauth,
         blp_social_posts,
         blp_fb_webhook,
     ]

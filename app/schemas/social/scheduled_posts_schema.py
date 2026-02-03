@@ -89,6 +89,16 @@ PLATFORM_RULES: Dict[str, Dict[str, Any]] = {
         "requires_media": True,
         "placements": {"feed"},
     },
+    
+    # WhatsApp
+    "whatsapp": {
+        "max_text": 4096,              # body text safe limit (templates have smaller limits per component)
+        "supports_link": True,         # links are allowed in body text
+        "media": {"max_items": 1, "types": {"image", "video"}, "video_max_items": 1},
+        "requires_destination_type": {"phone_number"},
+        "requires_media": False,
+        "placements": {"direct"},      # WhatsApp isn't feed/reel/story; use a custom placement
+    },
 }
 
 # ---------------------------------------------------------------------
@@ -342,6 +352,15 @@ class CreateScheduledPostSchema(Schema):
             "yt_channel": "channel",
             "creator": "channel",
         }
+        
+        WHATSAPP_TYPE_ALIASES = {
+            "phone": "phone_number",
+            "number": "phone_number",
+            "phone_number": "phone_number",
+            "sender": "phone_number",
+            "waba": "phone_number",  # still send via phone_number_id
+        }
+
 
         for idx, dest in enumerate(destinations):
             platform = (dest.get("platform") or "").lower().strip()
@@ -369,6 +388,17 @@ class CreateScheduledPostSchema(Schema):
                     dest["destination_type"] = "user"
                 if not placement:
                     dest["placement"] = "feed"
+            
+            # ------------------------------
+            # WHATSAPP NORMALIZATION
+            # ------------------------------
+            if platform == "whatsapp":
+                raw_type = (dest.get("destination_type") or "").lower().strip()
+                dest["destination_type"] = WHATSAPP_TYPE_ALIASES.get(raw_type, raw_type) if raw_type else "phone_number"
+
+                # WhatsApp placement
+                if not dest.get("placement"):
+                    dest["placement"] = "direct"
 
             # ------------------------------
             # ✅ YOUTUBE NORMALIZATION

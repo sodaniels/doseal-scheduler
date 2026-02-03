@@ -16,6 +16,7 @@ from ...services.social.adapters.tiktok_adapter import TikTokAdapter
 from ...services.social.adapters.linkedin_adapter import LinkedInAdapter
 from ...services.social.adapters.threads_adapter import ThreadsAdapter
 from ...services.social.adapters.youtube_adapter import YouTubeAdapter
+from ...services.social.adapters.whatsapp_adapter import WhatsAppAdapter
 from ...utils.logger import Log
 
 from .appctx import run_in_app_context
@@ -1175,6 +1176,157 @@ def _publish_to_youtube(
     r["raw"] = resp
     return r
 
+
+# -----------------------------
+# WhatsApp token fetcher
+# -----------------------------
+def _get_whatsapp_token(post: dict, phone_number_id: str) -> str:
+    acct = SocialAccount.get_destination(
+        post["business_id"],
+        post["user__id"],
+        "whatsapp",
+        phone_number_id,
+    )
+    if not acct or not acct.get("access_token_plain"):
+        raise Exception(f"Missing WhatsApp destination token for phone_number_id={phone_number_id}")
+    return acct["access_token_plain"]
+
+
+def _publish_to_whatsapp(
+    *,
+    post: dict,
+    dest: dict,
+    text: str,
+    link: Optional[str],
+    media: List[dict],
+) -> Dict[str, Any]:
+    r = {
+        "platform": "whatsapp",
+        "destination_id": str(dest.get("destination_id") or ""),  # phone_number_id (sender)
+        "destination_type": dest.get("destination_type") or "phone_number",
+        "placement": "dm",
+        "status": "failed",
+        "provider_post_id": None,
+        "error": None,
+        "raw": None,
+    }
+
+    phone_number_id = r["destination_id"]
+    if not phone_number_id:
+        r["error"] = "Missing destination_id (phone_number_id)"
+        return r
+
+    # recipient number must be provided (E.164 without + usually works: 2335xxxxxxx)
+    to_phone = (dest.get("to") or ((dest.get("meta") or {}).get("to")) or "").strip()
+    if not to_phone:
+        r["error"] = "Missing recipient phone. Provide dest.to or dest.meta.to (E.164)."
+        return r
+
+    # token stored against whatsapp destination (phone_number_id)
+    access_token = _get_whatsapp_token(post, phone_number_id)
+
+    caption = _build_caption(text, link).strip()
+
+    # ---------------------------------------------
+    # 1) TEXT-ONLY MESSAGE
+    # ---------------------------------------------
+    if not media:
+        if not caption:
+            r["error"] = "Empty message body"
+            return r
+
+        resp = WhatsAppAdapter.send_text_message(
+            access_token=access_token,
+            phone_number_id=phone_number_id,
+            to_phone_e164=to_phone,
+            body=caption,
+            preview_url=True,
+        )
+
+        msg_id = None
+        try:
+            msgs = resp.get("messages") or []
+            if msgs and isinstance(msgs, list):
+                msg_id = msgs[0].get("id")
+        except Exception:
+            pass
+
+        r["status"] = "success"
+        r["provider_post_id"] = msg_id
+        r["raw"] = resp
+        return r
+
+    # ---------------------------------------------
+    # 2) MEDIA MESSAGE (image/video/document)
+    #    - WhatsApp supports 1 media per message
+    #    - so we take the first one
+    # ---------------------------------------------
+    first = media[0] or {}
+    asset_type = (first.get("asset_type") or "").lower().strip()
+    url = first.get("url")
+    if not url:
+        raise Exception("WhatsApp media requires media.url")
+
+    # Map your asset_type to WhatsApp message types
+    # If you also store "document" as asset_type, it will work.
+    if asset_type not in ("image", "video", "document"):
+        # If you upload PDFs etc as asset_type="file", treat as document:
+        if asset_type in ("file", "pdf"):
+            asset_type = "document"
+        else:
+            raise Exception("WhatsApp supports media.asset_type in {image, video, document}")
+
+    # download bytes from Cloudinary
+    file_bytes, mime_type = _download_media_bytes(url)
+    if not file_bytes:
+        raise Exception("Downloaded WhatsApp media is empty")
+
+    # choose filename for document
+    filename = first.get("filename") or first.get("public_id") or "file"
+    # simple extension guess
+    if asset_type == "video" and "." not in filename:
+        filename = filename + ".mp4"
+    if asset_type == "image" and "." not in filename:
+        filename = filename + ".jpg"
+
+    # upload to WhatsApp => returns {"id": "<media_id>"}
+    upload_resp = WhatsAppAdapter.upload_media(
+        access_token=access_token,
+        phone_number_id=phone_number_id,
+        file_bytes=file_bytes,
+        mime_type=mime_type or "application/octet-stream",
+        filename=filename,
+    )
+    media_id = upload_resp.get("id")
+    if not media_id:
+        raise Exception(f"WhatsApp upload_media did not return id: {upload_resp}")
+
+    # send media message referencing media_id
+    send_resp = WhatsAppAdapter.send_media_message(
+        access_token=access_token,
+        phone_number_id=phone_number_id,
+        to_phone_e164=to_phone,
+        media_type=asset_type,         # "image"|"video"|"document"
+        media_id=media_id,
+        caption=caption or None,
+        filename=filename if asset_type == "document" else None,
+    )
+
+    msg_id = None
+    try:
+        msgs = send_resp.get("messages") or []
+        if msgs and isinstance(msgs, list):
+            msg_id = msgs[0].get("id")
+    except Exception:
+        pass
+
+    r["status"] = "success"
+    r["provider_post_id"] = msg_id
+    r["raw"] = {"upload": upload_resp, "send": send_resp}
+    return r
+
+
+
 # -----------------------------
 # Main job
 # -----------------------------
@@ -1234,7 +1386,10 @@ def _publish_scheduled_post(post_id: str, business_id: str):
                 
             elif platform == "youtube":
                 r = _publish_to_youtube(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
-
+            
+            elif platform == "whatsapp":
+                r = _publish_to_whatsapp(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+            
             else:
                 r = {
                     "platform": platform,
