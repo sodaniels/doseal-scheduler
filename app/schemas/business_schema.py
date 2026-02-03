@@ -35,7 +35,7 @@ class BusinessSchema(Schema):
     start_date = fields.Str(required=False, validate=validate_date_format)
     image = fields.Raw(required=False, allow_none=True, validate=validate_image)
     business_contact = fields.Str(required=False, validate=validate.Length(min=10, max=15))
-    country = fields.Str(required=True)
+    country = fields.Str(required=False)
     city = fields.Str(required=False)
     state = fields.Str(required=False)
     postcode = fields.Str(required=False)
