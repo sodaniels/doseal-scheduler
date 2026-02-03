@@ -94,6 +94,7 @@ def get_confirm_account():
                         'business_email_verified',
                         True
                     )
+                    Log.info(f"{log_tag} update_account_status: {update_account_status}")
                 except Exception as e:
                     Log.info(f"{log_tag} \t Error updating account status: {str(e)}")
                 

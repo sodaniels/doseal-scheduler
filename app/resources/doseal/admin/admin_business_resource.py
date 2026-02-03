@@ -800,7 +800,7 @@ class ChangePasswordResource(MethodView):
       
 
 # -----------------------INITIATE EMAIL VERIFICAITON-----------------------------------------
-@blp_business_auth.route("/initiiate-email-verification", methods=["POST"])
+@blp_business_auth.route("/initiate-email-verification", methods=["POST"])
 class BusinessRegistrationInitiateEmailVerificationResource(MethodView):
     # PATCH Agent (Verify agent OTP)
     @profile_retrieval_limiter("change_password")
@@ -913,8 +913,7 @@ class BusinessRegistrationInitiateEmailVerificationResource(MethodView):
                 Log.info(f"{log_tag} Business email has already been verified.")
                 return prepared_response(False, "BAD_REQUEST", f" Business email has already been verified")
             
-            
-            
+
             fullname = business.get("fullname")
             email = business.get("email")
             return_url = decrypt_data(business.get("return_url"))

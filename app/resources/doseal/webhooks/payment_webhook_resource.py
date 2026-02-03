@@ -6,6 +6,7 @@ from flask_smorest import Blueprint
 
 from ....services.pos.subscription_service import SubscriptionService
 from ....constants.payment_methods import PAYMENT_METHODS
+from ....models.business_model import Business
 from ....utils.logger import Log
 from ....utils.json_response import prepared_response
 from ....utils.payments.mpesa_utils import verify_mpesa_signature
@@ -27,6 +28,7 @@ class HubtelWebhook(MethodView):
         
         client_reference = None
         log_tag = "[HubtelWebhook][post]"
+        client_ip = request.remote_addr
         
         try:
             # Get raw request data
@@ -154,6 +156,21 @@ class HubtelWebhook(MethodView):
                     
                     if success:
                         Log.info(f"{log_tag} Subscription created: {subscription_id}")
+                        
+                        #update subscription status
+                        
+                        try:
+                            update_account_status_package = Business.update_account_status_by_business_id(
+                                business_id,
+                                client_ip,
+                                'subscribed_to_package',
+                                True
+                            )
+                            Log.info(f"{log_tag} update_account_status_package: {update_account_status_package}")
+                        except Exception as e:
+                            Log.info(f"{log_tag} \t Error updating account status: {str(e)}")
+                        
+                        
                         return {
                             "code": 200,
                             "message": "Callback processed successfully",
