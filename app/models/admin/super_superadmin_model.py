@@ -2,6 +2,7 @@ import uuid
 import bcrypt
 import json
 
+from typing import Any, Dict, List, Optional
 from bson.objectid import ObjectId
 from datetime import datetime
 from ...extensions.db import db
@@ -12,19 +13,60 @@ from ..user_model import User
 from ...utils.generators import generate_coupons
 from ...constants.service_code import (
     HTTP_STATUS_CODES, PERMISSION_FIELDS_FOR_ADMINS,
-    PERMISSION_FIELDS_FOR_ADMIN_ROLE
 )
+from ...constants.social_role_permissions import PERMISSION_FIELDS_FOR_ADMIN_ROLE
 
-def _zero_permission_for(field: str) -> list:
+def _zero_permissions_for_module(module_name: str) -> Dict[str, str]:
     """
-    Build a zero-permission entry for a permission field based on
-    PERMISSION_FIELDS_FOR_ADMIN_ROLE[field] actions.
+    Dynamic "zero permission" generator based on PERMISSION_FIELDS_FOR_ADMIN_ROLE.
+    Example:
+      scheduled_posts -> {"read":"0","create":"0","update":"0","delete":"0","cancel":"0"}
     """
-    actions = PERMISSION_FIELDS_FOR_ADMIN_ROLE.get(field, [])
+    actions = PERMISSION_FIELDS_FOR_ADMIN_ROLE.get(module_name) or []
+    return {a: "0" for a in actions}
+
+def _decrypt_permissions_field(
+    *,
+    role_doc: Dict[str, Any],
+    module_name: str,
+) -> Dict[str, str]:
+    """
+    Supports BOTH storage formats:
+      1) dict: {"read": "<enc>", "create": "<enc>"}
+      2) list-of-dicts: [{"read": "<enc>", "create": "<enc>"}]
+    Returns:
+      {"read":"0|1", ...} with keys exactly as PERMISSION_FIELDS_FOR_ADMIN_ROLE[module_name]
+    """
+    actions = PERMISSION_FIELDS_FOR_ADMIN_ROLE.get(module_name) or []
+    raw = role_doc.get(module_name)
+
     if not actions:
-        # safe fallback if someone forgot to register actions for a field
-        return [{"read": "0"}]
-    return [{a: "0" for a in actions}]
+        return {}
+
+    # 1) preferred: dict
+    if isinstance(raw, dict):
+        out: Dict[str, str] = {}
+        for action in actions:
+            enc_val = raw.get(action)
+            out[action] = decrypt_data(enc_val) if enc_val else "0"
+        return out
+
+    # 2) backward compat: list-of-dicts
+    if isinstance(raw, list):
+        merged: Dict[str, Any] = {}
+        for item in raw:
+            if isinstance(item, dict):
+                merged.update(item)
+
+        out: Dict[str, str] = {}
+        for action in actions:
+            enc_val = merged.get(action)
+            out[action] = decrypt_data(enc_val) if enc_val else "0"
+        return out
+
+    # not stored
+    return _zero_permissions_for_module(module_name)
+
 
 
 class Role(BaseModel):
@@ -685,49 +727,62 @@ class Expense(BaseModel):
 #-------------------------ADMIN MODEL--------------------------------------
 class Admin(BaseModel):
     """
-    An Admin represents a user in the system with different roles such as Cashier, Manager, or Admin.
+    Admin system user (Cashier/Manager/Admin), business-scoped.
+
+    - Encrypts PII fields
+    - Hashes phone/email for lookup
+    - Attaches role payload with permissions derived from PERMISSION_FIELDS_FOR_ADMIN_ROLE (non-uniform)
     """
 
     collection_name = "admins"
 
     def __init__(
         self,
-        business_id,
-        role,
-        user_id,
-        password,
-        fullname=None,
-        phone=None,
-        email=None,
-        image=None,
-        file_path=None,
-        status="Active",
-        date_of_birth=None,
-        gender=None,
-        alternative_phone=None,
-        id_type=None,
-        id_number=None,
-        current_address=None,
-        created_by=None,
+        business_id: str,
+        role: Optional[str],
+        user_id: Optional[str],
+        password: str,
+        fullname: Optional[str] = None,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+        image: Optional[str] = None,
+        file_path: Optional[str] = None,
+        status: str = "Active",
+        date_of_birth: Optional[str] = None,
+        gender: Optional[str] = None,
+        alternative_phone: Optional[str] = None,
+        id_type: Optional[str] = None,
+        id_number: Optional[str] = None,
+        current_address: Optional[str] = None,
+        created_by: Optional[str] = None,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+        **kwargs,
     ):
+        # Normalize foreign keys
+        role_obj = ObjectId(role) if role else None
+        created_by_obj = ObjectId(created_by) if created_by else None
+
         super().__init__(
             business_id=business_id,
             user_id=user_id,
-            role=role,
+            role=role_obj,
             phone=phone,
             email=email,
             image=image,
             file_path=file_path,
-            password=password,
+            password=password,  # will be overwritten below with hash
             status=status,
-            created_by=created_by,
+            created_by=created_by_obj,
+            created_at=created_at,
+            updated_at=updated_at,
         )
 
         # Foreign keys
-        self.role = ObjectId(role) if role else None
-        self.created_by = ObjectId(created_by) if created_by else None
+        self.role = role_obj
+        self.created_by = created_by_obj
 
-        # Encrypted fields
+        # Encrypted fields + hashes
         self.fullname = encrypt_data(fullname) if fullname else None
 
         self.phone = encrypt_data(phone) if phone else None
@@ -739,7 +794,7 @@ class Admin(BaseModel):
         self.image = encrypt_data(image) if image else None
         self.file_path = encrypt_data(file_path) if file_path else None
 
-        self.status = encrypt_data(status)
+        self.status = encrypt_data(status) if status is not None else None
 
         self.date_of_birth = encrypt_data(date_of_birth) if date_of_birth else None
         self.gender = encrypt_data(gender) if gender else None
@@ -748,18 +803,18 @@ class Admin(BaseModel):
         self.id_number = encrypt_data(id_number) if id_number else None
         self.current_address = encrypt_data(current_address) if current_address else None
 
-        # Password hashing (only if not already a bcrypt hash)
+        # Password hashing (only if not already bcrypt)
         self.password = (
             bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            if not password.startswith("$2b$")
+            if password and not str(password).startswith("$2b$")
             else password
         )
 
-        self.created_at = datetime.now()
-        self.updated_at = datetime.now()
+        self.created_at = created_at or datetime.now()
+        self.updated_at = updated_at or datetime.now()
         self.last_logged_in = None
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
         user_dict = super().to_dict()
         user_dict.update(
             {
@@ -781,6 +836,7 @@ class Admin(BaseModel):
                 "updated_at": self.updated_at,
                 "phone_hashed": self.phone_hashed,
                 "hashed_email": self.hashed_email,
+                "created_by": self.created_by,
             }
         )
         return user_dict
@@ -789,10 +845,9 @@ class Admin(BaseModel):
     # GET BY ID (business-scoped, with role + permissions)
     # -------------------------------------------------
     @classmethod
-    def get_by_id(cls, business_id, admin_id):
+    def get_by_id(cls, business_id: str, admin_id: str, is_logging_in=False) -> Optional[Dict[str, Any]]:
         """
-        Retrieve a system user by _id and business_id (business-scoped),
-        and attach the resolved role + permissions.
+        Retrieve admin by _id + business_id and attach role payload + permissions.
         """
         try:
             business_id_obj = ObjectId(business_id)
@@ -800,52 +855,54 @@ class Admin(BaseModel):
         except Exception:
             return None
 
-        data = super().get_by_id(admin_id_obj, business_id_obj)
+        data = super().get_by_id(admin_id_obj, business_id_obj, is_logging_in)
         if not data:
             return None
 
-        # Normalise core IDs
+        # Normalize IDs
         data["_id"] = str(data["_id"])
         data["business_id"] = str(data["business_id"])
-        if "admin_id" in data:
-            data["admin_id"] = str(data["admin_id"])
-        if "user_id" in data:
+        if data.get("user_id") is not None:
             data["user_id"] = str(data["user_id"])
+        if data.get("created_by") is not None and isinstance(data.get("created_by"), ObjectId):
+            data["created_by"] = str(data["created_by"])
+        if data.get("role") is not None and isinstance(data.get("role"), ObjectId):
+            data["role"] = data["role"]  # keep ObjectId for lookup, stringify later in response
 
         # ---------------------- ROLE + PERMISSIONS ---------------------- #
-        role_collection = db.get_collection("roles")
-        role_id = data.get("role")
-
-        ZERO_PERMISSION = [{"view": "0", "add": "0", "edit": "0", "delete": "0"}]
         role_payload = None
-
+        role_id = data.get("role")
         if role_id:
             try:
-                role_obj_id = role_id if isinstance(role_id, ObjectId) else ObjectId(role_id)
-                role_doc = role_collection.find_one({"_id": role_obj_id})
+                role_collection = db.get_collection("roles")
+                role_obj_id = role_id if isinstance(role_id, ObjectId) else ObjectId(str(role_id))
+
+                # Prefer business-scoped roles if your DB stores business_id on roles
+                role_doc = role_collection.find_one({"_id": role_obj_id, "business_id": business_id_obj})
+                if not role_doc:
+                    # fallback if roles are not business-scoped
+                    role_doc = role_collection.find_one({"_id": role_obj_id})
+
                 if role_doc:
-                    permissions = {}
-                    for field in PERMISSION_FIELDS_FOR_ADMIN_ROLE:
-                        encrypted_permissions = role_doc.get(field)
-                        if encrypted_permissions:
-                            permissions[field] = [
-                                {k: decrypt_data(v) for k, v in item.items()}
-                                for item in encrypted_permissions
-                            ]
-                        else:
-                            permissions[field] = ZERO_PERMISSION
+                    permissions: Dict[str, Dict[str, str]] = {}
+                    for module_name in PERMISSION_FIELDS_FOR_ADMIN_ROLE.keys():
+                        permissions[module_name] = _decrypt_permissions_field(
+                            role_doc=role_doc,
+                            module_name=module_name,
+                        )
 
                     role_payload = {
+                        "role_id": str(role_doc["_id"]),
                         "name": decrypt_data(role_doc.get("name")) if role_doc.get("name") else None,
                         "status": decrypt_data(role_doc.get("status")) if role_doc.get("status") else None,
-                        "role_id": str(role_doc["_id"]),
                         "permissions": permissions,
                     }
-            except Exception:
+            except Exception as e:
+                Log.info(f"[Admin.get_by_id] role resolve failed: {e}")
                 role_payload = None
 
-        # ---------------------- DECRYPT USER FIELDS ---------------------- #
-        fields = [
+        # ---------------------- DECRYPT ADMIN FIELDS ---------------------- #
+        decrypt_fields = [
             "fullname",
             "phone",
             "email",
@@ -860,16 +917,18 @@ class Admin(BaseModel):
             "current_address",
         ]
 
-        decrypted = {}
-        for field in fields:
-            decrypted[field] = decrypt_data(data.get(field)) if data.get(field) else None
+        decrypted: Dict[str, Any] = {}
+        for f in decrypt_fields:
+            decrypted[f] = decrypt_data(data.get(f)) if data.get(f) else None
 
         return {
             "system_user_id": data["_id"],
             "business_id": data["business_id"],
-            "admin_id": data.get("admin_id"),
-            "user_id": data.get("user_id"),
+            "user_id": str(data.get("user_id")) if data.get("user_id") is not None else None,
+            "created_by": str(data.get("created_by")) if data.get("created_by") is not None else None,
+
             "role": role_payload,
+
             "fullname": decrypted["fullname"],
             "phone": decrypted["phone"],
             "email": decrypted["email"],
@@ -882,18 +941,20 @@ class Admin(BaseModel):
             "id_type": decrypted["id_type"],
             "id_number": decrypted["id_number"],
             "current_address": decrypted["current_address"],
+
             "created_at": data.get("created_at"),
             "updated_at": data.get("updated_at"),
             "last_logged_in": data.get("last_logged_in"),
         }
 
     # -------------------------------------------------
-    # LIST SYSTEM USERS BY BUSINESS (with role + permissions)
+    # LIST ADMINS BY BUSINESS (role + permissions)
     # -------------------------------------------------
     @classmethod
-    def get_system_users_by_business(cls, business_id):
+    def get_system_users_by_business(cls, business_id: str) -> List[Dict[str, Any]]:
         """
-        Retrieve all system users for a business along with their role + permissions.
+        Retrieve all admins for a business along with role + permissions.
+        Only admins with created_by present are included (matches your existing behavior).
         """
         try:
             business_id_obj = ObjectId(business_id)
@@ -903,64 +964,50 @@ class Admin(BaseModel):
         collection = db.get_collection(cls.collection_name)
         role_collection = db.get_collection("roles")
 
-        users_cursor = collection.find(
+        cursor = collection.find(
             {
                 "business_id": business_id_obj,
                 "created_by": {"$type": "objectId"},
             }
         )
 
-        result = []
+        out: List[Dict[str, Any]] = []
 
-        ZERO_PERMISSION = [{"view": "0", "add": "0", "edit": "0", "delete": "0"}]
+        for data in cursor:
+            # Normalize IDs
+            system_user_id = str(data.get("_id"))
+            user_id = str(data.get("user_id")) if data.get("user_id") is not None else None
+            created_by = str(data.get("created_by")) if data.get("created_by") is not None else None
 
-        for data in users_cursor:
-            # Normalise IDs
-            data["_id"] = str(data["_id"])
-            data["business_id"] = str(data["business_id"])
-            if "admin_id" in data:
-                data["admin_id"] = str(data["admin_id"])
-            if "user_id" in data:
-                data["user_id"] = str(data["user_id"])
-
-            role_id = data.get("role")
+            # Role + permissions
             role_payload = None
-
-            # ---------------------- ROLE + PERMISSIONS ---------------------- #
+            role_id = data.get("role")
             if role_id:
                 try:
-                    role_obj_id = role_id if isinstance(role_id, ObjectId) else ObjectId(role_id)
-                    role_doc = role_collection.find_one({"_id": role_obj_id})
+                    role_obj_id = role_id if isinstance(role_id, ObjectId) else ObjectId(str(role_id))
+                    role_doc = role_collection.find_one({"_id": role_obj_id, "business_id": business_id_obj})
+                    if not role_doc:
+                        role_doc = role_collection.find_one({"_id": role_obj_id})
+
                     if role_doc:
-                        permissions = {}
-                        for field in PERMISSION_FIELDS_FOR_ADMIN_ROLE:
-                            encrypted_permissions = role_doc.get(field)
-                            if encrypted_permissions:
-                                permissions[field] = [
-                                    {k: decrypt_data(v) for k, v in item.items()}
-                                    for item in encrypted_permissions
-                                ]
-                            else:
-                                permissions[field] = ZERO_PERMISSION
+                        permissions: Dict[str, Dict[str, str]] = {}
+                        for module_name in PERMISSION_FIELDS_FOR_ADMIN_ROLE.keys():
+                            permissions[module_name] = _decrypt_permissions_field(
+                                role_doc=role_doc,
+                                module_name=module_name,
+                            )
 
                         role_payload = {
+                            "role_id": str(role_doc["_id"]),
                             "name": decrypt_data(role_doc.get("name")) if role_doc.get("name") else None,
                             "status": decrypt_data(role_doc.get("status")) if role_doc.get("status") else None,
-                            "role_id": str(role_doc["_id"]),
                             "permissions": permissions,
                         }
-                except Exception:
+                except Exception as e:
+                    Log.info(f"[Admin.get_system_users_by_business] role resolve failed: {e}")
                     role_payload = None
 
-            # ---------------------- DECRYPT PERSONAL FIELDS ---------------------- #
-            user = {
-                "system_user_id": data["_id"],
-                "business_id": data["business_id"],
-                "admin_id": data.get("admin_id"),
-                "user_id": data.get("user_id"),
-                "role": role_payload,
-            }
-
+            # Decrypt personal fields
             fields = [
                 "fullname",
                 "phone",
@@ -975,33 +1022,36 @@ class Admin(BaseModel):
                 "id_number",
                 "current_address",
             ]
-            for field in fields:
-                user[field] = decrypt_data(data.get(field)) if data.get(field) else None
 
-            user["created_at"] = data.get("created_at")
-            user["updated_at"] = data.get("updated_at")
-            user["last_logged_in"] = data.get("last_logged_in")
+            user: Dict[str, Any] = {
+                "system_user_id": system_user_id,
+                "business_id": str(data.get("business_id")),
+                "user_id": user_id,
+                "created_by": created_by,
+                "role": role_payload,
+                "created_at": data.get("created_at"),
+                "updated_at": data.get("updated_at"),
+                "last_logged_in": data.get("last_logged_in"),
+            }
 
-            result.append(user)
+            for f in fields:
+                user[f] = decrypt_data(data.get(f)) if data.get(f) else None
 
-        return result
+            out.append(user)
+
+        return out
 
     # -------------------------------------------------
     # LOOKUP BY PHONE (no role enrichment)
     # -------------------------------------------------
     @classmethod
-    def get_by_phone_number(cls, phone):
+    def get_by_phone_number(cls, phone: str) -> Optional[Dict[str, Any]]:
         phone_hashed = hash_data(phone)
 
         collection = db.get_collection(cls.collection_name)
         data = collection.find_one({"phone_hashed": phone_hashed})
         if not data:
             return None
-
-        data["system_user_id"] = str(data["_id"])
-        data["business_id"] = str(data["business_id"])
-        if "role" in data:
-            data["role"] = str(data["role"])
 
         fields = [
             "fullname",
@@ -1018,14 +1068,14 @@ class Admin(BaseModel):
             "current_address",
         ]
 
-        decrypted = {}
-        for field in fields:
-            decrypted[field] = decrypt_data(data.get(field)) if data.get(field) else None
+        decrypted: Dict[str, Any] = {}
+        for f in fields:
+            decrypted[f] = decrypt_data(data.get(f)) if data.get(f) else None
 
         return {
-            "system_user_id": str(data["_id"]),
-            "business_id": data["business_id"],
-            "role": data.get("role"),
+            "system_user_id": str(data.get("_id")),
+            "business_id": str(data.get("business_id")),
+            "role": str(data.get("role")) if data.get("role") else None,
             "fullname": decrypted["fullname"],
             "phone": decrypted["phone"],
             "email": decrypted["email"],
@@ -1044,7 +1094,7 @@ class Admin(BaseModel):
         }
 
     @classmethod
-    def get_by_phone_number_and_business_id(cls, phone, business_id):
+    def get_by_phone_number_and_business_id(cls, phone: str, business_id: str) -> Optional[Dict[str, Any]]:
         try:
             business_id_obj = ObjectId(business_id)
         except Exception:
@@ -1053,19 +1103,9 @@ class Admin(BaseModel):
         phone_hashed = hash_data(phone)
 
         collection = db.get_collection(cls.collection_name)
-        data = collection.find_one(
-            {
-                "phone_hashed": phone_hashed,
-                "business_id": business_id_obj,
-            }
-        )
+        data = collection.find_one({"phone_hashed": phone_hashed, "business_id": business_id_obj})
         if not data:
             return None
-
-        data["system_user_id"] = str(data["_id"])
-        data["business_id"] = str(data["business_id"])
-        if "role" in data:
-            data["role"] = str(data["role"])
 
         fields = [
             "fullname",
@@ -1082,14 +1122,14 @@ class Admin(BaseModel):
             "current_address",
         ]
 
-        decrypted = {}
-        for field in fields:
-            decrypted[field] = decrypt_data(data.get(field)) if data.get(field) else None
+        decrypted: Dict[str, Any] = {}
+        for f in fields:
+            decrypted[f] = decrypt_data(data.get(f)) if data.get(f) else None
 
         return {
-            "system_user_id": str(data["_id"]),
-            "business_id": data["business_id"],
-            "role": data.get("role"),
+            "system_user_id": str(data.get("_id")),
+            "business_id": str(data.get("business_id")),
+            "role": str(data.get("role")) if data.get("role") else None,
             "fullname": decrypted["fullname"],
             "phone": decrypted["phone"],
             "email": decrypted["email"],
@@ -1111,7 +1151,9 @@ class Admin(BaseModel):
     # UPDATE (with encryption + hashing)
     # -------------------------------------------------
     @classmethod
-    def update(cls, system_user_id, **updates):
+    def update(cls, system_user_id: str, **updates):
+        updates["updated_at"] = datetime.now()
+
         encrypt_fields = [
             "fullname",
             "phone",
@@ -1147,7 +1189,7 @@ class Admin(BaseModel):
             pwd = updates["password"]
             updates["password"] = (
                 bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-                if not pwd.startswith("$2b$")
+                if not str(pwd).startswith("$2b$")
                 else pwd
             )
 
@@ -1157,9 +1199,9 @@ class Admin(BaseModel):
     # DELETE (business-scoped)
     # -------------------------------------------------
     @classmethod
-    def delete(cls, system_user_id, business_id):
+    def delete(cls, system_user_id: str, business_id: str) -> bool:
         """
-        Delete a system user by _id and business_id (business-scoped).
+        Delete admin by _id and business_id (business-scoped), then cascade delete linked User.
         """
         try:
             system_user_id_obj = ObjectId(system_user_id)
@@ -1168,14 +1210,14 @@ class Admin(BaseModel):
             return False
 
         ok = super().delete(system_user_id_obj, business_id_obj)
-        
         if not ok:
             return False
-        
+
         # Cascade delete User
         try:
             User.delete_by_system_user(system_user_id, business_id)
         except Exception as e:
-            Log.error(f"[super_superadmin_model.py][delete] Failed to delete linked User for system_user_id={system_user_id}: {e}")
+            Log.error(
+                f"[Admin.delete] Failed to delete linked User for system_user_id={system_user_id}: {e}"
+            )
         return True
-

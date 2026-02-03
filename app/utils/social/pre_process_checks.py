@@ -6,6 +6,7 @@ from ...models.subscriber_model import Subscriber
 from ...models.people_model import Agent
 from ...models.admin.super_superadmin_model import Admin
 from ...models.business_model import Business
+from ...models.base_model import BaseModel
 
 from ..logger import Log # import logging
 from ...constants.service_code import (
@@ -31,7 +32,7 @@ from ..agent_balance_keys import (
 )
 
 
-class PreProcessCheck:
+class PreProcessCheck(BaseModel):
     
     def __init__(self, business_id, account_type, admin_id):
         self.admin_id = admin_id
@@ -96,8 +97,9 @@ class PreProcessCheck:
             try:
                 Log.info(f"{log_tag} checking if admin exist before proceeding to initiate transaction")
                 admin = Admin.get_by_id(
+                    admin_id=self.admin_id,
                     business_id=self.business_id, 
-                    admin_id=self.admin_id
+                    is_logging_in=True
                 )
                 if not admin:
                     Log.info(f"{log_tag} Admin with ID: {self.admin_id} does not exist")
@@ -105,48 +107,49 @@ class PreProcessCheck:
             except Exception as e:
                 return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred: {e}")
             
+            
         try:
-            # agent = Agent.get_by_id(self.agent_id)
-            # errors = []
-            # required_fields = []
+            agent = Agent.get_by_id(self.agent_id)
+            errors = []
+            required_fields = []
             
-            # # Check if agent exists
-            # if not agent:
-            #     Log.info(f"{log_tag} Agent does not exist.")
-            #     return prepared_response(False, "NOT_FOUND", "Agent does not exist.")
+            # Check if agent exists
+            if not agent:
+                Log.info(f"{log_tag} Agent does not exist.")
+                return prepared_response(False, "NOT_FOUND", "Agent does not exist.")
             
-            # # Get account_status
-            # account_status = agent.get("account_status")
+            # Get account_status
+            account_status = agent.get("account_status")
             
-            # # Check if account_status is None
-            # if account_status is None:
-            #     message = "The account registration is not complete!"
-            #     Log.info(f"{log_tag} {message}")
-            #     return prepared_response(False, "BAD_REQUEST", message)
+            # Check if account_status is None
+            if account_status is None:
+                message = "The account registration is not complete!"
+                Log.info(f"{log_tag} {message}")
+                return prepared_response(False, "BAD_REQUEST", message)
             
-            # # Perform all validation checks
-            # # Check if all the required information needed for onboarding was provided during registration
-            # for check in AGENT_PRE_TRANSACTION_VALIDATION_CHECKS:
-            #     status_item = next(
-            #         (value for item in account_status for key, value in item.items() if key == check['key']),
-            #         None
-            #     )
+            # Perform all validation checks
+            # Check if all the required information needed for onboarding was provided during registration
+            for check in AGENT_PRE_TRANSACTION_VALIDATION_CHECKS:
+                status_item = next(
+                    (value for item in account_status for key, value in item.items() if key == check['key']),
+                    None
+                )
                 
-            #     if not status_item or not status_item.get("status"):
-            #         errors.append(check['message'])
-            #         required_fields.append(check['key'])
-            #         Log.info(f"{log_tag} {check['message']}")
+                if not status_item or not status_item.get("status"):
+                    errors.append(check['message'])
+                    required_fields.append(check['key'])
+                    Log.info(f"{log_tag} {check['message']}")
             
-            # # If there are validation errors, return them all
-            # if errors:
-            #     return prepared_response(
-            #         False, 
-            #         "BAD_REQUEST", 
-            #         "Validation error(s) found. Please address all issues.", 
-            #         errors, 
-            #         required_fields, 
-            #         self.agent_id
-            #     )
+            # If there are validation errors, return them all
+            if errors:
+                return prepared_response(
+                    False, 
+                    "BAD_REQUEST", 
+                    "Validation error(s) found. Please address all issues.", 
+                    errors, 
+                    required_fields, 
+                    self.agent_id
+                )
                 
             # All pre-transaction checks passed. proceeding to initiate transaction.
             Log.info(f"{log_tag} All pre-transaction checks passed. proceeding to initiate transaction.")

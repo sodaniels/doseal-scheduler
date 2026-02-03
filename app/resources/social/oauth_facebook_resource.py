@@ -47,13 +47,14 @@ class FacebookOauthStartResource(MethodView):
         client_ip = request.remote_addr
         log_tag = f"[oauth_meta.py][FacebookOauthStartResource][get][{client_ip}]"
         user_info = g.get("current_user", {}) or {}
-        admin_id = str(user_info.get("_id"))
+        admin_id = str(user_info.get("admin_id"))
         business_id = str(user_info.get("business_id"))
+        account_type = user_info.get("account_type")
         
         #####################PRE TRANSACTION CHECKS#########################
         
         # 1. check pre transaction requirements for agents
-        pre_check = PreProcessCheck(admin_id=admin_id, business_id=business_id)
+        pre_check = PreProcessCheck(business_id=business_id, account_type=account_type, admin_id=admin_id, )
         initial_check_result = pre_check.initial_processs_checks()
         
         if initial_check_result is not None:
