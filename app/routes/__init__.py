@@ -73,6 +73,7 @@ from ..resources import (
     blp_youtube_oauth,
     blp_whatsapp_oauth,
     blp_social_posts,
+    blp_send_now,
 )
 
 
@@ -109,6 +110,7 @@ def register_social_routes(app, api):
         blp_whatsapp_oauth,
         blp_social_posts,
         blp_fb_webhook,
+        blp_send_now,
     ]
 
     for blueprint in blueprints:
