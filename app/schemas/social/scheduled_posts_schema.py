@@ -66,14 +66,18 @@ PLATFORM_RULES: Dict[str, Dict[str, Any]] = {
         "placements": {"feed"},
     },
 
-    # YouTube: video-first (upload/publish video)
+    # YouTube: upload a video to a channel
     "youtube": {
-        "max_text": 5000,  # treat as description
-        "supports_link": True,
-        "media": {"max_items": 1, "types": {"video"}, "video_max_items": 1},
+        "max_text": 5000,  # description (you can still enforce higher/lower later)
+        "supports_link": False,  # don't treat link as a first-class field (put URLs inside text/description)
+        "media": {
+            "max_items": 1,
+            "types": {"video"},
+            "video_max_items": 1,
+        },
         "requires_destination_type": {"channel"},
         "requires_media": True,
-        "placements": {"feed"},
+        "placements": {"video"},
     },
 
     # TikTok: video-first
@@ -175,11 +179,7 @@ class DestinationSchema(Schema):
     destination_name = fields.Str(required=False, allow_none=True)
     channel_id = fields.Str(required=False, allow_none=True)
 
-    placement = fields.Str(
-        required=False,
-        load_default="feed",
-        validate=validate.OneOf(["feed", "reel", "story"]),
-    )
+    placement = fields.Str(required=False, allow_none=True)
 
     @pre_load
     def normalize(self, in_data, **kwargs):
