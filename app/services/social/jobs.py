@@ -1216,7 +1216,7 @@ def _publish_to_whatsapp(
         r["error"] = "Missing destination_id (phone_number_id)"
         return r
 
-    # recipient number must be provided (E.164 without + usually works: 2335xxxxxxx)
+    # recipient number must be provided (E.164; usually digits-only works)
     to_phone = (dest.get("to") or ((dest.get("meta") or {}).get("to")) or "").strip()
     if not to_phone:
         r["error"] = "Missing recipient phone. Provide dest.to or dest.meta.to (E.164)."
@@ -1246,8 +1246,8 @@ def _publish_to_whatsapp(
         msg_id = None
         try:
             msgs = resp.get("messages") or []
-            if msgs and isinstance(msgs, list):
-                msg_id = msgs[0].get("id")
+            if isinstance(msgs, list) and msgs:
+                msg_id = (msgs[0] or {}).get("id")
         except Exception:
             pass
 
@@ -1258,38 +1258,35 @@ def _publish_to_whatsapp(
 
     # ---------------------------------------------
     # 2) MEDIA MESSAGE (image/video/document)
-    #    - WhatsApp supports 1 media per message
-    #    - so we take the first one
+    #    WhatsApp supports 1 media per message
     # ---------------------------------------------
     first = media[0] or {}
     asset_type = (first.get("asset_type") or "").lower().strip()
-    url = first.get("url")
+    url = (first.get("url") or "").strip()
     if not url:
         raise Exception("WhatsApp media requires media.url")
 
-    # Map your asset_type to WhatsApp message types
-    # If you also store "document" as asset_type, it will work.
+    # Map to WhatsApp message types
     if asset_type not in ("image", "video", "document"):
-        # If you upload PDFs etc as asset_type="file", treat as document:
         if asset_type in ("file", "pdf"):
             asset_type = "document"
         else:
             raise Exception("WhatsApp supports media.asset_type in {image, video, document}")
 
-    # download bytes from Cloudinary
     file_bytes, mime_type = _download_media_bytes(url)
     if not file_bytes:
         raise Exception("Downloaded WhatsApp media is empty")
 
-    # choose filename for document
-    filename = first.get("filename") or first.get("public_id") or "file"
-    # simple extension guess
+    filename = (first.get("filename") or first.get("public_id") or "file").strip()
     if asset_type == "video" and "." not in filename:
-        filename = filename + ".mp4"
+        filename += ".mp4"
     if asset_type == "image" and "." not in filename:
-        filename = filename + ".jpg"
+        filename += ".jpg"
+    if asset_type == "document" and "." not in filename and mime_type:
+        # minimal extension guess
+        if "pdf" in mime_type:
+            filename += ".pdf"
 
-    # upload to WhatsApp => returns {"id": "<media_id>"}
     upload_resp = WhatsAppAdapter.upload_media(
         access_token=access_token,
         phone_number_id=phone_number_id,
@@ -1297,16 +1294,16 @@ def _publish_to_whatsapp(
         mime_type=mime_type or "application/octet-stream",
         filename=filename,
     )
+
     media_id = upload_resp.get("id")
     if not media_id:
         raise Exception(f"WhatsApp upload_media did not return id: {upload_resp}")
 
-    # send media message referencing media_id
     send_resp = WhatsAppAdapter.send_media_message(
         access_token=access_token,
         phone_number_id=phone_number_id,
         to_phone_e164=to_phone,
-        media_type=asset_type,         # "image"|"video"|"document"
+        media_type=asset_type,
         media_id=media_id,
         caption=caption or None,
         filename=filename if asset_type == "document" else None,
@@ -1315,8 +1312,8 @@ def _publish_to_whatsapp(
     msg_id = None
     try:
         msgs = send_resp.get("messages") or []
-        if msgs and isinstance(msgs, list):
-            msg_id = msgs[0].get("id")
+        if isinstance(msgs, list) and msgs:
+            msg_id = (msgs[0] or {}).get("id")
     except Exception:
         pass
 
@@ -1324,7 +1321,6 @@ def _publish_to_whatsapp(
     r["provider_post_id"] = msg_id
     r["raw"] = {"upload": upload_resp, "send": send_resp}
     return r
-
 
 
 # -----------------------------
