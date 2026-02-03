@@ -71,6 +71,7 @@ from .social.oauth_youtube_resource import blp_youtube_oauth
 from .social.oauth_youtube_resource import blp_youtube_oauth
 from .social.oauth_whatsapp_resource import blp_whatsapp_oauth
 from .social.send_now_resource import blp_send_now
+from .social.oauth_pinterest_resource import blp_pinterest_oauth
 
 
 __all__ = [
@@ -96,6 +97,7 @@ __all__ = [
     "blp_youtube_oauth",
     "blp_whatsapp_oauth",
     "blp_send_now",
+    "blp_pinterest_oauth",
     #-------------------
     #ADMIN ROUTES
     #-------------------

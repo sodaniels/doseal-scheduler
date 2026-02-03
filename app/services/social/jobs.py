@@ -17,6 +17,7 @@ from ...services.social.adapters.linkedin_adapter import LinkedInAdapter
 from ...services.social.adapters.threads_adapter import ThreadsAdapter
 from ...services.social.adapters.youtube_adapter import YouTubeAdapter
 from ...services.social.adapters.whatsapp_adapter import WhatsAppAdapter
+from ...services.social.adapters.pinterest_adapter import PinterestAdapter
 from ...utils.logger import Log
 
 from .appctx import run_in_app_context
@@ -1324,6 +1325,168 @@ def _publish_to_whatsapp(
 
 
 # -----------------------------
+# Pinterest publisher
+# -----------------------------
+def _get_pinterest_tokens(post: dict, board_id: str) -> Dict[str, Any]:
+    acct = SocialAccount.get_destination(
+        post["business_id"],
+        post["user__id"],
+        "pinterest",
+        board_id,
+    )
+    if not acct:
+        raise Exception(f"Missing pinterest destination for destination_id={board_id}")
+
+    access_token = acct.get("access_token_plain")
+    refresh_token = acct.get("refresh_token_plain")
+
+    if not access_token:
+        raise Exception("Missing Pinterest access_token (reconnect Pinterest).")
+
+    return {"access_token": access_token, "refresh_token": refresh_token, "_acct": acct}
+
+
+def _is_pinterest_token_invalid(err: Exception | str) -> bool:
+    s = str(err).lower()
+    return "invalid_token" in s or "unauthorized" in s or "401" in s
+
+
+def _refresh_pinterest_access_token_or_raise(*, post: dict, destination_id: str, tokens: Dict[str, Any], log_tag: str) -> str:
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        raise Exception("Pinterest access token expired/invalid and refresh_token missing (reconnect Pinterest).")
+
+    client_id = os.getenv("PINTEREST_CLIENT_ID")
+    client_secret = os.getenv("PINTEREST_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise Exception("Missing PINTEREST_CLIENT_ID / PINTEREST_CLIENT_SECRET for refresh flow")
+
+    data = PinterestAdapter.refresh_access_token(
+        client_id=client_id,
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+        log_tag=log_tag,
+    )
+
+    new_access = data.get("access_token")
+    if not new_access:
+        raise Exception(f"Pinterest refresh did not return access_token: {data}")
+
+    # Persist token (best-effort)
+    acct = tokens.get("_acct") or {}
+    try:
+        SocialAccount.upsert_destination(
+            business_id=post["business_id"],
+            user__id=post["user__id"],
+            platform="pinterest",
+            destination_id=destination_id,
+            destination_type=(acct.get("destination_type") or "board"),
+            destination_name=(acct.get("destination_name") or destination_id),
+            access_token_plain=new_access,
+            refresh_token_plain=refresh_token,
+            token_expires_at=None,
+            scopes=(acct.get("scopes") or []),
+            platform_user_id=(acct.get("platform_user_id") or destination_id),
+            platform_username=acct.get("platform_username"),
+            meta=(acct.get("meta") or {}),
+        )
+    except Exception:
+        pass
+
+    return new_access
+
+
+def _publish_to_pinterest(
+    *,
+    post: dict,
+    dest: dict,
+    text: str,
+    link: Optional[str],
+    media: List[dict],
+) -> Dict[str, Any]:
+    r = {
+        "platform": "pinterest",
+        "destination_id": str(dest.get("destination_id") or ""),  # board_id
+        "destination_type": dest.get("destination_type") or "board",
+        "placement": (dest.get("placement") or "feed").lower(),
+        "status": "failed",
+        "provider_post_id": None,
+        "error": None,
+        "raw": None,
+    }
+
+    board_id = r["destination_id"]
+    if not board_id:
+        r["error"] = "Missing destination_id (board_id)"
+        return r
+
+    # Pinterest requires exactly 1 media item
+    if not media or len(media) != 1:
+        raise Exception("Pinterest publishing requires exactly 1 media item.")
+
+    m = media[0] or {}
+    asset_type = (m.get("asset_type") or "").lower().strip()
+    media_url = m.get("url")
+    if not media_url:
+        raise Exception("Pinterest media requires media.url")
+
+    if asset_type not in ("image", "video"):
+        raise Exception("Pinterest supports media.asset_type in {image, video}")
+
+    title = (dest.get("title") or text or "").strip()
+    if not title:
+        title = "New Pin"
+    title = title[:100]
+
+    description = (text or "").strip()
+    if link:
+        # put link inside description too (optional)
+        description = (description + "\n\n" + link).strip()
+    description = description[:500]
+
+    alt_text = (dest.get("alt_text") or "").strip() or None
+
+    log_tag = f"[jobs.py][_publish_to_pinterest][{post.get('business_id')}][{post.get('_id') or ''}]"
+
+    tokens = _get_pinterest_tokens(post, board_id)
+    access_token = tokens["access_token"]
+
+    def _do_publish(a_token: str) -> Dict[str, Any]:
+        return PinterestAdapter.create_pin(
+            access_token=a_token,
+            board_id=board_id,
+            title=title,
+            description=description,
+            link=link,
+            media_url=media_url,
+            media_type=asset_type,
+            alt_text=alt_text,
+        )
+
+    try:
+        resp = _do_publish(access_token)
+    except Exception as e:
+        if _is_pinterest_token_invalid(e):
+            access_token = _refresh_pinterest_access_token_or_raise(
+                post=post,
+                destination_id=board_id,
+                tokens=tokens,
+                log_tag=log_tag,
+            )
+            resp = _do_publish(access_token)
+        else:
+            raise
+
+    provider_id = None
+    if isinstance(resp, dict):
+        provider_id = resp.get("id") or resp.get("pin_id")
+
+    r["status"] = "success"
+    r["provider_post_id"] = provider_id
+    r["raw"] = resp
+    return r
+
+# -----------------------------
 # Main job
 # -----------------------------
 def _publish_scheduled_post(post_id: str, business_id: str):
@@ -1385,6 +1548,9 @@ def _publish_scheduled_post(post_id: str, business_id: str):
             
             elif platform == "whatsapp":
                 r = _publish_to_whatsapp(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+            
+            elif platform == "pinterest":
+                r = _publish_to_pinterest(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
             
             else:
                 r = {
