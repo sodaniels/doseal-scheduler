@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import bcrypt
+import json
+import ast
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple, Iterable
 
@@ -43,6 +45,7 @@ class Business(BaseModel):
         "business_name",
         "start_date",
         "business_contact",
+        "account_status",
         "country",
         "city",
         "state",
@@ -74,7 +77,77 @@ class Business(BaseModel):
             return None
         return encrypt_data(str(v))
 
-
+    @classmethod
+    def update_account_status_by_business_id(cls, business_id, ip_address, field, update_value):
+        """Update a specific field in the 'account_status' for the given agent ID."""
+        business_collection = db.get_collection("businesses")
+        
+        # Search for the business by business_id
+        business = business_collection.find_one({"_id": ObjectId(business_id)})
+        
+        if not business:
+            return {"success": False, "message": "Business not found"}
+        
+        # Get the encrypted account_status field from the agent document
+        encrypted_account_status = business.get("account_status")
+        
+        # Check if account_status is None
+        if encrypted_account_status is None:
+            return {"success": False, "message": "Account status not found"}
+        
+        # Decrypt the account_status field
+        try:
+            account_status = decrypt_data(encrypted_account_status)
+            
+            # Parse if it's a string
+            if isinstance(account_status, str):
+                try:
+                    # First try JSON parsing
+                    account_status = json.loads(account_status)
+                except json.JSONDecodeError:
+                    # If JSON fails, try ast.literal_eval for Python dict format
+                    account_status = ast.literal_eval(account_status)
+            
+            Log.info(f"account_status: {account_status}")
+            
+        except Exception as e:
+            return {"success": False, "message": f"Error decrypting account status: {str(e)}"}
+        
+        # Flag to track if the field was updated
+        field_updated = False
+        
+        # Loop through account_status and find the specific field to update
+        for status in account_status:
+            if field in status:
+                # Update the field's status, created_at, and ip_address
+                status[field]["status"] = update_value
+                status[field]["created_at"] = datetime.utcnow().isoformat()
+                status[field]["ip_address"] = ip_address
+                field_updated = True
+                break
+        
+        # If the field was not found
+        if not field_updated:
+            return {"success": False, "message": f"Field '{field}' not found in account status"}
+        
+        # Re-encrypt the updated account_status before saving back
+        try:
+            encrypted_account_status = encrypt_data(account_status)
+        except Exception as e:
+            return {"success": False, "message": f"Error encrypting account status: {str(e)}"}
+        
+        # Update the 'account_status' in the database
+        result = business_collection.update_one(
+            {"_id": ObjectId(business_id)},
+            {"$set": {"account_status": encrypted_account_status}}
+        )
+        
+        # Return success or failure of the update operation
+        if result.matched_count > 0:
+            return {"success": True, "message": "Account status updated successfully"}
+        else:
+            return {"success": False, "message": "Failed to update account status"}
+    
     @staticmethod
     def check_password(business_doc: dict, password: str) -> bool:
         stored_hash = (business_doc or {}).get("password")
@@ -93,6 +166,7 @@ class Business(BaseModel):
         first_name: str,
         last_name: str,
         password: str,
+        account_status: None,
         email: str,
         # Optional
         start_date: Optional[str] = None,
@@ -126,6 +200,7 @@ class Business(BaseModel):
         self.first_name = self._enc(first_name)
         self.last_name = self._enc(last_name)
         self.email = self._enc(email)
+        self.account_status = self._enc(account_status)
 
         # Required hashed lookups
         self.hashed_email = hash_data(email)
@@ -205,6 +280,7 @@ class Business(BaseModel):
             "return_url": getattr(self, "return_url", None),
             "callback_url": getattr(self, "callback_url", None),
             "status": self.status,
+            "account_status": self.account_status,
             "hashed_status": self.hashed_status,
             "account_type": self.account_type,
             "created_at": self.created_at,

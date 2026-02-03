@@ -1,4 +1,7 @@
 
+import ast
+import json
+
 from decimal import Decimal, InvalidOperation
 from flask import current_app, g, jsonify
 
@@ -10,8 +13,7 @@ from ...models.base_model import BaseModel
 
 from ..logger import Log # import logging
 from ...constants.service_code import (
-    AGENT_PRE_TRANSACTION_VALIDATION_CHECKS,
-    SUBSCRIBER_PRE_TRANSACTION_VALIDATION_CHECKS,
+    ADMIN_PRE_PROCESS_VALIDATION_CHECKS,
     SYSTEM_USERS
 )
 from ..json_response import prepared_response
@@ -30,6 +32,7 @@ from ..agent_balance_keys import (
     keys_for_release, 
     keys_for_refund
 )
+from ...utils.crypt import decrypt_data
 
 
 class PreProcessCheck(BaseModel):
@@ -43,40 +46,35 @@ class PreProcessCheck(BaseModel):
     #1. perform pre-transaction checks
     def initial_processs_checks(self):
         """
-        Performs comprehensive pre-transaction validation checks for an agent account.
-        
-        This method validates that an agent account meets all required conditions before
-        allowing transaction processing. It checks multiple account status requirements
-        and returns all validation errors at once for better user experience.
-        
-        Returns:
-            tuple: A tuple containing (response_dict, status_code) where:
-                - response_dict: JSON response with success status, message, and any errors
-                - status_code: HTTP status code (200 for success, 400/404/500 for errors)
-        
-        Validation Checks Performed:
-            1. Agent existence verification
-            2. Account registration completion
-            3. Account verification status
-            4. PIN setup confirmation
-            5. Basic KYC completion
-            6. Business email verification
-            7. Director information upload
-            8. EDD questionnaire completion
-        
-        Raises:
-            Exception: Any unexpected errors are caught and returned as INTERNAL_SERVER_ERROR
-        
-        Example Usage:
-            ```python
-            transaction_validator = TransactionValidator(agent_id="12345")
-            response, status_code = transaction_validator.initial_transaction_checks()
+            Performs comprehensive pre-transaction validation checks for an agent account.
             
-            if transaction_validator is not None:
-                return transaction_validator
-            ```
-        """
-        
+            This method validates that an agent account meets all required conditions before
+            allowing transaction processing. It checks multiple account status requirements
+            and returns all validation errors at once for better user experience.
+            
+            Returns:
+                tuple: A tuple containing (response_dict, status_code) where:
+                    - response_dict: JSON response with success status, message, and any errors
+                    - status_code: HTTP status code (200 for success, 400/404/500 for errors)
+            
+            Validation Checks Performed:
+                1. Business existence verification
+                3. Account email verification status
+                4. Subscription exists for account
+            
+            Raises:
+                Exception: Any unexpected errors are caught and returned as INTERNAL_SERVER_ERROR
+            
+            Example Usage:
+        ```python
+                transaction_validator = TransactionValidator(agent_id="12345")
+                response, status_code = transaction_validator.initial_transaction_checks()
+                
+                if transaction_validator is not None:
+                    return transaction_validator
+        ```
+            """
+            
         log_tag = '[pre_process_checks.py][initial_processs_checks]'
         
         # check if business exist before proceeding to initiate transaction
@@ -109,17 +107,21 @@ class PreProcessCheck(BaseModel):
             
             
         try:
-            agent = Agent.get_by_id(self.agent_id)
             errors = []
             required_fields = []
             
-            # Check if agent exists
-            if not agent:
-                Log.info(f"{log_tag} Agent does not exist.")
-                return prepared_response(False, "NOT_FOUND", "Agent does not exist.")
+            # Get account_status and decrypt
+            account_status = decrypt_data(business.get("account_status"))
             
-            # Get account_status
-            account_status = agent.get("account_status")
+            # Parse if it's a string
+            if isinstance(account_status, str):
+                try:
+                    account_status = json.loads(account_status)
+                except json.JSONDecodeError:
+                    account_status = ast.literal_eval(account_status)
+            
+            Log.info(f"{log_tag} account_status: {account_status}")
+            Log.info(f"{log_tag} account_status type: {type(account_status)}")
             
             # Check if account_status is None
             if account_status is None:
@@ -129,7 +131,7 @@ class PreProcessCheck(BaseModel):
             
             # Perform all validation checks
             # Check if all the required information needed for onboarding was provided during registration
-            for check in AGENT_PRE_TRANSACTION_VALIDATION_CHECKS:
+            for check in ADMIN_PRE_PROCESS_VALIDATION_CHECKS:
                 status_item = next(
                     (value for item in account_status for key, value in item.items() if key == check['key']),
                     None
@@ -148,19 +150,18 @@ class PreProcessCheck(BaseModel):
                     "Validation error(s) found. Please address all issues.", 
                     errors, 
                     required_fields, 
-                    self.agent_id
+                    self.admin_id
                 )
                 
-            # All pre-transaction checks passed. proceeding to initiate transaction.
-            Log.info(f"{log_tag} All pre-transaction checks passed. proceeding to initiate transaction.")
+            # All pre-process checks passed. proceeding to initiate process.
+            Log.info(f"{log_tag} All pre-process checks passed. proceeding to initiate process.")
             return None
             
             
         except Exception as e:
             Log.info(f"{log_tag} An unexpected error occurred. {str(e)}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred. {str(e)}")
-        
-    #2 check if outlet has enough stock for make the transaction
+    #2 check if outlet has enough stock for make the process
     
     
     

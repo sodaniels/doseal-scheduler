@@ -34,6 +34,7 @@ from ..utils.logger import Log # import logging
 from ..utils.essentials import Essensial
 from ..services.shop_api_service import ShopApiService
 from ..utils.json_response import prepared_response
+from ..models.business_model import Business
 
 from ..utils.rate_limits import (
     public_read_limiter,
@@ -67,12 +68,6 @@ def get_confirm_account():
     
     log_tag = f'[internal_controller.py][get_confirm_account]'
     
-    # text = 'pziwZlhUjvmMlNa51ZscXuoFnGghKEdiP0jRLKh2ZevRuO/HdQJ7qgi4DxjWZy4BlDHUVqmL3eEXsvbEXSIuj8aReA=='
-    
-    # encryted_text = decrypt_data(text)
-    
-    # return jsonify(encryted_text)
-    
     try:
         Log.info(f'{log_tag} IP: {client_ip}')
         user_from_auth = User.get_auth_code(auth_value)
@@ -82,6 +77,8 @@ def get_confirm_account():
             
             business = Business.get_business(decrypt_data(user_from_auth.get("client_id")))
             
+            business_id = str(business.get("_id"))
+            
             update_status = User.update_user_status(user_from_auth["email_hashed"])
             
             Log.info(f"update_status: {update_status}")
@@ -89,6 +86,16 @@ def get_confirm_account():
             if update_status:
                 # Redirect to return_url with success status
                 Log.info(f"{log_tag} \t user status update successful")
+                
+                try:
+                    update_account_status = Business.update_account_status_by_business_id(
+                        business_id,
+                        client_ip,
+                        'business_email_verified',
+                        True
+                    )
+                except Exception as e:
+                    Log.info(f"{log_tag} \t Error updating account status: {str(e)}")
                 
                 try:
                     return_url_from_business = decrypt_data(business.get("return_url"))

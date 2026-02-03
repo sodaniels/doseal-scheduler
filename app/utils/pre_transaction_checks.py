@@ -7,7 +7,7 @@ from ..models.people_model import Agent
 
 from .logger import Log # import logging
 from ..constants.service_code import (
-    AGENT_PRE_TRANSACTION_VALIDATION_CHECKS,
+    ADMIN_PRE_PROCESS_VALIDATION_CHECKS,
     SUBSCRIBER_PRE_TRANSACTION_VALIDATION_CHECKS
 )
 from .json_response import prepared_response
@@ -96,7 +96,7 @@ class PreTransactionCheck:
             
             # Perform all validation checks
             # Check if all the required information needed for onboarding was provided during registration
-            for check in AGENT_PRE_TRANSACTION_VALIDATION_CHECKS:
+            for check in ADMIN_PRE_PROCESS_VALIDATION_CHECKS:
                 status_item = next(
                     (value for item in account_status for key, value in item.items() if key == check['key']),
                     None

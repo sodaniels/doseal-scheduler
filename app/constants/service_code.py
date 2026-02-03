@@ -276,35 +276,21 @@ PERMISSION_FIELDS_FOR_AGENT_ROLE = {
     "balance": ["read"]
 }
 
-AGENT_PRE_TRANSACTION_VALIDATION_CHECKS = [
+ADMIN_PRE_PROCESS_VALIDATION_CHECKS = [
     {
-        'key': 'account_verified',
-        'message': 'The account is not verified. Please contact support.'
+        'key': 'account_created',
+        'message': 'This account do not exist. Please contact support.'
     },
-    {
-        'key': 'choose_pin',
-        'message': 'Account PIN is not set. Please use the [PATCH] registration/choose-pin to set the PIN.'
-    },
-    {
-        'key': 'basic_kyc_added',
-        'message': 'Agent KYC has not been updated. Please use the [PATCH] registration/basic-kyc to update the KYC.'
-    },
+   
     {
         'key': 'business_email_verified',
-        'message': 'Business email has not been confirmed. Please ask the user to approve their business email.'
+        'message': 'Business email has not been confirmed. Please confirm your email to proceed.'
     },
     {
-        'key': 'uploaded_director_id_info',
-        'message': "Director(s) information has not been added. Please use the [PATCH] registration/director to update the director's information."
-    },
-    {
-        'key': 'edd_questionnaire',
-        'message': 'EDD Questionnaire has not been updated. Please use the [PATCH] registration/update-edd-questionnaire to update the EDD Questionnaire.'
-    },
-    # {
-    #     'key': 'registration_completed',
-    #     'message': 'The Onboarding is no completed.'
-    # }
+        'key': 'subscribed_to_package',
+        'message': "No package subscription exists for this account. Please subscribe to a pacakge to get started. "
+    }
+    
 ]
 
 SUBSCRIBER_PRE_TRANSACTION_VALIDATION_CHECKS = [
@@ -364,6 +350,6 @@ BUSINESS_FIELDS = [
     "account_type", "business_name", "start_date", "business_contact",
     "country", "city", "state", "postcode", "landmark", "currency",
     "website", "alternate_contact_number", "time_zone", "prefix",
-    "first_name", "last_name", "username", "email",
+    "first_name", "last_name", "username", "account_status"
 ]
 

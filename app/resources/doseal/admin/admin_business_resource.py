@@ -22,6 +22,7 @@ from ....schemas.business_schema import BusinessSchema
 from ....schemas.business_schema import OAuthCredentialsSchema
 from ....schemas.login_schema import LoginSchema
 from ....schemas.social.change_password_schema import ChangePasswordSchema
+from ....schemas.social.email_verification_schema import BusinessEmailVerificationSchema
 
 from ....utils.helpers import generate_tokens
 from ....models.business_model import Client, Token
@@ -59,6 +60,7 @@ from ....utils.rate_limits import (
     register_rate_limiter, logout_rate_limiter,
     profile_retrieval_limiter 
 )
+from ....utils.generators import generate_registration_verification_token
 from ....utils.helpers import resolve_target_business_id_from_payload
 from ....services.seeders.social_role_seeder import SocialRoleSeeder
 
@@ -330,6 +332,27 @@ class RegisterBusinessResource(MethodView):
         
         business_data["password"] = business_data.get('password')
         
+        account_status = [
+                {
+                    "account_created": {
+                        "created_at": str(datetime.utcnow()),
+                        "status": True,
+                    },
+                },
+                {
+                    "business_email_verified": {
+                        "status": False,
+                    }
+                },
+                {
+                    "subscribed_to_package": {
+                        "status": False,
+                    }
+                }
+            ]
+                            
+        business_data["account_status"] = account_status
+        
         
         # Create a new user instance
         business = Business(**business_data)
@@ -417,14 +440,6 @@ class RegisterBusinessResource(MethodView):
             
                             update_code = User.update_auth_code(business_data["email"], token)
                             
-                            # for automated test
-                            email_ = business_data["email"]
-                            trancated_email = email_[:-14]
-                            redisKey = f"automated_test_email_confirmation_link_{trancated_email}"
-                            set_redis(redisKey, reset_url)
-                            # for automated test
-                            
-                
                             if update_code:
                                 Log.info(f"{log_tag}\t reset_url: {reset_url}")
                                 send_user_registration_email(business_data["email"], user_data['fullname'], reset_url)
@@ -441,7 +456,6 @@ class RegisterBusinessResource(MethodView):
                                 business_data['business_name'],
                                 business_data['store_url']
                                 ) 
-                            pass
                         except Exception as e:
                             Log.info(f"{log_tag} error sending emails: { str(e)}")
                         
@@ -582,32 +596,6 @@ class LoginBusinessResource(MethodView):
                 "UNAUTHORIZED",
                 "Invalid email or password",
             )
-           
-        
-        fullname = decrypt_data(user["fullname"])
-        
-        # Check if the user's email is not verified
-        if User.email_verification_needed(user_data["email"]):
-            Log.info(f"{log_tag} [{client_ip}][{user_data['email']}]: email needs verification")
-            try:
-                base_url = os.getenv("BACK_END_BASE_URL")
-                token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
-                reset_url = generate_confirm_email_token(base_url, token)
-                
-                update_code = User.update_auth_code(user_data["email"], token)
-    
-                if update_code:
-                    Log.info(f"{log_tag} [post]\t reset_url: {reset_url}")
-                    send_user_registration_email(user_data["email"], fullname, reset_url)
-            except Exception as e:
-                Log.info(f"{log_tag} \t An error occurred sending emails: {e}")
-            return jsonify({
-                "success": False,
-                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
-                "message": "Email needs verification.",
-                "hint": "Verification email has been sent to user"
-            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
-
 
         # Check if the user's credentials are not correct
         if not User.verify_password(user_data["email"], user_data["password"]):
@@ -809,7 +797,146 @@ class ChangePasswordResource(MethodView):
         except Exception as e:
             Log.info(f"{log_tag} [{client_ip}] Unexpected error: {e}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
-           
+      
+
+# -----------------------INITIATE EMAIL VERIFICAITON-----------------------------------------
+@blp_business_auth.route("/initiiate-email-verification", methods=["POST"])
+class BusinessRegistrationInitiateEmailVerificationResource(MethodView):
+    # PATCH Agent (Verify agent OTP)
+    @profile_retrieval_limiter("change_password")
+    @token_required
+    @blp_business_auth.arguments(BusinessEmailVerificationSchema, location="form")
+    @blp_business_auth.response(200, BusinessEmailVerificationSchema)
+    @blp_business_auth.doc(
+        summary="Verify Business Email",
+        description="""
+            This endpoint allows you to verify the business email for an business during registration. 
+            The request requires an `Authorization` header with a Bearer token.
+            - **POST**: Verify the business email by providing `agent_id` and `return_url`.
+        """,
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": BusinessEmailVerificationSchema,  # Schema for verifying business email
+                    "example": {
+                        "business_id": "67ff9e32272817d5812ab2fc",  # Example agent ID (ObjectId)
+                        "return_url": "http://localhost:7007/redirect"  # Example return URL
+                    }
+                }
+            },
+        },
+        responses={
+            200: {
+                "description": "Email has been successfully sent to the agent's business email",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "message": "Email has been sent to agent business email successfully.",
+                            "status_code": 200,
+                            "success": True
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Invalid request data",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid input data"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized request",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid authentication token"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        },
+        security=[{"Bearer": []}],  # Bearer token authentication is required
+    )
+    def post(self, item_data):
+        """Handle the POST request to verify OTP."""
+        client_ip = request.remote_addr
+        user_info = g.get("current_user", {})
+        business_id = str(user_info.get("business_id"))
+        
+        log_tag = f'[admin_business_resource.py][BusinessRegistrationInitiateEmailVerificationResource][post][{client_ip}][{business_id}]'
+        
+        # Assign user_id and business_id from current user
+        item_data["business_id"] = business_id
+        return_url = item_data.get("return_url")
+        
+        # check if business exist before proceeding to update the information 
+        try:
+            Log.info(f"{log_tag} checking if business exist")
+            business = Business.get_business_by_id(business_id)
+            if not business:
+                Log.info(f"{log_tag} business_id with ID: {business_id} does not exist")
+                
+                return prepared_response(False, "NOT_FOUND", f"Business with ID: {business_id} does not exist")
+            
+            
+            # check if email is already verified and disallow re-verification
+            account_status = decrypt_data(business.get("account_status"))
+            
+            # Get the status for 'business_email_verified'
+            business_email_verified_status = next((item["business_email_verified"]["status"] for item in account_status if "business_email_verified" in item), None)
+            
+            #Check if business email has already been verified
+            if business_email_verified_status:
+                # stop the action of re-verification if status is already True
+                Log.info(f"{log_tag} Business email has already been verified.")
+                return prepared_response(False, "BAD_REQUEST", f" Business email has already been verified")
+            
+            
+            
+            fullname = business.get("fullname")
+            email = business.get("email")
+            return_url = decrypt_data(business.get("return_url"))
+            
+            try:
+                token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
+                reset_url = generate_confirm_email_token(return_url, token)
+
+                update_code = User.update_auth_code(email, token)
+                
+                if update_code:
+                    Log.info(f"{log_tag}\t reset_url: {reset_url}")
+                    send_user_registration_email(email, fullname, reset_url)
+                    
+                    Log.info(f"{log_tag} Email resent")
+                    return prepared_response(False, "OK", f" Email resent")
+            except Exception as e:
+                Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
+            
+        except Exception as e:
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred: {e}")
+     
 #-------------------------------------------------------
 # ME
 #-------------------------------------------------------     
@@ -910,6 +1037,7 @@ class CurrentUserResource(MethodView):
             "fullname": decrypte_full_name,
             "admin_id": str(user.get("_id")),
             "business_id": target_business_id,
+            "email": business.get("email"),
             "profile": business_info
         }
     
