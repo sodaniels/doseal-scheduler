@@ -67,6 +67,8 @@ from .social.oauth_x_resource import blp_x_oauth
 from .social.oauth_tiktok_resource import blp_tiktok_oauth
 from .social.social_posts_resource import blp_social_posts
 from .social.oauth_linkedin_resource import blp_linkedin_oauth
+from .social.oauth_youtube_resource import blp_youtube_oauth
+from .social.oauth_youtube_resource import blp_youtube_oauth
 
 
 __all__ = [
@@ -88,6 +90,8 @@ __all__ = [
     "blp_tiktok_oauth",
     "blp_social_posts",
     "blp_linkedin_oauth",
+    "blp_youtube_oauth",
+    "blp_youtube_oauth",
     #-------------------
     #ADMIN ROUTES
     #-------------------

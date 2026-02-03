@@ -173,6 +173,7 @@ class DestinationSchema(Schema):
     destination_type = fields.Str(required=True)
     destination_id = fields.Str(required=True)
     destination_name = fields.Str(required=False, allow_none=True)
+    channel_id = fields.Str(required=False, allow_none=True)
 
     placement = fields.Str(
         required=False,
@@ -252,15 +253,8 @@ class CreateScheduledPostSchema(Schema):
 
     content = fields.Nested(ScheduledPostContentSchema, required=False)
 
-    # ------------------------------------------------------------------
-    # PRE-LOAD MERGE
-    # ------------------------------------------------------------------
     @pre_load
     def merge_content(self, in_data, **kwargs):
-        """
-        Merge top-level (text/link/media) into content{} if missing.
-        Normalize media dict -> list.
-        """
         if not isinstance(in_data, dict):
             return in_data
 
@@ -277,7 +271,6 @@ class CreateScheduledPostSchema(Schema):
         if "media" not in content and in_data.get("media") is not None:
             content["media"] = in_data.get("media")
 
-        # normalize media shape
         media_val = content.get("media")
         if isinstance(media_val, dict):
             content["media"] = [media_val]
@@ -285,21 +278,11 @@ class CreateScheduledPostSchema(Schema):
         in_data["content"] = content
         return in_data
 
-    # ------------------------------------------------------------------
-    # VALIDATION
-    # ------------------------------------------------------------------
     @validates_schema
     def validate_all(self, data, **kwargs):
-
-        # ------------------------------
-        # scheduled_at
-        # ------------------------------
         scheduled_at_raw = data.get("scheduled_at")
         scheduled_at_utc = _parse_iso8601_with_tz(scheduled_at_raw)
 
-        # ------------------------------
-        # content
-        # ------------------------------
         content = data.get("content") or {}
 
         text = (content.get("text") or "").strip()
@@ -309,9 +292,6 @@ class CreateScheduledPostSchema(Schema):
         if not isinstance(media_list, list):
             raise ValidationError({"content": {"media": ["media must be an object or list"]}})
 
-        # ------------------------------
-        # validate each media asset
-        # ------------------------------
         parsed_media: List[Dict[str, Any]] = []
         media_errors: Dict[str, Any] = {}
 
@@ -324,21 +304,15 @@ class CreateScheduledPostSchema(Schema):
         if media_errors:
             raise ValidationError({"content": {"media": media_errors}})
 
-        # must contain text or media
         if not text and not parsed_media:
             raise ValidationError({"content": ["Provide at least one of text or media"]})
 
-        # link validation (basic URL)
         if link and not _is_url(link):
             raise ValidationError({"content": {"link": ["Invalid URL"]}})
 
-        # ------------------------------
-        # destinations fan-out validation
-        # ------------------------------
         destinations = data.get("destinations") or []
         dest_errors: List[Dict[str, Any]] = []
 
-        # LinkedIn aliases
         LINKEDIN_TYPE_ALIASES = {
             "profile": "author",
             "person": "author",
@@ -352,7 +326,6 @@ class CreateScheduledPostSchema(Schema):
             "organization": "organization",
         }
 
-        # Threads aliases (Meta Threads)
         THREADS_TYPE_ALIASES = {
             "user": "user",
             "profile": "user",
@@ -362,8 +335,15 @@ class CreateScheduledPostSchema(Schema):
             "threads_user": "user",
         }
 
-        for idx, dest in enumerate(destinations):
+        # ✅ NEW: YouTube destination type aliases
+        YOUTUBE_TYPE_ALIASES = {
+            "channel": "channel",
+            "youtube_channel": "channel",
+            "yt_channel": "channel",
+            "creator": "channel",
+        }
 
+        for idx, dest in enumerate(destinations):
             platform = (dest.get("platform") or "").lower().strip()
             placement = _default_placement(dest)
 
@@ -383,223 +363,132 @@ class CreateScheduledPostSchema(Schema):
             # ------------------------------
             elif platform == "threads":
                 raw_type = (dest.get("destination_type") or "").lower().strip()
-                # Threads in your system should behave like a "user" destination by default.
-                # If client doesn't pass destination_type, keep it empty here and let rule enforcement catch it,
-                # OR force default:
                 if raw_type:
                     dest["destination_type"] = THREADS_TYPE_ALIASES.get(raw_type, raw_type)
                 else:
-                    dest["destination_type"] = "user"  # sensible default
-
-                # Threads placements: keep as feed unless your PLATFORM_RULES defines more.
+                    dest["destination_type"] = "user"
                 if not placement:
                     dest["placement"] = "feed"
+
+            # ------------------------------
+            # ✅ YOUTUBE NORMALIZATION
+            # ------------------------------
+            elif platform == "youtube":
+                raw_type = (dest.get("destination_type") or "").lower().strip()
+                if raw_type:
+                    dest["destination_type"] = YOUTUBE_TYPE_ALIASES.get(raw_type, raw_type)
+                else:
+                    dest["destination_type"] = "channel"  # default
+
+                # If frontend sends channel_id (connect endpoint style), map it to destination_id
+                # so the rest of your pipeline is consistent.
+                if not dest.get("destination_id") and dest.get("channel_id"):
+                    dest["destination_id"] = dest.get("channel_id")
+
+                # Default placement (optional): "video" or "short"
+                if not dest.get("placement"):
+                    dest["placement"] = "video"
 
             rule = PLATFORM_RULES.get(platform)
             if not rule:
                 dest_errors.append({str(idx): {"platform": ["Unsupported platform"]}})
                 continue
 
-            # ------------------------------
-            # destination type enforcement
-            # ------------------------------
             allowed_types = rule.get("requires_destination_type") or set()
             if allowed_types and dest.get("destination_type") not in allowed_types:
                 dest_errors.append({
                     str(idx): {
-                        "destination_type": [
-                            f"{platform} requires destination_type in {sorted(allowed_types)}"
-                        ]
+                        "destination_type": [f"{platform} requires destination_type in {sorted(allowed_types)}"]
                     }
                 })
 
-            # ------------------------------
-            # placement validation
-            # ------------------------------
             allowed_placements = set(rule.get("placements") or [])
             if allowed_placements and placement not in allowed_placements:
                 dest_errors.append({
-                    str(idx): {
-                        "placement": [
-                            f"{platform} placement must be one of {sorted(allowed_placements)}"
-                        ]
-                    }
+                    str(idx): {"placement": [f"{platform} placement must be one of {sorted(allowed_placements)}"]}
                 })
 
-            # ------------------------------
-            # text limit
-            # ------------------------------
             max_text = rule.get("max_text")
             if max_text and text and len(text) > max_text:
                 dest_errors.append({
-                    str(idx): {
-                        "content.text": [
-                            f"Too long for {platform}. Max {max_text} chars."
-                        ]
-                    }
+                    str(idx): {"content.text": [f"Too long for {platform}. Max {max_text} chars."]}
                 })
 
-            # ------------------------------
-            # link support
-            # ------------------------------
             if link and not rule.get("supports_link", True):
                 dest_errors.append({
-                    str(idx): {
-                        "content.link": [
-                            f"{platform} does not support clickable links. Put it in text."
-                        ]
-                    }
+                    str(idx): {"content.link": [f"{platform} does not support clickable links. Put it in text."]}
                 })
 
-            # ------------------------------
-            # requires media
-            # ------------------------------
             requires_media = bool(rule.get("requires_media", False))
             if requires_media and not parsed_media:
                 dest_errors.append({
-                    str(idx): {
-                        "content.media": [
-                            f"{platform} requires at least 1 media item."
-                        ]
-                    }
+                    str(idx): {"content.media": [f"{platform} requires at least 1 media item."]}
                 })
 
-            # ------------------------------
-            # media rules
-            # ------------------------------
             media_rule = rule.get("media") or {}
             max_items = int(media_rule.get("max_items") or 0)
-            allowed_types = set(media_rule.get("types") or [])
+            allowed_types_media = set(media_rule.get("types") or [])
             video_max_items = int(media_rule.get("video_max_items") or 0)
 
             if parsed_media:
-
                 if max_items and len(parsed_media) > max_items:
                     dest_errors.append({
-                        str(idx): {
-                            "content.media": [
-                                f"{platform} supports max {max_items} media items."
-                            ]
-                        }
+                        str(idx): {"content.media": [f"{platform} supports max {max_items} media items."]}
                     })
 
                 counts = _count_media_types(parsed_media)
                 if video_max_items and counts.get("video", 0) > video_max_items:
                     dest_errors.append({
-                        str(idx): {
-                            "content.media": [
-                                f"{platform} supports max {video_max_items} video per post."
-                            ]
-                        }
+                        str(idx): {"content.media": [f"{platform} supports max {video_max_items} video per post."]}
                     })
 
                 for m in parsed_media:
                     at = (m.get("asset_type") or "").lower()
-                    if allowed_types and at not in allowed_types:
+                    if allowed_types_media and at not in allowed_types_media:
                         dest_errors.append({
-                            str(idx): {
-                                "content.media": [
-                                    f"{platform} does not allow '{at}' for this post."
-                                ]
-                            }
+                            str(idx): {"content.media": [f"{platform} does not allow '{at}' for this post."]}
                         })
 
-            # ------------------------------
-            # FACEBOOK placement rules
-            # ------------------------------
+            # Facebook / Instagram / Threads special blocks unchanged...
             if platform == "facebook":
-
                 if placement == "feed" and len(parsed_media) > 1:
-                    dest_errors.append({
-                        str(idx): {
-                            "content.media": [
-                                "Facebook feed supports only 1 media item."
-                            ]
-                        }
-                    })
-
+                    dest_errors.append({str(idx): {"content.media": ["Facebook feed supports only 1 media item."]}})
                 elif placement == "reel":
                     if len(parsed_media) != 1:
-                        dest_errors.append({
-                            str(idx): {
-                                "content.media": [
-                                    "Facebook reels require exactly 1 media item (video)."
-                                ]
-                            }
-                        })
+                        dest_errors.append({str(idx): {"content.media": ["Facebook reels require exactly 1 media item (video)."]}})
                     elif parsed_media[0]["asset_type"].lower() != "video":
-                        dest_errors.append({
-                            str(idx): {
-                                "content.media": ["Facebook reels require a video."]
-                            }
-                        })
+                        dest_errors.append({str(idx): {"content.media": ["Facebook reels require a video."]}})
 
-            # ------------------------------
-            # INSTAGRAM placement rules
-            # ------------------------------
             elif platform == "instagram":
-
                 if len(parsed_media) < 1:
-                    dest_errors.append({
-                        str(idx): {
-                            "content.media": [
-                                "Instagram requires at least 1 media item."
-                            ]
-                        }
-                    })
-
+                    dest_errors.append({str(idx): {"content.media": ["Instagram requires at least 1 media item."]}})
                 if placement == "reel":
                     if len(parsed_media) != 1:
-                        dest_errors.append({
-                            str(idx): {
-                                "content.media": [
-                                    "Instagram reel requires exactly 1 media item."
-                                ]
-                            }
-                        })
+                        dest_errors.append({str(idx): {"content.media": ["Instagram reel requires exactly 1 media item."]}})
                     elif parsed_media[0]["asset_type"].lower() != "video":
-                        dest_errors.append({
-                            str(idx): {
-                                "content.media": ["Instagram reel requires a video."]
-                            }
-                        })
-
+                        dest_errors.append({str(idx): {"content.media": ["Instagram reel requires a video."]}})
                 elif placement == "story" and len(parsed_media) != 1:
-                    dest_errors.append({
-                        str(idx): {
-                            "content.media": [
-                                "Instagram story requires exactly 1 media item."
-                            ]
-                        }
-                    })
+                    dest_errors.append({str(idx): {"content.media": ["Instagram story requires exactly 1 media item."]}})
 
-            # ------------------------------
-            # THREADS rules (Meta Threads)
-            # ------------------------------
             elif platform == "threads":
-                # Threads is essentially "caption + optional media".
-                # If you later support Threads "reply" or "quote", add placement rules here.
-                # Keep it simple & consistent: allow text-only OR single media item depending on PLATFORM_RULES.
-                # If your rule limits media to 1, this will already be enforced by media_rule.max_items.
                 pass
 
-        # ------------------------------
-        # FAIL IF DEST ERRORS
-        # ------------------------------
+            # ✅ Optional: YouTube extra validation (lightweight)
+            elif platform == "youtube":
+                # Connect requires channel_id; scheduling/publishing uses destination_id
+                if not dest.get("destination_id"):
+                    dest_errors.append({str(idx): {"destination_id": ["YouTube requires destination_id (channel_id)."]}})
+
         if dest_errors:
             raise ValidationError({"destinations": dest_errors})
 
-        # ------------------------------
-        # inject normalized fields
-        # ------------------------------
         data["_scheduled_at_utc"] = scheduled_at_utc
         data["_normalized_content"] = {
             "text": text or None,
             "link": link,
             "media": parsed_media or None,
         }
-        data["_normalized_media"] = parsed_media or None
-        
+        data["_normalized_media"] = parsed_media or None    
         
         
 

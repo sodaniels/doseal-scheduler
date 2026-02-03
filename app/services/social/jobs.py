@@ -15,6 +15,7 @@ from ...services.social.adapters.x_adapter import XAdapter
 from ...services.social.adapters.tiktok_adapter import TikTokAdapter
 from ...services.social.adapters.linkedin_adapter import LinkedInAdapter
 from ...services.social.adapters.threads_adapter import ThreadsAdapter
+from ...services.social.adapters.youtube_adapter import YouTubeAdapter
 from ...utils.logger import Log
 
 from .appctx import run_in_app_context
@@ -1000,6 +1001,179 @@ def _publish_to_threads(
     return r
 
 
+# -----------------------------
+# Youtube publisher
+# -----------------------------
+def _get_youtube_tokens(post: dict, destination_id: str) -> Dict[str, Any]:
+    """
+    SocialAccount:
+      access_token_plain  -> access_token
+      refresh_token_plain -> refresh_token (optional but strongly recommended)
+    """
+    acct = SocialAccount.get_destination(
+        post["business_id"],
+        post["user__id"],
+        "youtube",
+        destination_id,
+    )
+    if not acct:
+        raise Exception(f"Missing youtube destination for destination_id={destination_id}")
+
+    access_token = acct.get("access_token_plain")
+    refresh_token = acct.get("refresh_token_plain")
+
+    if not access_token:
+        raise Exception("Missing YouTube access_token (reconnect YouTube).")
+
+    return {"access_token": access_token, "refresh_token": refresh_token, "_acct": acct}
+
+
+def _is_youtube_token_invalid(err: Exception | str) -> bool:
+    s = str(err).lower()
+    return (
+        "invalid_grant" in s
+        or "invalid_token" in s
+        or "unauthorized" in s
+        or "401" in s
+        or "authError".lower() in s
+    )
+
+
+def _refresh_youtube_access_token_or_raise(*, post: dict, destination_id: str, tokens: Dict[str, Any], log_tag: str) -> str:
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        raise Exception("YouTube access token expired/invalid and refresh_token missing (reconnect YouTube).")
+
+    client_id = os.getenv("YOUTUBE_CLIENT_ID")
+    client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise Exception("Missing YOUTUBE_CLIENT_ID / YOUTUBE_CLIENT_SECRET for refresh flow")
+
+    data = YouTubeAdapter.refresh_access_token(
+        client_id=client_id,
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+        log_tag=log_tag,
+    )
+
+    new_access = data.get("access_token")
+    if not new_access:
+        raise Exception(f"YouTube refresh did not return access_token: {data}")
+
+    # Persist token (do not block publishing if fails)
+    acct = tokens.get("_acct") or {}
+    try:
+        SocialAccount.upsert_destination(
+            business_id=post["business_id"],
+            user__id=post["user__id"],
+            platform="youtube",
+            destination_id=destination_id,
+            destination_type=(acct.get("destination_type") or "channel"),
+            destination_name=(acct.get("destination_name") or destination_id),
+
+            access_token_plain=new_access,
+            refresh_token_plain=refresh_token,
+            token_expires_at=None,
+            scopes=(acct.get("scopes") or []),
+            platform_user_id=(acct.get("platform_user_id") or destination_id),
+            platform_username=acct.get("platform_username"),
+            meta=(acct.get("meta") or {}),
+        )
+    except Exception:
+        pass
+
+    return new_access
+
+def _publish_to_youtube(
+    *,
+    post: dict,
+    dest: dict,
+    text: str,
+    link: Optional[str],
+    media: List[dict],
+) -> Dict[str, Any]:
+    r = {
+        "platform": "youtube",
+        "destination_id": str(dest.get("destination_id") or ""),      # channel_id
+        "destination_type": dest.get("destination_type") or "channel",
+        "placement": (dest.get("placement") or "feed").lower(),
+        "status": "failed",
+        "provider_post_id": None,
+        "error": None,
+        "raw": None,
+    }
+
+    channel_id = r["destination_id"]
+    if not channel_id:
+        r["error"] = "Missing destination_id (channel_id)"
+        return r
+
+    # YouTube requires a VIDEO.
+    videos = [m for m in (media or []) if ((m.get("asset_type") or "").lower() == "video")]
+    if len(videos) != 1:
+        raise Exception("YouTube publishing requires exactly 1 video media item.")
+
+    v = videos[0] or {}
+    video_url = v.get("url")
+    if not video_url:
+        raise Exception("YouTube video requires media.url")
+
+    # Build title/description.
+    # - title max ~100 chars recommended; enforce safe trimming.
+    # - description can be the caption + link.
+    caption = _build_caption(text, link).strip()
+    title = (text or "").strip()
+    if not title:
+        title = "New video"
+    title = title[:100]
+
+    description = caption[:5000] if caption else ""
+
+    log_tag = f"[jobs.py][_publish_to_youtube][{post.get('business_id')}][{post.get('_id') or ''}]"
+
+    tokens = _get_youtube_tokens(post, channel_id)
+    access_token = tokens["access_token"]
+
+    # Download bytes (Cloudinary)
+    video_bytes, content_type = _download_media_bytes(video_url)
+    if not video_bytes:
+        raise Exception("Downloaded YouTube video is empty")
+
+    def _do_publish(a_token: str) -> Dict[str, Any]:
+        return YouTubeAdapter.publish_video(
+            access_token=a_token,
+            title=title,
+            description=description,
+            video_bytes=video_bytes,
+            content_type=content_type or "video/mp4",
+            tags=None,
+            privacy_status="public",
+            log_tag=log_tag,
+        )
+
+    try:
+        resp = _do_publish(access_token)
+    except Exception as e:
+        if _is_youtube_token_invalid(e):
+            access_token = _refresh_youtube_access_token_or_raise(
+                post=post,
+                destination_id=channel_id,
+                tokens=tokens,
+                log_tag=log_tag,
+            )
+            resp = _do_publish(access_token)
+        else:
+            raise
+
+    # On success, YouTube returns a video resource with "id"
+    provider_id = None
+    if isinstance(resp, dict):
+        provider_id = resp.get("id")
+
+    r["status"] = "success"
+    r["provider_post_id"] = provider_id
+    r["raw"] = resp
+    return r
 
 # -----------------------------
 # Main job
@@ -1057,6 +1231,9 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
             elif platform == "threads":
                 r = _publish_to_threads(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
+                
+            elif platform == "youtube":
+                r = _publish_to_youtube(post=post, dest=dest, text=dest_text, link=dest_link, media=dest_media)
 
             else:
                 r = {
