@@ -43,7 +43,8 @@ from ....constants.service_code import (
 
 from ....services.email_service import (
     send_user_registration_email,
-    send_new_contact_sale_email
+    send_new_contact_sale_email,
+    send_password_changed_email,
 )
 
 from ....utils.generators import (
@@ -753,6 +754,9 @@ class ChangePasswordResource(MethodView):
             auth_user__id = str(auth_user.get("_id") or "")
             auth_business_id = str(auth_user.get("business_id") or "")
             account_type = auth_user.get("account_type")
+            
+            email = decrypt_data(auth_user.get("email"))
+            fullname = decrypt_data(auth_user.get("fullname"))
 
             if not auth_user__id or not auth_business_id:
                 Log.info(f"{log_tag} [{client_ip}] unauthorized: missing auth ids")
@@ -795,6 +799,19 @@ class ChangePasswordResource(MethodView):
             if not updated:
                 Log.info(f"{log_tag} [{client_ip}] password update failed for user_id={auth_user__id}")
                 return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to change password.")
+            
+            #send email about password change
+            try:
+                update_passsword = send_password_changed_email(
+                    email=email,
+                    fullname=fullname,
+                    changed_at=datetime.now(),
+                    ip_address=request.remote_addr,
+                    user_agent=request.headers.get("User-Agent"),
+                )
+                Log.error(f"{log_tag} change password email update: {update_passsword}")
+            except Exception as e:
+                Log.error(f"{log_tag} error sending change password emails: {e}")
 
             Log.info(f"{log_tag} [{client_ip}] password changed successfully for user_id={auth_user__id}")
             return prepared_response(True, "OK", "Password changed successfully.")

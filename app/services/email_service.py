@@ -390,7 +390,58 @@ def send_new_contact_sale_email(
         Log.error(f"send_new_contact_sale_email failed: {exc}")
         raise
 
+#-------------------------------------
+# EMAIL TO USER UPON PASSWORD CHANGE
+#------------------------------------
+def send_password_changed_email(
+    email: str,
+    fullname: Optional[str] = None,
+    changed_at: Optional[str] = None,   # e.g. "2026-02-04 21:55 UTC"
+    ip_address: Optional[str] = None,   # e.g. "102.22.xx.xx"
+    user_agent: Optional[str] = None,   # optional browser/device info
+) -> Dict[str, Any]:
+    """
+    Sends a security notification when a user changes their password.
+    This is NOT a reset email; it's a confirmation alert.
+    """
 
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    subject = f"Your {cfg.from_name} password was changed"
+
+    text = (
+        f"Hi {fullname or 'there'},\n\n"
+        f"This is a confirmation that your password was changed.\n\n"
+        f"Time: {changed_at or 'Just now'}\n"
+        f"IP: {ip_address or 'Unknown'}\n"
+        f"Device: {user_agent or 'Unknown'}\n\n"
+        f"If you didn’t do this, reset your password immediately and contact support.\n\n"
+        f"— {cfg.from_name}\n"
+    )
+
+    try:
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/password_changed.html",
+            context={
+                "app_name": cfg.from_name,
+                "email": email,
+                "fullname": fullname,
+                "changed_at": changed_at,
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+                # optional support email
+                "support_email": os.getenv("SUPPORT_EMAIL", None),
+            },
+            text_fallback=text,
+            tags=["security", "password-changed"],
+            meta={"email_type": "password_changed"},
+        )
+    except Exception as exc:
+        Log.error(f"send_password_changed_email failed: {exc}")
+        raise
 
 
 
