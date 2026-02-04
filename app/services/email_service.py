@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, List, Union
 
 from app.utils.logger import Log
 
-
+EmailAddr = Union[str, List[str]]
 # ---------- Config ----------
 
 @dataclass
@@ -245,8 +245,9 @@ class EmailService:
         )
 
 
-# ---------- Your specific emails ----------
-
+# ---------------------------------
+# EMAIL TO USER UPON NEW REGISTRATION
+#----------------------------------
 def send_user_registration_email(email: str, fullname: str, reset_url: str) -> Dict[str, Any]:
     cfg = load_email_config()
     svc = EmailService(cfg)
@@ -271,3 +272,174 @@ def send_user_registration_email(email: str, fullname: str, reset_url: str) -> D
         tags=["registration"],
         meta={"email_type": "user_registration"},
     )
+    
+# -------------------------------------
+# EMAIL TO ADMIN UPON USER REGISTRATION
+#--------------------------------------
+def send_new_contact_sale_email(
+    to_admins: EmailAddr,
+    admin_name: str,
+    requester_email: str,
+    requester_fullname: str,
+    requester_phone_number: str,
+    company_name: str,
+    store_url: str,
+    cc_admins: Optional[EmailAddr] = None,
+    bcc_admins: Optional[EmailAddr] = None,
+) -> Dict[str, Any]:
+    """
+    Sends an internal notification email to admins when a new contact sale request comes in.
+    Supports multiple recipients + optional CC/BCC.
+    """
+
+    def _as_list(val: Optional[EmailAddr]) -> List[str]:
+        if not val:
+            return []
+        return [val] if isinstance(val, str) else list(val)
+
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    to_list = _as_list(to_admins)
+    cc_list = _as_list(cc_admins)
+    bcc_list = _as_list(bcc_admins)
+
+    if not to_list:
+        raise ValueError("send_new_contact_sale_email: 'to_admins' cannot be empty")
+
+    subject = f"New Contact Sale Request — {company_name}"
+
+    # Plain-text fallback
+    text = (
+        f"Hi {admin_name},\n\n"
+        f"A new contact sale request has been submitted.\n\n"
+        f"Company: {company_name}\n"
+        f"Store URL: {store_url}\n\n"
+        f"Requester Name: {requester_fullname}\n"
+        f"Requester Email: {requester_email}\n"
+        f"Requester Phone: {requester_phone_number}\n\n"
+        f"— {cfg.from_name}\n"
+    )
+
+    # reply directly to requester when you hit reply
+    reply_to = requester_email if requester_email else None
+
+    try:
+        # Render HTML once, then send using provider directly so we can attach cc/bcc
+        html = svc.renderer.render(
+            "email/new-contact-sale.html",
+            app_name=cfg.from_name,
+            admin_name=admin_name,
+            company_name=company_name,
+            store_url=store_url,
+            requester_fullname=requester_fullname,
+            requester_email=requester_email,
+            requester_phone_number=requester_phone_number,
+        )
+
+        # IMPORTANT: Our Base provider signature doesn't include cc/bcc,
+        # so we pass them via meta fields for Mailgun and headers for SMTP.
+        # We'll handle both cleanly below.
+
+        provider_name = cfg.provider.lower()
+
+        if provider_name == "mailgun":
+            # Mailgun supports cc/bcc via parameters
+            data = {
+                "from": f"{cfg.from_name} <{cfg.from_email}>",
+                "to": to_list,
+                "cc": cc_list if cc_list else None,
+                "bcc": bcc_list if bcc_list else None,
+                "subject": subject,
+                "text": text,
+                "html": html,
+            }
+            # remove None keys
+            data = {k: v for k, v in data.items() if v is not None}
+
+            # Use provider low-level send (works with MailgunProvider)
+            resp = svc.provider._post(data)  # type: ignore[attr-defined]
+            return {
+                "ok": resp.status_code < 400,
+                "provider": "mailgun",
+                "status_code": resp.status_code,
+                "response": resp.json() if resp.text else {},
+            }
+
+        # SMTP: CC is supported in headers; BCC must be passed as recipients but not header
+        if provider_name == "smtp":
+            # Build a message by calling the provider but include CC/BCC via "to"
+            # We'll temporarily expand "to" list and set CC header inside provider message.
+            # So we do a direct SMTP send here.
+            import smtplib
+            from email.message import EmailMessage
+
+            msg = EmailMessage()
+            msg["From"] = f"{cfg.from_name} <{cfg.from_email}>"
+            msg["To"] = ", ".join(to_list)
+            if cc_list:
+                msg["Cc"] = ", ".join(cc_list)
+            msg["Subject"] = subject
+            if reply_to:
+                msg["Reply-To"] = reply_to
+
+            msg.set_content(text)
+            msg.add_alternative(html, subtype="html")
+
+            all_recipients = to_list + cc_list + bcc_list
+
+            with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=20) as server:
+                server.ehlo()
+                if cfg.smtp_use_tls:
+                    server.starttls()
+                    server.ehlo()
+                server.login(cfg.smtp_username, cfg.smtp_password)
+                server.send_message(msg, to_addrs=all_recipients)
+
+            return {"ok": True, "provider": "smtp", "status_code": 250, "response": {}}
+
+        raise ValueError(f"Unsupported EMAIL_PROVIDER for cc/bcc flow: {cfg.provider}")
+
+    except Exception as exc:
+        Log.error(f"send_new_contact_sale_email failed: {exc}")
+        raise
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

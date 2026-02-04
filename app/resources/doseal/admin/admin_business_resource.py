@@ -40,12 +40,10 @@ from ....utils.redis import (
 from ....constants.service_code import (
     HTTP_STATUS_CODES, SYSTEM_USERS, BUSINESS_FIELDS
 )
-from tasks import (
-    # send_user_registration_email, 
-    send_new_contact_sale_email
-)
+
 from ....services.email_service import (
-    send_user_registration_email
+    send_user_registration_email,
+    send_new_contact_sale_email
 )
 
 from ....utils.generators import (
@@ -457,17 +455,20 @@ class RegisterBusinessResource(MethodView):
                             Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
                         
                         try:
-                            # send email to admins about registration
+                            store_url = business_data.get("store_url") or business_data.get("url") or business_data.get("website_url")
+                            to_admins = os.getenv("ADMIN_EMAILS_FOR_SUPPORT_UPDATES", ["opokudaniels@yahoo.com"])
                             send_new_contact_sale_email(
-                                "opokudaniels@yahoo.com", "Samuel Daniels", 
-                                user_data['email'],
-                                user_data['fullname'],
-                                user_data['phone_number'],
-                                business_data['business_name'],
-                                business_data['store_url']
-                                ) 
+                                to_admins=["opokudaniels@yahoo.com", "dosealltd@gmail.com"],
+                                admin_name="Samuel Daniels",
+                                requester_email=user_data["email"],
+                                requester_fullname=user_data["fullname"],
+                                requester_phone_number=user_data["phone_number"],
+                                company_name=business_data["business_name"],
+                                store_url=store_url or "N/A" ,
+                                cc_admins=["samuel@doseal.org"],
+                            )
                         except Exception as e:
-                            Log.info(f"{log_tag} error sending emails: { str(e)}")
+                            Log.error(f"{log_tag} error sending admin emails: {e}")
                         
                         return jsonify({
                             "success": True,
