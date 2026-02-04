@@ -1,20 +1,32 @@
 # resources/payment_resource.py
 
-import os
-from flask import g, request
+import os, json
+from flask import g, request, jsonify
 from flask.views import MethodView
 from flask_smorest import Blueprint
 
 from .....constants.payment_methods import PAYMENT_METHODS
-from .....constants.service_code import SYSTEM_USERS
+from .....constants.service_code import(
+     SYSTEM_USERS, HTTP_STATUS_CODES, TRANSACTION_STATUS_CODE
+)
 from ...admin.admin_business_resource import token_required
 from .....utils.json_response import prepared_response
-from .....utils.crypt import decrypt_data
+from .....utils.crypt import decrypt_data, encrypt_data
 from .....utils.helpers import make_log_tag
 from .....utils.rate_limits import (
     subscription_payment_ip_limiter,
     subscription_payment_limiter
 )
+
+from .....utils.calculation_engine import hash_transaction
+
+from .....utils.generators import generate_internal_reference
+from .....utils.payments.hubtel_utils import get_hubtel_auth_token
+from .....utils.external.exchange_rate_api import get_exchange_rate
+from .....utils.redis import (
+    set_redis_with_expiry, get_redis
+)
+
 from .....utils.essentials import Essensial
 
 #models
@@ -27,6 +39,7 @@ from .....utils.payments.hubtel_utils import get_hubtel_auth_token
 #schemas
 from .....schemas.payments.payment_schema import (
     InitiatePaymentSchema,
+    ExecutePaymentSchema,
     VerifyPaymentSchema,
     ManualPaymentSchema,
     InitiatePaymentPlanChangeSchema
@@ -38,7 +51,6 @@ payment_blp = Blueprint(
     __name__,
     description="Payment processing and management"
 )
-
 
 @payment_blp.route("/payments/initiate", methods=["POST"])
 class InitiatePayment(MethodView):
@@ -57,6 +69,7 @@ class InitiatePayment(MethodView):
         business_id = str(user_info.get("business_id"))
         user_id = user_info.get("user_id")
         user__id = str(user_info.get("_id"))
+        reference=None
         
         
         account_type_enc = user_info.get("account_type")
@@ -107,6 +120,236 @@ class InitiatePayment(MethodView):
         try:
             package_id = json_data.get("package_id")
             billing_period = json_data.get("billing_period")
+            addon_users = int(json_data.get("addon_users", 0))
+            
+            if addon_users < 0:
+                return prepared_response(
+                    status=False,
+                    status_code="BAD_REQUEST",
+                    message="Invalid addon_users enterred"
+                ) 
+            
+            # Get package to verify price
+            package = Package.get_by_id(package_id)
+            
+            if not package:
+                return prepared_response(
+                    status=False,
+                    status_code="NOT_FOUND",
+                    message="Package not found"
+                )
+            
+            if package.get("status") != "Active":
+                return prepared_response(
+                    status=False,
+                    status_code="BAD_REQUEST",
+                    message="Package is not available"
+                )
+            
+            # Check if it's a free package
+            if package.get("price", 0) == 0:
+                # Free package - create subscription directly
+                success, subscription_id, error = SubscriptionService.create_subscription(
+                    business_id=business_id,
+                    user_id=user_id,
+                    user__id=user__id,
+                    package_id=package_id,
+                    payment_method=None,
+                    payment_reference=None
+                )
+                
+                if success:
+                    return prepared_response(
+                        status=True,
+                        status_code="CREATED",
+                        message="Subscription activated (Free plan)",
+                        data={"subscription_id": subscription_id}
+                    )
+                else:
+                    return prepared_response(
+                        status=False,
+                        status_code="INTERNAL_SERVER_ERROR",
+                        message=error or "Failed to create subscription"
+                    )
+                    
+            
+            amount = float(package.get("price", 0))
+            if amount <= 0:
+                return False, None, "Invalid package price"
+            
+            
+            to_currency = tenant.get("country_currency")
+            
+            
+            from_currency = os.getenv("DEFUALT_PACKAGE_CURRENCY")
+        
+            # TODO: Use a paid currency conversion API
+            exchange_rate = get_exchange_rate(from_currency, to_currency)
+            amount_ghs = round(amount * exchange_rate, 2)
+            Log.info(f"{log_tag} Converting {from_currency} {amount}  to {to_currency} {amount_ghs} (rate: {exchange_rate})")
+            
+            total_from_amount = round(amount * addon_users, 2) if addon_users > 0 else amount
+            
+            amount_detail = {
+                "addon_users": addon_users,
+                "package_amount": amount,
+                "from_currency": from_currency, #default for all packages
+                "total_from_amount": total_from_amount,
+                "total_to_amount": round(total_from_amount * exchange_rate, 2),
+                "to_currency": to_currency,
+                "exchange_rate": exchange_rate,
+                
+            }
+            
+            if os.getenv("APP_ENV") == "development": #only use this on development
+                amount_detail["paid_amount"] = 1
+            
+            # Paid package - process payment
+            metadata = {
+                "package_id": package_id,
+                "billing_period": billing_period,
+                "business_id": business_id,
+                "user_id": user_id,
+                "user__id": user__id,
+                **json_data.get("metadata", {})
+            }
+            
+            
+            # Generate internal reference based on payment provider
+            
+            if payment_method == PAYMENT_METHODS["HUBTEL"]:
+                reference = generate_internal_reference("HUB")
+            
+            elif payment_method == PAYMENT_METHODS["ASORIBA"]:
+                reference = generate_internal_reference("ASB")
+            
+            else:
+                reference = generate_internal_reference("PMT")
+                
+            amount_detail["payment_gateway"] = payment_method
+                
+                
+            
+            payment_payload = dict()
+            
+            customer_name = decrypt_data(user_info.get("fullname")) if user_info.get("fullname") else ""
+            customer_email = decrypt_data(user_info.get("email")) if user_info.get("email") else ""
+            
+            payment_payload["metadata"] = metadata
+            payment_payload["amount_detail"] = amount_detail
+            payment_payload["customer_phone"] = json_data.get("customer_phone")
+            payment_payload["billing_period"] = json_data.get("billing_period")
+            payment_payload["customer_name"] = customer_name
+            payment_payload["customer_email"] = customer_email
+            payment_payload["package_id"] = json_data.get("package_id")
+            payment_payload["internal_reference"] = reference
+            
+            result = payment_payload
+            
+            # hash the payment detail
+            payment_hashed = hash_transaction(result)
+            
+            # prepare the payment detail for encryption
+            payment_string = json.dumps(payment_payload, sort_keys=True)
+            
+            #encrypt the payment details
+            encrypted_payment = encrypt_data(payment_string)
+            
+            # store the encrypted payment in redis using the payment hash as a key
+            set_redis_with_expiry(payment_hashed, 600, encrypted_payment)
+            
+            
+            # prepare transaction INIT response
+            response = {
+                "success": True,
+                "status_code": HTTP_STATUS_CODES["OK"],
+                "message": TRANSACTION_STATUS_CODE["PAYMENT_INITIATED"],
+                "results": payment_payload,
+                "checksum": str.upper(payment_hashed),
+			}
+            if response:
+                Log.info(f"{log_tag}[{client_ip}] Payment initiated successfully")
+                return response
+            else:
+                Log.info(f"{log_tag}[{client_ip}] error processing payment INIT")
+                return jsonify({
+                    "success": False,
+                    "status_code": HTTP_STATUS_CODES["BAD_REQUEST"],
+                    "message": f"error processing payment INIT",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+                
+        except Exception as e:
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            return prepared_response(
+                status=False,
+                status_code="INTERNAL_SERVER_ERROR",
+                message="Failed to initiate payment",
+                errors=[str(e)]
+            )
+
+
+
+@payment_blp.route("/payments/execute", methods=["POST"])
+class ExecutePayment(MethodView):
+    """Execute a payment transaction."""
+    
+    # @subscription_payment_ip_limiter("subscription")
+    # @subscription_payment_limiter("subscription")
+    @token_required
+    @payment_blp.arguments(ExecutePaymentSchema, location="json")
+    @payment_blp.response(200)
+    def post(self, json_data):
+        """Execute payment for subscription."""
+        
+        client_ip = request.remote_addr
+        user_info = g.get("current_user", {})
+        business_id = str(user_info.get("business_id"))
+        user_id = user_info.get("user_id")
+        user__id = str(user_info.get("_id"))
+        
+        
+        account_type_enc = user_info.get("account_type")
+        account_type = account_type_enc if account_type_enc else None
+        
+        payment_details = None
+
+        checksum = json_data.get("checksum", None)
+        checksum_hash_transformed = str.lower(checksum)
+        
+        payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY")
+        
+        log_tag = make_log_tag(
+            "payment_resource.py",
+            "ExecutePayment",
+            "post",
+            client_ip,
+            user__id,
+            account_type,
+            business_id,
+            business_id,
+        )
+        
+        
+        try:
+            
+            Log.info(f"{log_tag} retrieving payment from redis")
+            encrypted_payement = get_redis(checksum_hash_transformed)
+            
+            if encrypted_payement is None:
+                message = f"The payment has expired or the checksum is invalid. Kindly call the 'payments/initiate' endpoint again and ensure the checksum is valid."
+                Log.info(f"{log_tag}{user__id}{message}")
+                return prepared_response(False, "BAD_REQUEST", f"{message}")
+            
+            decrypted_payment = decrypt_data(encrypted_payement)
+            
+            payment_details = json.loads(decrypted_payment)
+            
+            package_id = payment_details.get("package_id")
+            billing_period = payment_details.get("billing_period")
+            metadata = payment_details.get("metadata")
+            customer_name = payment_details.get("customer_name")
+            customer_email = payment_details.get("customer_email")
+            customer_phone = payment_details.get("customer_phone")
             
             # Get package to verify price
             package = Package.get_by_id(package_id)
@@ -163,8 +406,7 @@ class InitiatePayment(MethodView):
             
             # PAYMENT USING HUBTEL        
             if payment_method in [PAYMENT_METHODS["HUBTEL"], PAYMENT_METHODS["HUBTEL_MOBILE_MONEY"]]:
-                phone = json_data.get("customer_phone")
-                if not phone:
+                if not customer_phone:
                     return prepared_response(
                         status=False,
                         status_code="BAD_REQUEST",
@@ -172,9 +414,6 @@ class InitiatePayment(MethodView):
                     )
                 
                 try:
-                    customer_name = decrypt_data(user_info.get("fullname")) if user_info.get("fullname") else ""
-                    customer_email = decrypt_data(user_info.get("email")) if user_info.get("email") else ""
-                    
                     success, data, error = PaymentService.initiate_hubtel_payment(
                         business_id=business_id,
                         user_id=user_id,
@@ -182,7 +421,8 @@ class InitiatePayment(MethodView):
                         package_id=package_id,
                         billing_period=billing_period,
                         customer_name=customer_name,
-                        phone_number=phone,
+                        payment_details=payment_details,
+                        phone_number=customer_phone,
                         customer_email=customer_email,
                         metadata=metadata,
                     )

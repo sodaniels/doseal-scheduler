@@ -33,6 +33,7 @@ class PaymentService:
         user__id, 
         package_id, 
         billing_period, 
+        payment_details,
         customer_name=None,
         phone_number=None,
         customer_email=None,
@@ -76,17 +77,12 @@ class PaymentService:
             
             Log.info(f"{log_tag} Auth token generated successfully (length: {len(auth_token)})")
             
-            # Generate unique reference
-            reference = generate_internal_reference("HUB")
+            reference = payment_details.get("internal_reference")
             
-            # Convert USD to GHS (Ghana Cedis)
-            # TODO: Use actual currency conversion API
-            exchange_rate = get_exchange_rate("USD", "GHS")
-            amount_ghs = round(amount * exchange_rate, 2)
-            Log.info(f"{log_tag} Converting {amount} USD to {amount_ghs} GHS (rate: {exchange_rate})")
+            amount_detail = payment_details.get("amount_detail")
+            from_currency = amount_detail.get("from_currency")
+            amount =  amount_detail.get("paid_amount") if  amount_detail.get("paid_amount") else  amount_detail.get("total_from_amount")
             
-            if os.getenv("APP_ENV") == "development": #only use this on development
-                amount_ghs = 1 
             
             # Create payment record
             payment = Payment(
@@ -94,8 +90,9 @@ class PaymentService:
                 user_id=user_id,
                 user__id=user__id,
                 reference=reference,
-                amount=amount_ghs,
-                currency="GHS",
+                amount=amount,
+                currency=from_currency,
+                amount_detail=amount_detail,
                 payment_method=PAYMENT_METHODS["HUBTEL"],
                 payment_type=Payment.TYPE_SUBSCRIPTION,
                 package_id=package_id,
@@ -128,7 +125,7 @@ class PaymentService:
             }
             
             payload = {
-                "totalAmount": amount_ghs,
+                "totalAmount": amount,
                 "description": f"Subscription: {package.get('name')} - {billing_period} ({Config.APP_NAME})",
                 "clientReference": reference,
                 "merchantAccountNumber": Config.HUBTEL_MERCHANT_ACCOUNT_NUMBER,
@@ -140,7 +137,7 @@ class PaymentService:
             Log.info(f"{log_tag} Sending Hubtel payment request")
             Log.info(f"{log_tag} URL: {hubtel_url}")
             Log.info(f"{log_tag} Reference: {reference}")
-            Log.info(f"{log_tag} Amount: {amount_ghs} GHS")
+            Log.info(f"{log_tag} Amount: {from_currency} {amount} ")
             
             # Make request
             response = requests.post(
@@ -223,8 +220,8 @@ class PaymentService:
                         "checkout_url": checkout_url,
                         "checkout_id": checkout_id,
                         "reference": reference,
-                        "amount": amount_ghs,
-                        "currency": "GHS",
+                        "amount": amount,
+                        "currency": from_currency,
                         "message": "Payment initiated. Redirecting to Hubtel checkout..."
                     }, None
                 else:

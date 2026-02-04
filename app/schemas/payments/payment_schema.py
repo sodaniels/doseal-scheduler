@@ -22,13 +22,8 @@ class InitiatePaymentSchema(Schema):
         validate=validate.OneOf(["monthly", "quarterly", "yearly", "lifetime"])
     )
     
-    # payment_method = fields.Str(
-    #     required=True,
-    #     validate=validate.OneOf(get_all_payment_methods()),
-    #     error_messages={"required": "Payment method is required"}
-    # )
-    
     # Customer details (required for some gateways)
+    addon_users = fields.Float(required=False, allow_none=True)
     customer_phone = fields.Str(required=False, allow_none=True)
     customer_email = fields.Email(required=False, allow_none=True)
     customer_name = fields.Str(required=False, allow_none=True)
@@ -41,7 +36,15 @@ class InitiatePaymentSchema(Schema):
     metadata = fields.Dict(required=False, load_default={})
     notes = fields.Str(required=False, allow_none=True)
 
-
+class ExecutePaymentSchema(Schema):
+    """Schema for initiating a payment."""
+    
+    checksum = fields.Str(
+        required=True,
+        error_messages={"required": "Checksum is required"}
+    )
+    
+    
 class InitiatePaymentPlanChangeSchema(Schema):
     """Schema for initiating a payment."""
     

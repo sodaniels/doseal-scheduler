@@ -33,6 +33,8 @@ PAYMENT_METHODS = {
     "VODAFONE_CASH": "vodafone_cash",
     "ORANGE_MONEY": "orange_money",
     
+    "ASORIBA": "asoriba",
+    
     # African Payment Gateways
     "FLUTTERWAVE": "flutterwave",
     "PAYSTACK": "paystack",

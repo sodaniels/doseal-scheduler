@@ -36,6 +36,7 @@ class Payment(BaseModel):
         user__id,
         amount,
         payment_method,
+        amount_detail,
         # Optional parameters
         reference=None,
         currency="USD",
@@ -73,6 +74,7 @@ class Payment(BaseModel):
             user_id: User string ID (REQUIRED)
             user__id: User ObjectId (REQUIRED)
             amount: Payment amount (REQUIRED)
+            amount_detail: amount_detail (REQUIRED)
             payment_method: Method used (REQUIRED)
             reference: Internal payment reference
             currency: Currency code (default: USD)
@@ -141,6 +143,7 @@ class Payment(BaseModel):
         # Amount details - NO ENCRYPTION
         self.amount = float(amount)
         self.currency = currency
+        self.amount_detail = amount_detail
         
         # Payment details - NO ENCRYPTION
         self.reference = reference
@@ -189,6 +192,7 @@ class Payment(BaseModel):
             "user_id": self.user_id,
             "user__id": self.user__id,
             "amount": self.amount,
+            "amount_detail": self.amount_detail,
             "currency": self.currency,
             "payment_method": self.payment_method,
             "payment_type": self.payment_type,
@@ -267,6 +271,9 @@ class Payment(BaseModel):
             payment["admin_id"] = str(payment["admin_id"])
         if payment.get("agent_id"):
             payment["agent_id"] = str(payment["agent_id"])
+            
+        if payment.get("amount_detail"):
+            payment["amount_detail"] = str(payment["amount_detail"])    
         
         # Ensure amount is float
         if payment.get("amount"):

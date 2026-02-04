@@ -57,6 +57,7 @@ TRANSACTION_STATUS_CODE = {
     "CREDIT_TRANSACTION": "Cr",
     "STATUS_MESSAGE": "Transaction sent for processing",
     "TRANSACTION_INITIALTED": "Transaction has been initiated successfully",
+    "PAYMENT_INITIATED": "Payment has been initiated successfully",
 }
 
 REQUEST_STATUS_CODE = {
