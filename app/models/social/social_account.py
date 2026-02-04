@@ -89,7 +89,19 @@ class SocialAccount(BaseModel):
             "updated_at": self.updated_at,
         }
 
+
     # -------------------- Queries --------------------
+    
+    # in SocialAccount model
+    @classmethod
+    def find_destination(cls, business_id: str, platform: str, destination_id: str):
+        col = db_ext.get_collection(cls.collection_name)
+        return col.find_one({
+            "business_id": str(business_id),
+            "platform": str(platform).lower(),
+            "destination_id": str(destination_id),
+            "deleted": {"$ne": True},
+        })
 
     @classmethod
     def get_destination(cls, business_id, user__id, platform, destination_id):

@@ -32,6 +32,10 @@ from ...utils.schedule_helper import (
     _store_selection, _load_selection, _delete_selection, _redirect_to_frontend,
     _exchange_code_for_token_threads
 )
+from ...utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
+)
 
 
 blp_meta_oauth = Blueprint("meta_oauth", __name__)
@@ -153,19 +157,19 @@ class FacebookConnectPageResource(MethodView):
         body = request.get_json(silent=True) or {}
         selection_key = body.get("selection_key")
         page_id = body.get("page_id")
-        
+
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
-        
+
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = body.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
             target_business_id = form_business_id
         else:
             target_business_id = auth_business_id
-            
+
         log_tag = make_log_tag(
             "oauth_facebook_resource.py",
             "FacebookConnectPageResource",
@@ -198,24 +202,68 @@ class FacebookConnectPageResource(MethodView):
         page_access_token = selected.get("access_token")
         if not page_access_token:
             return jsonify({"success": False, "message": "Page token missing. Reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-         # ---- PLAN ENFORCER (scoped to target business) ----
-        enforcer = QuotaEnforcer(target_business_id)
-        
-        # ✅ 2) RESERVE QUOTA ONLY WHEN WE ARE ABOUT TO CREATE
-        try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",   # monthly plans => month bucket, yearly => year bucket
-                reason="social_accounts:create",
-            )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} plan limit reached: {e.meta}")
-            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+
+        # ---------------------------------------------------------
+        # ✅ NEW: Prevent double-counting quota on reconnect
+        #   - if already connected and token is still valid => 409
+        #   - if already connected but token expired => allow refresh WITHOUT reserve
+        #   - if not connected => reserve quota then create
+        # ---------------------------------------------------------
+        from pymongo.errors import DuplicateKeyError
+        from ...utils.social.token_utils import is_token_expired, is_token_expiring_soon
 
         try:
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "facebook",
+                str(page_id),
+            )
+        except Exception:
+            Log.info(f"{log_tag} Error retrieving social destination: {str(e)}")
+
+        should_reserve_quota = False
+
+        if existing:
+            # If you have token_expires_at tracking, use it.
+            # If you don't (token_expires_at is None always), then treat as "still valid"
+            # and block reconnect unless frontend explicitly calls a "force_refresh" flow.
+            if not is_token_expired(existing):
+                # Optional: if expiring soon, you can allow refresh (no quota) instead of blocking
+                if is_token_expiring_soon(existing, minutes=10):
+                    Log.info(f"{log_tag} token expiring soon; refreshing token without consuming quota")
+                else:
+                    return jsonify({
+                        "success": False,
+                        "message": "This Facebook Page is already connected.",
+                        "code": "ALREADY_CONNECTED",
+                    }), HTTP_STATUS_CODES["CONFLICT"]
+            else:
+                Log.info(f"{log_tag} token expired; refreshing token without consuming quota")
+        else:
+            should_reserve_quota = True
+
+        # ---- PLAN ENFORCER ----
+        enforcer = QuotaEnforcer(target_business_id)
+
+        # ✅ Reserve quota ONLY if this is a brand new connection
+        if should_reserve_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+
+        try:
+            # Upsert is fine:
+            # - if existing: this updates access_token_plain and meta (refresh)
+            # - if new: creates destination
             SocialAccount.upsert_destination(
                 business_id=owner["business_id"],
                 user__id=owner["user__id"],
@@ -225,7 +273,7 @@ class FacebookConnectPageResource(MethodView):
                 destination_name=selected.get("name"),
                 access_token_plain=page_access_token,
                 refresh_token_plain=None,
-                token_expires_at=None,
+                token_expires_at=None,  # ideally store expires_at if you can obtain it
                 scopes=["pages_show_list", "pages_read_engagement", "pages_manage_posts"],
                 platform_user_id=str(page_id),
                 platform_username=selected.get("name"),
@@ -238,12 +286,25 @@ class FacebookConnectPageResource(MethodView):
 
             _delete_selection("fb", selection_key)
 
-            return jsonify({"success": True, "message": "Facebook Page connected successfully"}), HTTP_STATUS_CODES["OK"]
+            return jsonify({
+                "success": True,
+                "message": "Facebook Page connected successfully" if should_reserve_quota else "Facebook Page refreshed successfully",
+            }), HTTP_STATUS_CODES["OK"]
+
+        except DuplicateKeyError as e:
+            # If it was a race and doc already exists, don't punish user
+            Log.info(f"{log_tag} DuplicateKeyError (already exists): {e}")
+            if should_reserve_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({
+                "success": True,
+                "message": "Facebook Page already connected (no changes required).",
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-            Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
+            if should_reserve_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
             return jsonify({"success": False, "message": "Failed to connect page"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 # -------------------------------------------------------------------
