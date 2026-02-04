@@ -41,9 +41,13 @@ from ....constants.service_code import (
     HTTP_STATUS_CODES, SYSTEM_USERS, BUSINESS_FIELDS
 )
 from tasks import (
-    send_user_registration_email, 
+    # send_user_registration_email, 
     send_new_contact_sale_email
 )
+from ....services.email_service import (
+    send_user_registration_email
+)
+
 from ....utils.generators import (
     generate_reset_token,
     generate_confirm_email_token
@@ -442,14 +446,20 @@ class RegisterBusinessResource(MethodView):
                             
                             if update_code:
                                 Log.info(f"{log_tag}\t reset_url: {reset_url}")
-                                send_user_registration_email(business_data["email"], user_data['fullname'], reset_url)
+                                # send_user_registration_email(business_data["email"], user_data['fullname'], reset_url)
+                                try:
+                                    result = send_user_registration_email(business_data["email"], user_data["fullname"], reset_url)
+                                    Log.info(f"Email sent result={result}")
+                                except Exception as e:
+                                    Log.error(f"Email sending failed: {e}")
+                                    raise
                         except Exception as e:
                             Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
                         
                         try:
                             # send email to admins about registration
                             send_new_contact_sale_email(
-                                "s.daniels@myzeeapy.com", "Samuel Daniels", 
+                                "opokudaniels@yahoo.com", "Samuel Daniels", 
                                 user_data['email'],
                                 user_data['fullname'],
                                 user_data['phone_number'],
