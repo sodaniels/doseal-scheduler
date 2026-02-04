@@ -50,30 +50,5 @@ curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/pinteres
   3. Update the server/social/job.py with helper functions and final udpate to _publish_scheduled_post
 
 
-EMAIL CONFIGURATION
-
-How to switch providers (env examples)
-
-Mailgun
-
-export EMAIL_PROVIDER=mailgun
-export SENDER_EMAIL="info@mg.yourdomain.com"
-export MAIL_NAME="Instntmny Transfer"
-
-export MAILGUN_API_KEY="key-xxxxxxxx"
-export INSTNTMNY_MAILGUN_DOMAIN="mg.yourdomain.com"
-export MAILGUN_API_HOST="api.mailgun.net"   # or api.eu.mailgun.net
-export EMAIL_TEMPLATES_DIR="templates"
-
-SMTP (works for Gmail too)
-
-export EMAIL_PROVIDER=smtp
-export SENDER_EMAIL="yourgmail@gmail.com"
-export MAIL_NAME="Instntmny Transfer"
-
-export SMTP_HOST="smtp.gmail.com"
-export SMTP_PORT="587"
-export SMTP_USERNAME="yourgmail@gmail.com"
-export SMTP_PASSWORD="your_app_password_here"
-export SMTP_USE_TLS="true"
-export EMAIL_TEMPLATES_DIR="templates"
+curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MWVkZjM5OTExZTdkYjY4MjQ5YjU0IiwiZXhwIjoxNzcwNDYwMDYxLCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.OV1_yDyWuYP5O5qWV-lyoPIWXz7AXV5-LPZ3aKAxtVU"

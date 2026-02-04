@@ -59,14 +59,6 @@ class FacebookOauthStartResource(MethodView):
         
         if initial_check_result is not None:
             return initial_check_result
-        
-        # 2. check if agent has enough balance to cover transaction
-        # transaction_balance_check = pre_transaction_check.agent_has_sufficient_available(transaction_data.get("send_amount"))
-        # Log.info(f"{log_tag} transaction_balance_check: {transaction_balance_check}")
-        # if not transaction_balance_check:
-        #     Log.info(f"{log_tag} Insufficient funds for this transaction.")
-        #     return prepared_response(False, "BAD_REQUEST", f"Insufficient funds for this transaction") 
-        
         #####################PRE TRANSACTION CHECKS#########################
 
         redirect_uri = _require_env("FACEBOOK_REDIRECT_URI", log_tag)
