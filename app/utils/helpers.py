@@ -989,7 +989,33 @@ def resolve_target_business_id_from_payload(payload: dict | None = None):
 
     return auth_business_id
 
+def build_receipt_sms(p: dict) -> str:
+    Log.info("Building SMS receipt message", extra={
+        "reference": p.get("reference"),
+        "status": p.get("status"),
+        "amount": p.get("amount"),
+        "currency": p.get("currency")
+    })
 
+    status = (p.get("status") or "").upper()
+    currency = p.get("currency") or "GHS"
+
+    sms = (
+        f"Donation Receipt ({status})\n"
+        f"Ref: {p.get('reference','-')}\n"
+        f"Amount: {currency} {p.get('amount','0.00')}\n"
+        f"Fee: {currency} {p.get('charge','0.00')}\n"
+        f"Received: {currency} {p.get('amount_after_charge','0.00')}\n"
+        f"TxnID: {p.get('processor_transaction_id','-')}\n"
+        f"Date: {p.get('payment_date','-')}\n"
+        f"Name: {(p.get('first_name','') + ' ' + p.get('last_name','')).strip() or 'Anonymous'}"
+    )
+
+    Log.debug("SMS content built successfully", extra={
+        "sms_length": len(sms)
+    })
+
+    return sms
 
 
 
