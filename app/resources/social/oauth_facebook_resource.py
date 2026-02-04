@@ -220,6 +220,7 @@ class FacebookConnectPageResource(MethodView):
                 str(page_id),
             )
         except Exception:
+            existing = None
             Log.info(f"{log_tag} Error retrieving social destination: {str(e)}")
 
         should_reserve_quota = False
@@ -499,57 +500,26 @@ class InstagramConnectAccountResource(MethodView):
     @token_required
     def post(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_meta.py][InstagramConnectAccountResource][post][{client_ip}]"
 
         body = request.get_json(silent=True) or {}
         selection_key = body.get("selection_key")
         ig_user_id = body.get("ig_user_id")  # chosen IG user id
+
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
 
-        if not selection_key or not ig_user_id:
-            return jsonify({"success": False, "message": "selection_key and ig_user_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        sel = _load_selection("ig", selection_key)
-        if not sel:
-            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        owner = sel.get("owner") or {}
-        accounts = sel.get("accounts") or []
-
-        user = g.get("current_user", {}) or {}
-        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
-            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
-
-        # ✅ NEW: match adapter output (destination_id)
-        selected = next((a for a in accounts if str(a.get("destination_id")) == str(ig_user_id)), None)
-        if not selected:
-            return jsonify({"success": False, "message": "Invalid ig_user_id for this selection_key"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        page_access_token = selected.get("page_access_token")
-        if not page_access_token:
-            return jsonify({"success": False, "message": "Missing page_access_token. Reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-        
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = body.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
-            target_business_id = form_business_id
+            target_business_id = str(form_business_id)
         else:
             target_business_id = auth_business_id
-        
-        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
-        form_business_id = body.get("business_id")
-        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
-            target_business_id = form_business_id
-        else:
-            target_business_id = auth_business_id
-            
+
         log_tag = make_log_tag(
-            "oauth_facebook_resource.py",
-            "FacebookConnectPageResource",
+            "oauth_instagram_resource.py",
+            "InstagramConnectAccountResource",
             "post",
             client_ip,
             auth_user__id,
@@ -557,22 +527,112 @@ class InstagramConnectAccountResource(MethodView):
             auth_business_id,
             target_business_id
         )
-        
-         # ---- PLAN ENFORCER (scoped to target business) ----
-        enforcer = QuotaEnforcer(target_business_id)
-        
-        # ✅ 2) RESERVE QUOTA ONLY WHEN WE ARE ABOUT TO CREATE
+
+        if not selection_key or not ig_user_id:
+            return jsonify({
+                "success": False,
+                "message": "selection_key and ig_user_id are required"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        sel = _load_selection("ig", selection_key)
+        if not sel:
+            return jsonify({
+                "success": False,
+                "message": "Selection expired. Please reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        owner = sel.get("owner") or {}
+        accounts = sel.get("accounts") or []
+
+        user = g.get("current_user", {}) or {}
+        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
+            return jsonify({
+                "success": False,
+                "message": "Not allowed for this selection_key"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # Match adapter output (destination_id)
+        selected = next((a for a in accounts if str(a.get("destination_id")) == str(ig_user_id)), None)
+        if not selected:
+            return jsonify({
+                "success": False,
+                "message": "Invalid ig_user_id for this selection_key"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        page_access_token = selected.get("page_access_token")
+        if not page_access_token:
+            return jsonify({
+                "success": False,
+                "message": "Missing page_access_token. Reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # ------------------------------------------------------------
+        # ✅ NEW: check if this destination already exists
+        #   - if exists and token is not expired/expiring soon => block (already connected)
+        #   - if exists but expired/expiring soon => allow reconnect WITHOUT consuming quota
+        #   - if not exists => consume quota then create
+        #
+        # NOTE: Instagram publishing uses page_access_token (page-scoped token)
+        # token_expires_at is optional; if you don't store it, we'll treat it as "unknown"
+        # and allow reconnect only when user explicitly tries (your OAuth flow).
+        # ------------------------------------------------------------
+        destination_id = str(selected.get("destination_id") or "")
+        if not destination_id:
+            return jsonify({
+                "success": False,
+                "message": "Missing destination_id from selection"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
         try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",   # monthly plans => month bucket, yearly => year bucket
-                reason="social_accounts:create",
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "instagram",
+                destination_id,
             )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} plan limit reached: {e.meta}")
-            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+        except Exception:
+            existing = None
+
+        # ---- PLAN ENFORCER (scoped to target business) ----
+        enforcer = QuotaEnforcer(target_business_id)
+
+        consume_quota = True
+        if existing:
+            # If token not expired => block; if expiring soon/expired => allow refresh (no quota)
+            # You should implement these helpers once globally (e.g. app/utils/social/token_utils.py)
+            # and import them here.
+            try:
+                if not is_token_expired(existing):
+                    if is_token_expiring_soon(existing, minutes=10):
+                        consume_quota = False
+                        Log.info(f"{log_tag} IG token expiring soon; allowing OAuth reconnect without consuming quota")
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "message": "This Instagram account is already connected.",
+                            "code": "ALREADY_CONNECTED",
+                        }), HTTP_STATUS_CODES["CONFLICT"]
+                else:
+                    consume_quota = False
+                    Log.info(f"{log_tag} IG token expired; allowing OAuth reconnect without consuming quota")
+            except Exception:
+                # If expiry cannot be determined, be safe:
+                # - allow overwrite without quota (since it's same account)
+                consume_quota = False
+                Log.info(f"{log_tag} Could not determine token expiry; allowing overwrite without consuming quota")
+
+        if consume_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
@@ -580,40 +640,53 @@ class InstagramConnectAccountResource(MethodView):
                 user__id=owner["user__id"],
                 platform="instagram",
 
-                # ✅ destination_id IS the IG user id
-                destination_id=str(selected.get("destination_id")),
+                # destination_id IS the IG user id
+                destination_id=destination_id,
                 destination_type="ig_user",
-                destination_name=selected.get("username") or selected.get("page_name"),
+                destination_name=selected.get("username") or selected.get("page_name") or destination_id,
 
-                # ✅ page token is used to publish to IG Graph
+                # page token is used to publish to IG Graph
                 access_token_plain=page_access_token,
 
                 refresh_token_plain=None,
-                token_expires_at=None,
 
-                scopes=["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement"],
+                # If you have expires_at from OAuth debug_token, store it here.
+                # Otherwise keep None (and your expiry helpers should treat None as "unknown/not expired").
+                token_expires_at=existing.get("token_expires_at") if isinstance(existing, dict) else None,
 
-                platform_user_id=str(selected.get("destination_id")),
+                scopes=[
+                    "instagram_basic",
+                    "instagram_content_publish",
+                    "pages_show_list",
+                    "pages_read_engagement",
+                ],
+
+                platform_user_id=destination_id,
                 platform_username=selected.get("username"),
 
                 meta={
-                    "ig_user_id": str(selected.get("destination_id")),
+                    "ig_user_id": destination_id,
                     "ig_username": selected.get("username"),
-                    "page_id": str(selected.get("page_id")),
+                    "page_id": str(selected.get("page_id") or ""),
                     "page_name": selected.get("page_name"),
                 },
             )
 
             _delete_selection("ig", selection_key)
 
-            return jsonify({"success": True, "message": "Instagram account connected successfully"}), HTTP_STATUS_CODES["OK"]
+            return jsonify({
+                "success": True,
+                "message": "Instagram account connected successfully"
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-            Log.info(f"{log_tag} DuplicateKeyError on social_accounts insert: {e}")
-            return jsonify({"success": False, "message": "Failed to connect instagram"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
+            if consume_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect instagram"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 # -------------------------------------------------------------------
 # INSTAGRAM: LIST ACCOUNTS (selection screen)
