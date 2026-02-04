@@ -75,7 +75,7 @@ class InitiatePayment(MethodView):
         account_type_enc = user_info.get("account_type")
         account_type = account_type_enc if account_type_enc else None
         
-        payment_method = None
+        payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY")
         
         log_tag = make_log_tag(
             "payment_resource.py",
@@ -97,15 +97,22 @@ class InitiatePayment(MethodView):
             if tenant is not None:
                 country_iso_3 = tenant.get("country_iso_3")
                 
-                # Configure country specific payment gateway here
-                
-                if str.upper(country_iso_3) == "GHA": #Ghana
+                if payment_method == PAYMENT_METHODS["HUBTEL"]:
                     payment_method = "hubtel"
-                elif str.upper(country_iso_3) == "GBR": # United Kingdom
-                    payment_method = "hubtel" # Use hubtel for now
-                else:
-                    payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY", "hubtel")
                 
+                elif payment_method == PAYMENT_METHODS["ASORIBA"]:
+                    payment_method = "asoriba"
+                
+                else:
+                    # Configure country specific payment gateway here
+                    
+                    if str.upper(country_iso_3) == "GHA": #Ghana
+                        payment_method = "hubtel"
+                    elif str.upper(country_iso_3) == "GBR": # United Kingdom
+                        payment_method = "hubtel" # Use hubtel for now
+                    else:
+                        payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY", "hubtel")
+                    
                 Log.info(f"{log_tag} Using payment gateway: {payment_method}")
             else:
                 Log.info(f"{log_tag} No tenant information found. Using default payment.")  
@@ -445,13 +452,37 @@ class ExecutePayment(MethodView):
                     Log.info(f"{log_tag} Error occurred: {str(e)}")
               
             # Route to appropriate payment gateway
-            elif payment_method == PAYMENT_METHODS["MPESA"]:
-                # TODO: Implement Paystack/Flutterwave payment initiation
-                return prepared_response(
-                    status=False,
-                    status_code="NOT_IMPLEMENTED",
-                    message=f"{payment_method} payment not yet implemented"
-                )
+            elif payment_method == PAYMENT_METHODS["ASORIBA"]:
+                try:
+                    success, data, error = PaymentService.initiate_asoriba_payment(
+                        business_id=business_id,
+                        user_id=user_id,
+                        user__id=user__id,
+                        package_id=package_id,
+                        customer_name=customer_name,
+                        payment_details=payment_details,
+                        phone_number=customer_phone,
+                        customer_email=customer_email,
+                        metadata=metadata,
+                    )
+                    
+                    if success:
+                        return prepared_response(
+                            status=True,
+                            status_code="OK",
+                            message=data.get("message"),
+                            data=data
+                        )
+                    else:
+                        return prepared_response(
+                            status=False,
+                            status_code="BAD_REQUEST",
+                            message=error or "Failed to initiate payment"
+                        )
+                
+                except Exception as e:
+                    Log.info(f"{log_tag} Error occurred: {str(e)}")
+                
             elif payment_method in [PAYMENT_METHODS["PAYSTACK"], PAYMENT_METHODS["FLUTTERWAVE"]]:
                 # TODO: Implement Paystack/Flutterwave payment initiation
                 return prepared_response(

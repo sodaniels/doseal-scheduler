@@ -41,24 +41,21 @@ class Config:
     CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL")
     HUBTEL_RETURN_URL = os.getenv("HUBTEL_RETURN_URL")
     HUBTEL_CANCELLATION_URL = os.getenv("HUBTEL_CANCELLATION_URL")
+    #SMS
+    HUBTEL_SMS_SENDER="Fucah"
+    HUBTEL_SMS_CLIENT_ID="tdmmfbsz"
+    HUBTEL_SMS_CLIENT_SECRET="zgajgqik"
+    HUBTEL_SMS_BASE_URL="https://smsc.hubtel.com/v1/messages/send?"
     
+        
     # ========================================
-    # M-PESA CONFIGURATION
+    # ASORIBA CONFIGURATION
     # ========================================
-    
-    MPESA_ENVIRONMENT = os.getenv('MPESA_ENVIRONMENT', 'sandbox')  # 'sandbox' or 'production'
-    MPESA_CONSUMER_KEY = os.getenv('MPESA_CONSUMER_KEY')
-    MPESA_CONSUMER_SECRET = os.getenv('MPESA_CONSUMER_SECRET')
-    MPESA_SHORTCODE = os.getenv('MPESA_SHORTCODE')
-    MPESA_PASSKEY = os.getenv('MPESA_PASSKEY')
-    MPESA_CALLBACK_URL = os.getenv('MPESA_CALLBACK_URL', 'https://yourdomain.com/api/v1/webhooks/payment/mpesa')
-    MPESA_SECURITY_CREDENTIAL = os.getenv('MPESA_SECURITY_CREDENTIAL')
-    
-    # M-Pesa API URLs
-    if MPESA_ENVIRONMENT == 'production':
-        MPESA_BASE_URL = 'https://api.safaricom.co.ke'
-    else:
-        MPESA_BASE_URL = 'https://sandbox.safaricom.co.ke'
+    ASORIBA_PAYMENT_URL = os.getenv("ASORIBA_PAYMENT_URL")
+    ASORIBA_API_KEY = os.getenv("ASORIBA_API_KEY")
+    ASORIBA_CALL_BACK_URL = os.getenv("ASORIBA_CALL_BACK_URL")
+    ASORIBA_POST_URL = os.getenv("ASORIBA_POST_URL")
+    ASORIBA_RETURN_URL = os.getenv("ASORIBA_RETURN_URL")
 
 class DevelopmentConfig(Config):
     """Development configuration."""
