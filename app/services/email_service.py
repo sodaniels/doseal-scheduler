@@ -251,14 +251,22 @@ def send_user_registration_email(email: str, fullname: str, reset_url: str) -> D
     cfg = load_email_config()
     svc = EmailService(cfg)
 
-    subject = f"Welcome to {cfg.from_name}"
+    subject = f"Welcome to {cfg.from_name}! Please verify your email address"
     text = f"Hi {fullname},\n\nComplete your registration by confirming your email:\n{reset_url}\n"
 
     return svc.send_templated(
         to=email,
         subject=subject,
-        template="email/agent_initial_account.html",
-        context={"email": email, "link": reset_url, "app_name": cfg.from_name, "fullname": fullname},
+        template="email/initial_account.html",
+        context={
+            "email": email,
+            "link": reset_url,
+            "app_name": cfg.from_name,
+            "fullname": fullname,
+            "expiry_minutes": 5,
+            "support_email": "support@schedulefy.org",
+            "sender_domain": "schedulefy.org",
+        },
         text_fallback=text,
         tags=["registration"],
         meta={"email_type": "user_registration"},
