@@ -455,8 +455,6 @@ class RegisterBusinessResource(MethodView):
                             Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
                         
                         try:
-                            store_url = business_data.get("store_url") or business_data.get("url") or business_data.get("website_url")
-                            to_admins = os.getenv("ADMIN_EMAILS_FOR_SUPPORT_UPDATES", ["opokudaniels@yahoo.com"])
                             send_new_contact_sale_email(
                                 to_admins=["opokudaniels@yahoo.com", "dosealltd@gmail.com"],
                                 admin_name="Samuel Daniels",
@@ -464,7 +462,6 @@ class RegisterBusinessResource(MethodView):
                                 requester_fullname=user_data["fullname"],
                                 requester_phone_number=user_data["phone_number"],
                                 company_name=business_data["business_name"],
-                                store_url=store_url or "N/A" ,
                                 cc_admins=["samuel@doseal.org"],
                             )
                         except Exception as e:

@@ -1,137 +1,58 @@
 <!doctype html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width" />
-  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-  <title>New Contact Sale Request</title>
+<meta charset="utf-8" />
+<title>New Contact Sale Request</title>
 
-  <style>
-    body { margin:0; padding:0; background:#f6f6f6; }
-    table { border-collapse:collapse; }
-    .wrapper { width:100%; background:#f6f6f6; padding:24px 12px; }
-    .container { max-width:600px; margin:0 auto; background:#ffffff; border:1px solid #e9e9e9; border-radius:10px; overflow:hidden; }
-    .header { padding:18px 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-    .content { padding:24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:#111827; font-size:14px; line-height:1.7; }
-    .footer { padding:16px 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:#6b7280; font-size:12px; border-top:1px solid #f1f1f1; }
-    h1 { margin:0 0 8px; font-size:18px; }
-    p { margin:0 0 14px; }
-    .muted { color:#6b7280; font-size:13px; }
-    .card { background:#f9fafb; border:1px solid #e5e7eb; border-radius:10px; padding:14px; margin:14px 0; }
-    .row { margin:0 0 10px; }
-    .label { color:#6b7280; font-size:12px; margin-bottom:2px; }
-    .value { color:#111827; font-weight:600; word-break:break-word; }
-    .btn {
-      display:inline-block;
-      background:#2563eb;
-      color:#ffffff !important;
-      text-decoration:none;
-      font-weight:700;
-      border-radius:8px;
-      padding:10px 14px;
-    }
-    .code-link {
-      word-break:break-all;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      font-size:12px;
-      color:#111827;
-      background:#ffffff;
-      border:1px solid #e5e7eb;
-      padding:10px;
-      border-radius:8px;
-      display:block;
-    }
-    @media (max-width: 640px) {
-      .wrapper { padding:14px 10px; }
-      .content, .header, .footer { padding:16px 18px; }
-      .btn { display:block; text-align:center; }
-    }
-  </style>
+<style>
+body { margin:0; background:#f6f6f6; }
+.wrapper { width:100%; padding:24px 12px; }
+.container { max-width:600px; margin:0 auto; background:#ffffff; border-radius:10px; border:1px solid #e9e9e9; }
+.header { padding:18px 24px; font-family: Arial, sans-serif; font-weight:700; }
+.content { padding:24px; font-family: Arial, sans-serif; font-size:14px; color:#111827; }
+.card { background:#f9fafb; border:1px solid #e5e7eb; border-radius:10px; padding:14px; margin:14px 0; }
+.label { font-size:12px; color:#6b7280; }
+.value { font-weight:600; margin-bottom:10px; }
+.footer { padding:16px 24px; font-size:12px; color:#6b7280; border-top:1px solid #f1f1f1; }
+</style>
 </head>
 
 <body>
-  <div class="wrapper">
-    <div class="container">
+<div class="wrapper">
+  <div class="container">
 
-      <div class="header">
-        <table role="presentation" width="100%">
-          <tr>
-            <td style="font-weight:700; color:#111827;">
-              {{ app_name }}
-            </td>
-            <td align="right" style="color:#6b7280; font-size:12px;">
-              Admin notification
-            </td>
-          </tr>
-        </table>
-      </div>
-
-      <div class="content">
-        <h1>New Contact Sale Request</h1>
-
-        <p>Hi {{ admin_name }},</p>
-        <p class="muted">
-          A new contact sale request has been submitted. Details are below:
-        </p>
-
-        <div class="card">
-          <div class="row">
-            <div class="label">Company</div>
-            <div class="value">{{ company_name }}</div>
-          </div>
-
-          <div class="row">
-            <div class="label">Store URL</div>
-            <div class="value">
-              <a href="{{ store_url }}" style="color:#2563eb; text-decoration:underline;" target="_blank" rel="noopener noreferrer">
-                {{ store_url }}
-              </a>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="row">
-            <div class="label">Requester Name</div>
-            <div class="value">{{ requester_fullname }}</div>
-          </div>
-
-          <div class="row">
-            <div class="label">Requester Email</div>
-            <div class="value">
-              <a href="mailto:{{ requester_email }}" style="color:#2563eb; text-decoration:underline;">
-                {{ requester_email }}
-              </a>
-            </div>
-          </div>
-
-          <div class="row" style="margin-bottom:0;">
-            <div class="label">Requester Phone</div>
-            <div class="value">{{ requester_phone_number }}</div>
-          </div>
-        </div>
-
-        <p style="margin-top:18px;">
-          <a class="btn" href="{{ store_url }}" target="_blank" rel="noopener noreferrer">Open Store</a>
-        </p>
-
-        <p class="muted" style="margin-bottom:8px;">
-          If the button doesn’t work, copy and paste this link:
-        </p>
-        <span class="code-link">{{ store_url }}</span>
-
-        <p style="margin-top:18px;">
-          — {{ app_name }}
-        </p>
-      </div>
-
-      <div class="footer">
-        <p style="margin:0;">
-          This is an automated message from {{ app_name }}.
-        </p>
-      </div>
-
+    <div class="header">
+      {{ app_name }} — Admin Notification
     </div>
+
+    <div class="content">
+      <h2>New Contact Sale Request</h2>
+
+      <p>Hi {{ admin_name }},</p>
+      <p>A new contact sale request has been submitted.</p>
+
+      <div class="card">
+        <div class="label">Company</div>
+        <div class="value">{{ company_name }}</div>
+
+        <div class="label">Requester Name</div>
+        <div class="value">{{ requester_fullname }}</div>
+
+        <div class="label">Requester Email</div>
+        <div class="value">{{ requester_email }}</div>
+
+        <div class="label">Requester Phone</div>
+        <div class="value">{{ requester_phone_number }}</div>
+      </div>
+
+      <p>— {{ app_name }}</p>
+    </div>
+
+    <div class="footer">
+      This is an automated message from {{ app_name }}.
+    </div>
+
   </div>
+</div>
 </body>
 </html>
