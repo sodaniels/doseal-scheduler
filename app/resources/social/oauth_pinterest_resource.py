@@ -25,6 +25,10 @@ from ...utils.schedule_helper import (
     _store_selection, _load_selection, _delete_selection,
     _redirect_to_frontend,
 )
+from ...utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
+)
 
 blp_pinterest_oauth = Blueprint("pinterest_oauth", __name__)
 
@@ -204,6 +208,9 @@ class PinterestBoardsResource(MethodView):
 
 # -------------------------------------------------------------------
 # PINTEREST: CONNECT BOARD (finalize into social_accounts)
+#  - If board already connected and token not expired/expiring soon => block
+#  - If board already connected but token expired/expiring soon => refresh token (no quota) then upsert
+#  - If board not connected => consume quota then upsert
 # -------------------------------------------------------------------
 @blp_pinterest_oauth.route("/social/pinterest/connect-board", methods=["POST"])
 class PinterestConnectBoardResource(MethodView):
@@ -220,8 +227,12 @@ class PinterestConnectBoardResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
 
+        # Optional business override for system roles
         form_business_id = body.get("business_id")
-        target_business_id = form_business_id if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id else auth_business_id
+        target_business_id = str(form_business_id) if account_type in (
+            SYSTEM_USERS["SYSTEM_OWNER"],
+            SYSTEM_USERS["SUPER_ADMIN"],
+        ) and form_business_id else auth_business_id
 
         log_tag = make_log_tag(
             "oauth_pinterest_resource.py",
@@ -235,65 +246,158 @@ class PinterestConnectBoardResource(MethodView):
         )
 
         if not selection_key or not board_id:
-            return jsonify({"success": False, "message": "selection_key and board_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "selection_key and board_id are required"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         sel = _load_selection("pi", selection_key)
         if not sel:
-            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "Selection expired. Please reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         owner = sel.get("owner") or {}
         user = g.get("current_user", {}) or {}
         if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
-            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+            return jsonify({
+                "success": False,
+                "message": "Not allowed for this selection_key"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
+        # Tokens from selection
         access_token = sel.get("access_token")
         refresh_token = sel.get("refresh_token")
+        token_expires_at = sel.get("token_expires_at")  # if you stored it during OAuth; otherwise None
+
+        if not access_token:
+            return jsonify({
+                "success": False,
+                "message": "Missing access_token in selection. Please reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
         boards = sel.get("boards") or []
         selected = next((b for b in boards if str(b.get("id")) == str(board_id)), None)
         if not selected:
-            return jsonify({"success": False, "message": "Invalid board_id for this selection_key"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "Invalid board_id for this selection_key"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        # ---- PLAN ENFORCER ----
-        enforcer = QuotaEnforcer(target_business_id)
+        destination_id = str(board_id)
+
+        # ------------------------------------------------------------
+        # ✅ NEW: check if this destination already exists
+        # ------------------------------------------------------------
         try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",
-                reason="social_accounts:create",
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "pinterest",
+                destination_id,
             )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} plan limit reached: {e.meta}")
-            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+        except Exception:
+            existing = None
+
+        enforcer = QuotaEnforcer(target_business_id)
+
+        consume_quota = True
+        if existing:
+            # If token not expired => block; if expiring soon/expired => allow reconnect (no quota)
+            try:
+                if not is_token_expired(existing):
+                    if is_token_expiring_soon(existing, minutes=10):
+                        consume_quota = False
+                        Log.info(f"{log_tag} Pinterest token expiring soon; allowing OAuth reconnect without consuming quota")
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "message": "This Pinterest board is already connected.",
+                            "code": "ALREADY_CONNECTED",
+                        }), HTTP_STATUS_CODES["CONFLICT"]
+                else:
+                    consume_quota = False
+                    Log.info(f"{log_tag} Pinterest token expired; allowing OAuth reconnect without consuming quota")
+            except Exception:
+                consume_quota = False
+                Log.info(f"{log_tag} Could not determine token expiry; allowing overwrite without consuming quota")
+
+        # ------------------------------------------------------------
+        # ✅ Only consume quota when actually creating a NEW destination
+        # ------------------------------------------------------------
+        if consume_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
                 business_id=owner["business_id"],
                 user__id=owner["user__id"],
                 platform="pinterest",
-                destination_id=str(board_id),
+
+                destination_id=destination_id,
                 destination_type="board",
-                destination_name=selected.get("name"),
+                destination_name=selected.get("name") or destination_id,
 
                 access_token_plain=access_token,
                 refresh_token_plain=refresh_token,
-                token_expires_at=None,
-                scopes=(os.getenv("PINTEREST_SCOPES", "").split(",") if os.getenv("PINTEREST_SCOPES") else []),
 
-                platform_user_id=str(board_id),
+                # If you stored expiry in selection, persist it; else keep existing expiry if any.
+                token_expires_at=token_expires_at if token_expires_at is not None else (
+                    existing.get("token_expires_at") if isinstance(existing, dict) else None
+                ),
+
+                # If you store scopes in selection, prefer that; otherwise env fallback.
+                scopes=(
+                    sel.get("scopes")
+                    or (os.getenv("PINTEREST_SCOPES", "").split(",") if os.getenv("PINTEREST_SCOPES") else [])
+                ),
+
+                platform_user_id=destination_id,
                 platform_username=selected.get("name"),
 
                 meta={
-                    "board_id": str(board_id),
+                    "board_id": destination_id,
                     "privacy": selected.get("privacy"),
                 },
             )
 
             _delete_selection("pi", selection_key)
-            return jsonify({"success": True, "message": "Pinterest board connected successfully"}), HTTP_STATUS_CODES["OK"]
+
+            return jsonify({
+                "success": True,
+                "message": "Pinterest board connected successfully"
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-            return jsonify({"success": False, "message": "Failed to connect Pinterest board"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+            if consume_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect Pinterest board"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
