@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -31,6 +32,113 @@ from ...utils.social.publish_helpers import (
 from ...schemas.social.scheduled_posts_schema import PLATFORM_RULES
 
 blp_unified_publish = Blueprint("unified_publish", __name__, description="Unified publishing")
+
+
+# ------------------------------------------------------------------
+# Local helpers (fixes common client datetime formatting issues)
+# ------------------------------------------------------------------
+def _normalize_iso8601(s: str) -> str:
+    """
+    Accepts common variants and makes them parseable by datetime.fromisoformat / your helper:
+      - Pads single-digit hour: 2026-02-05T1:41:00+00:00 -> 2026-02-05T01:41:00+00:00
+      - Converts trailing Z to +00:00
+    """
+    if not s:
+        return s
+
+    s = s.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
+    # pad hour if single digit after 'T'
+    # e.g. ...T1: -> ...T01:
+    s = re.sub(r"T(\d):", r"T0\1:", s)
+    return s
+
+
+def _safe_parse_scheduled_at(s: str) -> datetime:
+    """
+    Uses your project's _parse_iso8601_with_tz, but normalizes first and provides a safer fallback.
+    Always returns timezone-aware UTC datetime.
+    """
+    s2 = _normalize_iso8601(s)
+    try:
+        dt = _parse_iso8601_with_tz(s2)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        # Fallback: python parsing after normalization
+        try:
+            dt = datetime.fromisoformat(s2)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            raise ValidationError({"scheduled_at": ["Invalid datetime format. Use ISO 8601 e.g. 2026-02-05T12:07:00+00:00"]})
+
+
+def _normalize_destination_for_platform(dest: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalizes destination_type and placement for known platform quirks.
+    IMPORTANT:
+      - LinkedIn: member/profile/user => author
+      - WhatsApp: force placement direct; map destination_type to phone_number
+    """
+    dest = dict(dest or {})
+    platform = (dest.get("platform") or "").lower().strip()
+    dest["platform"] = platform
+
+    placement = (dest.get("placement") or "").lower().strip() or _default_placement(dest)
+    dest["placement"] = placement
+
+    # LinkedIn aliases
+    if platform == "linkedin":
+        LINKEDIN_TYPE_ALIASES = {
+            "profile": "author",
+            "person": "author",
+            "member": "author",
+            "user": "author",
+            "author": "author",
+            "page": "organization",
+            "company": "organization",
+            "org": "organization",
+            "organisation": "organization",
+            "organization": "organization",
+        }
+        raw_type = (dest.get("destination_type") or "").lower().strip()
+        if raw_type:
+            dest["destination_type"] = LINKEDIN_TYPE_ALIASES.get(raw_type, raw_type)
+
+    # WhatsApp normalization
+    if platform == "whatsapp":
+        WHATSAPP_TYPE_ALIASES = {
+            "phone": "phone_number",
+            "number": "phone_number",
+            "phone_number": "phone_number",
+        }
+        raw_type = (dest.get("destination_type") or "").lower().strip()
+        dest["destination_type"] = WHATSAPP_TYPE_ALIASES.get(raw_type, "phone_number")
+
+        # WhatsApp placement must be "direct" (your rule set)
+        # If client sends "feed"/empty, we force it to direct instead of erroring.
+        dest["placement"] = "direct"
+
+    return dest
+
+
+def _should_publish_now(payload: dict, scheduled_at_utc: datetime) -> bool:
+    """
+    Publish now if:
+      - scheduled_at not provided, OR
+      - scheduled_at is <= now (tiny skew allowed)
+    Otherwise, it's a scheduled post (do not publish immediately here).
+    """
+    if not payload.get("scheduled_at"):
+        return True
+
+    now = datetime.now(timezone.utc)
+    return scheduled_at_utc <= now
 
 
 # ------------------------------------------------------------------
@@ -72,19 +180,6 @@ class DestinationSchema(Schema):
 
 
 class UnifiedPublishSchema(Schema):
-    """
-    Single endpoint that supports:
-      - publish_to_all: expand connected accounts automatically
-      - destinations: explicit selected accounts (subset)
-      - content: {text, link, media} OR top-level (text/link/media)
-      - scheduled_at: optional (if missing => now)
-
-    Adds internal fields:
-      _scheduled_at_utc (datetime)
-      _normalized_content (dict)
-      _normalized_media (list|None)
-    """
-
     publish_to_all = fields.Bool(required=False, load_default=False)
     scheduled_at = fields.Str(required=False, allow_none=True)
 
@@ -137,7 +232,7 @@ class UnifiedPublishSchema(Schema):
         # scheduled_at: if missing => now
         scheduled_at_raw = data.get("scheduled_at")
         if scheduled_at_raw:
-            scheduled_at_utc = _parse_iso8601_with_tz(scheduled_at_raw)
+            scheduled_at_utc = _safe_parse_scheduled_at(scheduled_at_raw)
         else:
             scheduled_at_utc = datetime.now(timezone.utc)
 
@@ -145,8 +240,7 @@ class UnifiedPublishSchema(Schema):
         text = (content.get("text") or "").strip()
         link = (content.get("link") or "").strip() or None
 
-        media_list = content.get("media")
-        media_list = _as_list(media_list)  # allow None/dict/list
+        media_list = _as_list(content.get("media"))  # allow None/dict/list
 
         # parse/validate media items
         parsed_media: List[Dict[str, Any]] = []
@@ -169,47 +263,12 @@ class UnifiedPublishSchema(Schema):
         # destination validations
         dest_errors: List[Dict[str, Any]] = []
 
-        LINKEDIN_TYPE_ALIASES = {
-            "profile": "author",
-            "person": "author",
-            "member": "author",
-            "user": "author",
-            "author": "author",
-            "page": "organization",
-            "company": "organization",
-            "org": "organization",
-            "organisation": "organization",
-            "organization": "organization",
-        }
+        for idx, raw_dest in enumerate(destinations):
+            dest = _normalize_destination_for_platform(raw_dest)
+            destinations[idx] = dest  # persist normalized values
 
-        WHATSAPP_TYPE_ALIASES = {
-            "phone": "phone_number",
-            "number": "phone_number",
-            "phone_number": "phone_number",
-        }
-
-        for idx, dest in enumerate(destinations):
-            platform = (dest.get("platform") or "").lower().strip()
-            placement = _default_placement(dest)
-
-            dest["platform"] = platform
-            dest["placement"] = placement
-
-            if platform == "linkedin":
-                raw_type = (dest.get("destination_type") or "").lower().strip()
-                if raw_type:
-                    dest["destination_type"] = LINKEDIN_TYPE_ALIASES.get(raw_type, raw_type)
-
-            if platform == "whatsapp":
-                raw_type = (dest.get("destination_type") or "").lower().strip()
-                if raw_type:
-                    dest["destination_type"] = WHATSAPP_TYPE_ALIASES.get(raw_type, raw_type)
-                else:
-                    dest["destination_type"] = "phone_number"
-
-                # normalize placement to "direct" if missing
-                if not placement:
-                    dest["placement"] = "direct"
+            platform = dest.get("platform")
+            placement = dest.get("placement")
 
             rule = PLATFORM_RULES.get(platform)
             if not rule:
@@ -242,9 +301,10 @@ class UnifiedPublishSchema(Schema):
                     str(idx): {"content.text": [f"Too long for {platform}. Max {max_text} chars."]}
                 })
 
-            # NOTE: we still validate link here, but the RESOURCE will normalize per-platform,
-            # so instagram can still succeed by moving link into text.
-            if link and not rule.get("supports_link", True):
+            # ✅ IMPORTANT CHANGE:
+            # Instagram doesn't have "clickable" links, but we allow link and the RESOURCE will move it into text.
+            supports_link = bool(rule.get("supports_link", True))
+            if link and not supports_link and platform != "instagram":
                 dest_errors.append({
                     str(idx): {"content.link": [f"{platform} does not support clickable links. Put it in text."]}
                 })
@@ -279,6 +339,7 @@ class UnifiedPublishSchema(Schema):
                             str(idx): {"content.media": [f"{platform} does not allow '{at}' for this post."]}
                         })
 
+            # WhatsApp requires recipient in meta.to (E.164) when posting
             if platform == "whatsapp":
                 meta = dest.get("meta") or {}
                 to_phone = (meta.get("to") or "").strip()
@@ -347,13 +408,15 @@ class UnifiedPublishResource(MethodView):
                 if exclude_platforms and platform in exclude_platforms:
                     continue
 
-                expanded.append({
+                dest = {
                     "platform": platform,
                     "destination_id": str(acct.get("destination_id") or ""),
                     "destination_type": acct.get("destination_type"),
                     "placement": (acct.get("placement") or "feed"),
                     "meta": (acct.get("meta") or {}),
-                })
+                }
+                dest = _normalize_destination_for_platform(dest)
+                expanded.append(dest)
 
             if not expanded:
                 return jsonify({
@@ -377,11 +440,12 @@ class UnifiedPublishResource(MethodView):
 
         # ------------------------------------------------------------
         # 3) Build per-destination content + platform normalization
-        #    - Instagram: move link into text
+        #    - Instagram: move link into text (normalize_content_for_platform)
         # ------------------------------------------------------------
         final_destinations: List[Dict[str, Any]] = []
-        for dest in destinations:
-            platform = (dest.get("platform") or "").lower().strip()
+        for raw_dest in destinations:
+            dest = _normalize_destination_for_platform(raw_dest)
+            platform = dest.get("platform")
 
             # per-destination overrides (optional)
             dest_content = {
@@ -390,18 +454,17 @@ class UnifiedPublishResource(MethodView):
                 "media": dest.get("media", base_content.get("media")),
             }
 
-            # normalize quirks PER PLATFORM
+            # normalize quirks PER PLATFORM (your function should:
+            # - instagram: if link exists, append to text and remove link
             dest_content = normalize_content_for_platform(platform, dest_content)
 
             cleaned_dest = dict(dest)
-            cleaned_dest["platform"] = platform
             cleaned_dest.setdefault("placement", "feed")
 
             # ✅ store final per-destination content (publisher should prefer this)
             cleaned_dest["content"] = dest_content
 
             # remove override keys (avoid confusion)
-            
             cleaned_dest.pop("text", None)
             cleaned_dest.pop("link", None)
             cleaned_dest.pop("media", None)
@@ -411,11 +474,13 @@ class UnifiedPublishResource(MethodView):
         # ------------------------------------------------------------
         # 4) ALWAYS SAVE IN DB FIRST
         # ------------------------------------------------------------
+        publish_now = _should_publish_now(payload, scheduled_at_utc)
+
         doc = {
             "business_id": auth_business_id,
             "user__id": auth_user__id,
 
-            "status": ScheduledPost.STATUS_PENDING,
+            "status": ScheduledPost.STATUS_PENDING,  # worker will update to success/partial/failed
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
 
@@ -429,7 +494,8 @@ class UnifiedPublishResource(MethodView):
             # ✅ per destination contains final normalized content
             "destinations": final_destinations,
 
-            "mode": "publish_now" if not payload.get("scheduled_at") else "schedule",
+            "mode": "publish_now" if publish_now else "schedule",
+            "platform": "multi",
         }
 
         try:
@@ -438,13 +504,23 @@ class UnifiedPublishResource(MethodView):
             Log.info(f"{log_tag} Failed to save post: {e}")
             return jsonify({
                 "success": False,
-                "message": "Failed to save post before publishing",
+                "message": "Failed to save post",
                 "error": str(e),
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
         # ------------------------------------------------------------
-        # 5) Publish now (keep saved even if publish fails)
+        # 5) Publish now OR schedule
         # ------------------------------------------------------------
+        if not publish_now:
+            # ✅ DO NOT publish immediately; your scheduler/worker will pick it later
+            final = ScheduledPost.get_by_id(str(created["_id"]), auth_business_id)
+            return jsonify({
+                "success": True,
+                "message": "Scheduled",
+                "data": final,
+            }), HTTP_STATUS_CODES["OK"]
+
+        # publish now (keep saved even if publish fails)
         try:
             from ...services.social.jobs import _publish_scheduled_post
             _publish_scheduled_post(str(created["_id"]), auth_business_id)
