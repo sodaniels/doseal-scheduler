@@ -31,6 +31,10 @@ from ...utils.schedule_helper import (
     _delete_selection,
     _redirect_to_frontend,
 )
+from ...utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
+)
 
 from ...constants.service_code import (
     HTTP_STATUS_CODES,
@@ -43,6 +47,7 @@ from ...utils.social.token_utils import (
 )
 from ...utils.social.pre_process_checks import PreProcessCheck
 from ...utils.helpers import make_log_tag
+from ...utils.json_response import prepared_response
 
 blp_tiktok_oauth = Blueprint("tiktok_oauth", __name__)
 
@@ -344,23 +349,31 @@ class TikTokAccountsResource(MethodView):
 
 # -------------------------------------------------------------------
 # TikTok: CONNECT ACCOUNT (finalize into social_accounts)
+#   - If destination already exists and token not expired/expiring soon => block (already connected)
+#   - If exists but expired/expiring soon => allow reconnect WITHOUT consuming quota (refresh tokens)
+#   - If not exists => consume quota then create
 # -------------------------------------------------------------------
 @blp_tiktok_oauth.route("/social/tiktok/connect-account", methods=["POST"])
 class TikTokConnectAccountResource(MethodView):
     @token_required
     def post(self):
         client_ip = request.remote_addr
-        
+
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         account_type = user_info.get("account_type")
         auth_business_id = str(user_info.get("business_id"))
         admin_id = str(user_info.get("admin_id"))
+
         body = request.get_json(silent=True) or {}
-        
+
+        # Optional business override for system roles
         form_business_id = body.get("business_id")
-        target_business_id = form_business_id if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id else auth_business_id
-        
+        target_business_id = str(form_business_id) if account_type in (
+            SYSTEM_USERS["SYSTEM_OWNER"],
+            SYSTEM_USERS["SUPER_ADMIN"],
+        ) and form_business_id else auth_business_id
+
         log_tag = make_log_tag(
             "oauth_tiktok_resource.py",
             "TikTokConnectAccountResource",
@@ -371,7 +384,7 @@ class TikTokConnectAccountResource(MethodView):
             auth_business_id,
             target_business_id
         )
-        
+
         ##################### PRE TRANSACTION CHECKS #########################
         pre_check = PreProcessCheck(
             business_id=target_business_id,
@@ -387,21 +400,34 @@ class TikTokConnectAccountResource(MethodView):
         destination_id = body.get("destination_id")  # optional open_id for extra safety
 
         if not selection_key:
-            return jsonify({"success": False, "message": "selection_key is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "selection_key is required"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         raw = get_redis(f"tk_select:{selection_key}")
         if not raw:
-            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["NOT_FOUND"]
+            return jsonify({
+                "success": False,
+                "message": "Selection expired. Please reconnect."
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
 
         doc = _safe_json_load(raw, default={}) or {}
         owner = doc.get("owner") or {}
         token_data = doc.get("token_data") or {}
-        user_info = doc.get("user_info") or {}
+        tk_user_info = doc.get("user_info") or {}
 
+        # Ensure logged-in user matches selection owner
         user = g.get("current_user", {}) or {}
-        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
+        if (
+            str(user.get("business_id")) != str(owner.get("business_id"))
+            or str(user.get("_id")) != str(owner.get("user__id"))
+        ):
             Log.info(f"{log_tag} Owner mismatch: current_user != selection owner")
-            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+            return jsonify({
+                "success": False,
+                "message": "Not allowed for this selection_key"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
         access_token = token_data.get("access_token")
         refresh_token = token_data.get("refresh_token")
@@ -409,7 +435,7 @@ class TikTokConnectAccountResource(MethodView):
         refresh_expires_in = int(token_data.get("refresh_expires_in") or 0)
         open_id = str(token_data.get("open_id") or "")
 
-        ui = (user_info.get("data") or {}).get("user") or {}
+        ui = (tk_user_info.get("data") or {}).get("user") or {}
         display_name = ui.get("display_name")
         avatar_url = ui.get("avatar_url")
 
@@ -420,9 +446,66 @@ class TikTokConnectAccountResource(MethodView):
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         if destination_id and str(destination_id) != open_id:
-            return jsonify({"success": False, "message": "destination_id mismatch for this selection_key"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "destination_id mismatch for this selection_key"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        token_expires_at = (datetime.utcnow() + timedelta(seconds=expires_in)) if expires_in > 0 else None
+        # Compute expiry timestamp (store as ISO string)
+        token_expires_at_dt = (datetime.utcnow() + timedelta(seconds=expires_in)) if expires_in > 0 else None
+        token_expires_at = token_expires_at_dt.isoformat() if token_expires_at_dt else None
+
+        # ------------------------------------------------------------
+        # ✅ NEW: check if destination already exists
+        # ------------------------------------------------------------
+        try:
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "tiktok",
+                open_id,
+            )
+        except Exception:
+            existing = None
+
+        enforcer = QuotaEnforcer(target_business_id)
+
+        consume_quota = True
+        if existing:
+            # If token not expired => block; if expiring soon/expired => allow reconnect (no quota)
+            try:
+                if not is_token_expired(existing):
+                    if is_token_expiring_soon(existing, minutes=10):
+                        consume_quota = False
+                        Log.info(f"{log_tag} TikTok token expiring soon; allowing OAuth reconnect without consuming quota")
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "message": "This TikTok account is already connected.",
+                            "code": "ALREADY_CONNECTED",
+                        }), HTTP_STATUS_CODES["CONFLICT"]
+                else:
+                    consume_quota = False
+                    Log.info(f"{log_tag} TikTok token expired; allowing OAuth reconnect without consuming quota")
+            except Exception:
+                consume_quota = False
+                Log.info(f"{log_tag} Could not determine token expiry; allowing overwrite without consuming quota")
+
+        # ------------------------------------------------------------
+        # ✅ Only reserve quota when creating a NEW destination
+        # ------------------------------------------------------------
+        if consume_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
@@ -435,7 +518,11 @@ class TikTokConnectAccountResource(MethodView):
 
                 access_token_plain=access_token,
                 refresh_token_plain=refresh_token,
-                token_expires_at=token_expires_at.isoformat() if token_expires_at else None,
+
+                # ✅ store the newly computed expiry, but if TikTok doesn't provide it, keep existing (if any)
+                token_expires_at=token_expires_at if token_expires_at is not None else (
+                    existing.get("token_expires_at") if isinstance(existing, dict) else None
+                ),
 
                 scopes=(token_data.get("scope") or "").split(",") if token_data.get("scope") else [],
                 platform_user_id=open_id,
@@ -450,17 +537,25 @@ class TikTokConnectAccountResource(MethodView):
                 },
             )
 
+            # one-time selection
             try:
                 remove_redis(f"tk_select:{selection_key}")
             except Exception:
                 pass
 
-            return jsonify({"success": True, "message": "TikTok account connected successfully"}), HTTP_STATUS_CODES["OK"]
+            return jsonify({
+                "success": True,
+                "message": "TikTok account connected successfully"
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
-            return jsonify({"success": False, "message": "Failed to connect TikTok account"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
+            if consume_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect TikTok account"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 # -------------------------------------------------------------------
 # TikTok: WEBHOOKS (separate from OAuth callback)
