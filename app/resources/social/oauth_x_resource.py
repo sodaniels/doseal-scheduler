@@ -12,15 +12,22 @@ from flask_smorest import Blueprint
 
 from ...utils.logger import Log
 from ...utils.redis import get_redis, set_redis_with_expiry, remove_redis
-from ...constants.service_code import HTTP_STATUS_CODES
+from ...utils.json_response import prepared_response
+from ...constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ..doseal.admin.admin_business_resource import token_required
 
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.x_adapter import XAdapter
-
+from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
+from ...utils.social.pre_process_checks import PreProcessCheck
 from ...utils.schedule_helper import (
     _safe_json_load, _require_env, _exchange_code_for_token, _store_state, _consume_state,
     _store_selection, _load_selection, _delete_selection, _redirect_to_frontend, _require_x_env
+)
+from ...utils.helpers import make_log_tag
+from ...utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
 )
 
 
@@ -35,7 +42,39 @@ class XOauthStartResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_x.py][XOauthStartResource][get][{client_ip}]"
+        
+        body = request.get_json(silent=True) or {}
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
+        account_type = user_info.get("account_type")
+
+        # Optional business override
+        form_business_id = body.get("business_id")
+        target_business_id = form_business_id if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id else auth_business_id
+
+        log_tag = make_log_tag(
+            "oauth_x_resource.py",
+            "XOauthStartResource",
+            "get",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id,
+        )
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         consumer_key, consumer_secret, callback_url = _require_x_env(log_tag)
         if not consumer_key or not consumer_secret or not callback_url:
@@ -232,19 +271,50 @@ class XAccountsResource(MethodView):
 
 # -------------------------------------------------------------------
 # X: CONNECT ACCOUNT (finalize into social_accounts)
+#   - If destination already exists and token not expired/expiring soon => block (already connected)
+#   - If exists but expired/expiring soon => allow reconnect WITHOUT consuming quota
+#   - If not exists => consume quota then create
+#
+# NOTE (X OAuth 1.0a):
+# - oauth_token/oauth_token_secret typically don't have an expiry timestamp you can rely on.
+# - So token_expires_at is usually None.
+# - In that case, we treat reconnect as "refresh/overwrite for same account" => no quota.
+# - If you later add a health-check endpoint for X and you detect 401, you can mark token invalid.
 # -------------------------------------------------------------------
 @blp_x_oauth.route("/social/x/connect-account", methods=["POST"])
 class XConnectAccountResource(MethodView):
     @token_required
     def post(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_x.py][XConnectAccountResource][post][{client_ip}]"
 
         body = request.get_json(silent=True) or {}
         selection_key = body.get("selection_key")
 
         # Optional: allow client to pass destination_id (user_id) for extra safety
         destination_id = body.get("destination_id")  # X user_id
+
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        account_type = user_info.get("account_type")
+
+        # Optional business override for system roles
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = str(form_business_id)
+        else:
+            target_business_id = auth_business_id
+
+        log_tag = make_log_tag(
+            "oauth_x_resource.py",
+            "XConnectAccountResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
 
         if not selection_key:
             return jsonify({
@@ -295,6 +365,60 @@ class XConnectAccountResource(MethodView):
                 "message": "destination_id mismatch for this selection_key"
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
+        # ------------------------------------------------------------
+        # ✅ NEW: check if this destination already exists
+        # ------------------------------------------------------------
+        try:
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "x",
+                user_id,
+            )
+        except Exception:
+            existing = None
+
+        enforcer = QuotaEnforcer(target_business_id)
+
+        consume_quota = True
+        if existing:
+            # X OAuth 1.0a typically has no expiry timestamp.
+            # If you stored token_expires_at and you can check it, use helpers.
+            # Otherwise treat as overwrite (token refresh) => no quota.
+            try:
+                if not is_token_expired(existing):
+                    if is_token_expiring_soon(existing, minutes=10):
+                        consume_quota = False
+                        Log.info(f"{log_tag} X token expiring soon; allowing reconnect without consuming quota")
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "message": "This X account is already connected.",
+                            "code": "ALREADY_CONNECTED",
+                        }), HTTP_STATUS_CODES["CONFLICT"]
+                else:
+                    consume_quota = False
+                    Log.info(f"{log_tag} X token expired; allowing reconnect without consuming quota")
+            except Exception:
+                consume_quota = False
+                Log.info(f"{log_tag} Could not determine X token expiry; allowing overwrite without consuming quota")
+
+        # ------------------------------------------------------------
+        # ✅ Only reserve quota when creating a NEW destination
+        # ------------------------------------------------------------
+        if consume_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+
         try:
             SocialAccount.upsert_destination(
                 business_id=owner["business_id"],
@@ -308,10 +432,16 @@ class XConnectAccountResource(MethodView):
                 # If your schema only has access_token_plain, store token there and put secret in refresh_token_plain.
                 access_token_plain=oauth_token,
                 refresh_token_plain=oauth_token_secret,
-                token_expires_at=None,
 
-                # Scopes are not always available in OAuth 1.0a
-                scopes=["tweet.write", "tweet.read"],
+                # If you ever store expires_at, keep it; else None
+                token_expires_at=(
+                    existing.get("token_expires_at")
+                    if isinstance(existing, dict)
+                    else None
+                ),
+
+                # Scopes are not always available in OAuth 1.0a; keep minimal
+                scopes=(existing.get("scopes") if isinstance(existing, dict) and existing.get("scopes") else ["tweet.write", "tweet.read"]),
 
                 platform_user_id=user_id,
                 platform_username=screen_name,
@@ -336,8 +466,9 @@ class XConnectAccountResource(MethodView):
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
+            if consume_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
             return jsonify({
                 "success": False,
                 "message": "Failed to connect X account"
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-

@@ -15,7 +15,8 @@ from ...utils.json_response import prepared_response
 from ...utils.helpers import make_log_tag
 from ...constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ..doseal.admin.admin_business_resource import token_required
-
+from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
+from ...utils.social.pre_process_checks import PreProcessCheck
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.youtube_adapter import YouTubeAdapter
 from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
@@ -28,6 +29,10 @@ from ...utils.schedule_helper import (
     _load_selection,
     _delete_selection,
     _redirect_to_frontend,
+)
+from ...utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
 )
 
 
@@ -63,6 +68,7 @@ class YouTubeOauthStartResource(MethodView):
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
         account_type = user_info.get("account_type")
 
         # Optional business override for SYSTEM_OWNER / SUPER_ADMIN
@@ -82,6 +88,18 @@ class YouTubeOauthStartResource(MethodView):
             auth_business_id,
             target_business_id
         )
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
+
 
         client_id = _require_env("YOUTUBE_CLIENT_ID", log_tag)
         redirect_uri = _require_env("YOUTUBE_REDIRECT_URI", log_tag)
@@ -230,6 +248,16 @@ class YouTubeChannelsResource(MethodView):
 
 # -------------------------------------------------------------------
 # YOUTUBE: CONNECT CHANNEL (finalize into social_accounts)
+#   - If channel already exists and token not expired/expiring soon => block (already connected)
+#   - If exists but expired/expiring soon => allow reconnect WITHOUT consuming quota
+#   - If not exists => consume quota then create
+#
+# NOTE:
+# - Google OAuth access tokens expire quickly; refresh_token is what matters.
+# - If you store token_expires_at, your helpers can behave accurately.
+# - If token_expires_at is None, we treat it as "unknown" and:
+#     * if destination exists => allow overwrite without quota (safe for refresh flow),
+#       OR you can choose to block if refresh_token exists and you want stricter UX.
 # -------------------------------------------------------------------
 @blp_youtube_oauth.route("/social/youtube/connect-channel", methods=["POST"])
 class YouTubeConnectChannelResource(MethodView):
@@ -265,11 +293,17 @@ class YouTubeConnectChannelResource(MethodView):
         )
 
         if not selection_key or not channel_id:
-            return jsonify({"success": False, "message": "selection_key and channel_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "selection_key and channel_id are required"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         sel = _load_selection("yt", selection_key)
         if not sel:
-            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "Selection expired. Please reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         owner = sel.get("owner") or {}
         token_data = sel.get("token_data") or {}
@@ -277,54 +311,133 @@ class YouTubeConnectChannelResource(MethodView):
 
         # Ensure logged-in user matches selection owner
         user = g.get("current_user", {}) or {}
-        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
-            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        if (
+            str(user.get("business_id")) != str(owner.get("business_id"))
+            or str(user.get("_id")) != str(owner.get("user__id"))
+        ):
+            return jsonify({
+                "success": False,
+                "message": "Not allowed for this selection_key"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
         selected = next((c for c in channels if str(c.get("channel_id")) == str(channel_id)), None)
         if not selected:
-            return jsonify({"success": False, "message": "Invalid channel_id for this selection_key"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "Invalid channel_id for this selection_key"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         access_token = token_data.get("access_token")
         refresh_token = token_data.get("refresh_token")  # may be None
+        token_expires_at = token_data.get("token_expires_at")  # optional if you stored it
+        scopes = token_data.get("scopes") or token_data.get("scope") or []
 
         if not access_token:
-            return jsonify({"success": False, "message": "Missing access_token. Reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "Missing access_token. Reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # ------------------------------------------------------------
+        # ✅ NEW: check if this destination already exists
+        # ------------------------------------------------------------
+        channel_id = str(channel_id or "").strip()
+        if not channel_id:
+            return jsonify({
+                "success": False,
+                "message": "channel_id is required"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        try:
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "youtube",
+                channel_id,
+            )
+        except Exception:
+            existing = None
 
         # ---- PLAN ENFORCER ----
         enforcer = QuotaEnforcer(target_business_id)
-        try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",
-                reason="social_accounts:create",
-            )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} plan limit reached: {e.meta}")
-            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+
+        consume_quota = True
+        if existing:
+            # If token not expired => block; if expiring soon/expired => allow refresh (no quota)
+            # If token_expires_at is None, expiry helpers may treat as "unknown" and raise.
+            # In that case we allow overwrite without quota (safe for refresh flow).
+            try:
+                if not is_token_expired(existing):
+                    if is_token_expiring_soon(existing, minutes=10):
+                        consume_quota = False
+                        Log.info(f"{log_tag} YT token expiring soon; allowing OAuth reconnect without consuming quota")
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "message": "This YouTube channel is already connected.",
+                            "code": "ALREADY_CONNECTED",
+                        }), HTTP_STATUS_CODES["CONFLICT"]
+                else:
+                    consume_quota = False
+                    Log.info(f"{log_tag} YT token expired; allowing OAuth reconnect without consuming quota")
+            except Exception:
+                consume_quota = False
+                Log.info(f"{log_tag} Could not determine YT token expiry; allowing overwrite without consuming quota")
+
+        # ------------------------------------------------------------
+        # ✅ Only reserve quota when creating a NEW destination
+        # ------------------------------------------------------------
+        if consume_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
                 business_id=owner["business_id"],
                 user__id=owner["user__id"],
                 platform="youtube",
-                destination_id=str(channel_id),
+                destination_id=channel_id,
                 destination_type="channel",
-                destination_name=selected.get("title") or str(channel_id),
+                destination_name=selected.get("title") or channel_id,
 
                 access_token_plain=access_token,
-                refresh_token_plain=refresh_token,
-                token_expires_at=None,
-                scopes=[
-                    "https://www.googleapis.com/auth/youtube.upload",
-                    "https://www.googleapis.com/auth/youtube.readonly",
-                ],
-                platform_user_id=str(channel_id),
+                refresh_token_plain=refresh_token or (existing.get("refresh_token_plain") if isinstance(existing, dict) else None),
+
+                # Prefer new token_expires_at from token_data; otherwise keep existing
+                token_expires_at=(
+                    token_expires_at
+                    or (existing.get("token_expires_at") if isinstance(existing, dict) else None)
+                    or None
+                ),
+
+                # Prefer selection scopes; else keep existing; else defaults
+                scopes=(
+                    scopes
+                    if isinstance(scopes, list) and scopes
+                    else (
+                        existing.get("scopes")
+                        if isinstance(existing, dict) and existing.get("scopes")
+                        else [
+                            "https://www.googleapis.com/auth/youtube.upload",
+                            "https://www.googleapis.com/auth/youtube.readonly",
+                        ]
+                    )
+                ),
+
+                platform_user_id=channel_id,
                 platform_username=selected.get("title"),
 
                 meta={
-                    "channel_id": str(channel_id),
+                    "channel_id": channel_id,
                     "title": selected.get("title"),
                     "custom_url": selected.get("custom_url"),
                     "thumb": selected.get("thumb"),
@@ -333,9 +446,29 @@ class YouTubeConnectChannelResource(MethodView):
 
             _delete_selection("yt", selection_key)
 
-            return jsonify({"success": True, "message": "YouTube channel connected successfully"}), HTTP_STATUS_CODES["OK"]
+            return jsonify({
+                "success": True,
+                "message": "YouTube channel connected successfully"
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-            return jsonify({"success": False, "message": "Failed to connect YouTube channel"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+            if consume_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect YouTube channel"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+
+
+
+
+
+
+
+
+
+
+
