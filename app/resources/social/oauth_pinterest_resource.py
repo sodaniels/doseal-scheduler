@@ -15,7 +15,7 @@ from ..doseal.admin.admin_business_resource import token_required
 
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.pinterest_adapter import PinterestAdapter
-
+from ...utils.social.pre_process_checks import PreProcessCheck
 from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
 from ...utils.helpers import make_log_tag
 
@@ -59,6 +59,7 @@ class PinterestOauthStartResource(MethodView):
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
         account_type = user_info.get("account_type")
 
         # Optional business override
@@ -75,6 +76,17 @@ class PinterestOauthStartResource(MethodView):
             auth_business_id,
             target_business_id,
         )
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         redirect_uri = _require_env("PINTEREST_REDIRECT_URI", log_tag)
         client_id = _require_env("PINTEREST_CLIENT_ID", log_tag)

@@ -19,6 +19,7 @@ from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 
 from ...models.social.social_account import SocialAccount
+from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
 
 # Reuse your shared helpers (same pattern as fb/ig/x)
 from ...utils.schedule_helper import (
@@ -30,6 +31,18 @@ from ...utils.schedule_helper import (
     _delete_selection,
     _redirect_to_frontend,
 )
+
+from ...constants.service_code import (
+    HTTP_STATUS_CODES,
+    SYSTEM_USERS
+)
+
+from ...utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
+)
+from ...utils.social.pre_process_checks import PreProcessCheck
+from ...utils.helpers import make_log_tag
 
 blp_tiktok_oauth = Blueprint("tiktok_oauth", __name__)
 
@@ -133,7 +146,38 @@ class TikTokOauthStartResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_tiktok_resource.py][TikTokOauthStartResource][get][{client_ip}]"
+        
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        account_type = user_info.get("account_type")
+        auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
+        body = request.get_json(silent=True) or {}
+        
+        form_business_id = body.get("business_id")
+        target_business_id = form_business_id if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id else auth_business_id
+        
+        log_tag = make_log_tag(
+            "oauth_tiktok_resource.py",
+            "TikTokOauthStartResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         client_key, _, redirect_uri = _require_tiktok_env(log_tag)
         if not client_key or not redirect_uri:
@@ -229,7 +273,38 @@ class TikTokAccountsResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_tiktok_resource.py][TikTokAccountsResource][get][{client_ip}]"
+        
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        account_type = user_info.get("account_type")
+        auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
+        body = request.get_json(silent=True) or {}
+        
+        form_business_id = body.get("business_id")
+        target_business_id = form_business_id if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id else auth_business_id
+        
+        log_tag = make_log_tag(
+            "oauth_tiktok_resource.py",
+            "TikTokAccountsResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         selection_key = request.args.get("selection_key")
         if not selection_key:
@@ -275,9 +350,39 @@ class TikTokConnectAccountResource(MethodView):
     @token_required
     def post(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_tiktok_resource.py][TikTokConnectAccountResource][post][{client_ip}]"
-
+        
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        account_type = user_info.get("account_type")
+        auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
         body = request.get_json(silent=True) or {}
+        
+        form_business_id = body.get("business_id")
+        target_business_id = form_business_id if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id else auth_business_id
+        
+        log_tag = make_log_tag(
+            "oauth_tiktok_resource.py",
+            "TikTokConnectAccountResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
+
         selection_key = body.get("selection_key")
         destination_id = body.get("destination_id")  # optional open_id for extra safety
 
