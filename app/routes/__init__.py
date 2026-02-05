@@ -77,6 +77,8 @@ from ..resources import (
     blp_pinterest_oauth,
     blp_unified_publish,
     blp_drafts,
+    blp_schwriter,
+    blp_schwriter_batch,
 )
 
 
@@ -117,6 +119,8 @@ def register_social_routes(app, api):
         blp_pinterest_oauth,
         blp_unified_publish,
         blp_drafts,
+        blp_schwriter,
+        blp_schwriter_batch,
     ]
 
     for blueprint in blueprints:

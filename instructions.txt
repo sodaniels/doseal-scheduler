@@ -19,36 +19,43 @@ OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES venv/bin/rq worker publish
 #Third terminal:
 venv/bin/rqscheduler
 
+##ADDING A NEW INTEGRATION
+1. CREATE the oauth_[name]_resource.py file that have the three essential endpoints. /start, /callback, /connect-account
+2. CREATE the [name]_adapter.py file 
+3. Update the server/social/job.py with helper functions and final udpate to _publish_scheduled_post
 
-curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
+## NGROK STATIC ADDRESS
+ngrok http 9090 --url=inscribable-manipulatedly-davon.ngrok-free.dev
+
+
+curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/facebook/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3ZmQxN2I3Y2NiOGZkNzdlN2U4MzljIiwiZXhwIjoxNzcwMjAwNDYyLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.t9B_mBzKXjCyr8Ftma8l4WHw-ud7YW3ZShyIxM7lI4o"
 
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/start
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/callback
-
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/instagram/start
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/instagram/callback
-
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/threads/start
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/threads/callback
-
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/whatsapp/start
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/whatsapp/callback
-
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/pinterest/start
-https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/pinterest/callback
+# ONLINE
+https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/start
+https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/callback
 
 
-curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/pinterest/start" \
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/facebook/start
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/facebook/callback
+
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/instagram/start
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/instagram/callback
+
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/threads/start
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/threads/callback
+
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/whatsapp/start
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/whatsapp/callback
+
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/pinterest/start
+https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/pinterest/callback
+
+
+curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/pinterest/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MWVkZjM5OTExZTdkYjY4MjQ5YjU0IiwiZXhwIjoxNzcwMzQxMDM0LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.irFfyvS1yTMP_MqKeDAcnPhWBlRG1JF_RimFn2QggFQ"
 
 
 
-  ##ADDING A NEW INTEGRATION
-  1. CREATE the oauth_[name]_resource.py file that have the three essential endpoints. /start, /callback, /connect-account
-  2. CREATE the [name]_adapter.py file 
-  3. Update the server/social/job.py with helper functions and final udpate to _publish_scheduled_post
 
 
-curl -i "https://bccd7d27f0ad.ngrok-free.app/social/api/v1/social/oauth/facebook/start" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MWVkZjM5OTExZTdkYjY4MjQ5YjU0IiwiZXhwIjoxNzcwNDYwMDYxLCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.OV1_yDyWuYP5O5qWV-lyoPIWXz7AXV5-LPZ3aKAxtVU"
