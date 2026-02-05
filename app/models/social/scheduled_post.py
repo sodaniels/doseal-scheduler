@@ -17,6 +17,7 @@ class ScheduledPost(BaseModel):
     STATUS_SCHEDULED = "scheduled"
     STATUS_ENQUEUED = "enqueued"        # <--- NEW (important)
     STATUS_PUBLISHING = "publishing"
+    STATUS_PENDING = "pending"
     STATUS_PUBLISHED = "published"
     STATUS_FAILED = "failed"
     STATUS_PARTIAL = "partial"
