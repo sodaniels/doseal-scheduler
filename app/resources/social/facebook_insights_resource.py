@@ -816,40 +816,5 @@ class FacebookPageOverviewStoredTokenResource(MethodView):
         }), HTTP_STATUS_CODES["OK"]
 
 
-# -------------------------------------------------------------------
-# Available metrics endpoint
-# -------------------------------------------------------------------
 
-@blp_meta_impression.route("/social/facebook/available-metrics", methods=["GET"])
-class FacebookAvailableMetricsResource(MethodView):
-    """
-    Returns list of available metrics for Facebook Page Insights.
-    """
-    
-    def get(self):
-        return jsonify({
-            "success": True,
-            "data": {
-                "graph_version": GRAPH_VERSION,
-                "default_metrics": DEFAULT_METRICS,
-                "available_metrics": sorted(list(VALID_PAGE_METRICS_V21)),
-                "periods": ["day", "week", "days_28", "month", "lifetime"],
-                "deprecated_metrics_nov_2025": {
-                    "page_impressions": "Use page_posts_impressions or page_views_total",
-                    "page_fans": "FULLY DEPRECATED - use followers_count from page fields",
-                    "page_fan_adds": "Use page_daily_follows_unique",
-                    "page_engaged_users": "May be deprecated - test first",
-                    "page_impressions_unique": "May be deprecated - test first",
-                },
-                "required_permissions": [
-                    "read_insights",
-                    "pages_read_engagement",
-                ],
-                "notes": [
-                    "Many metrics were deprecated Nov 15, 2025",
-                    "Use /discover-metrics endpoint to test which metrics work",
-                    "followers_count is now the primary audience metric",
-                    "Add ?debug=true to get token permission details",
-                ],
-            }
-        }), HTTP_STATUS_CODES["OK"]
+
