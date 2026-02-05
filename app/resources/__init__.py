@@ -76,6 +76,7 @@ from .social.social_publish_resource import blp_unified_publish
 from .social.social_drafts_resources import blp_drafts
 from .social.schwriter_resource import blp_schwriter
 from .social.schwriter_batch_resource import blp_schwriter_batch
+from .social.facebook_insights_resource import blp_meta_impression
 
 
 __all__ = [
@@ -106,6 +107,7 @@ __all__ = [
     "blp_drafts",
     "blp_schwriter",
     "blp_schwriter_batch",
+    "blp_meta_impression",
     #-------------------
     #ADMIN ROUTES
     #-------------------

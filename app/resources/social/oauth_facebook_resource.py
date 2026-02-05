@@ -84,7 +84,7 @@ class FacebookOauthStartResource(MethodView):
             "redirect_uri": redirect_uri,
             "state": state,
             "response_type": "code",
-            "scope": "pages_show_list,pages_read_engagement,pages_manage_posts",
+            "scope": "pages_show_list,pages_read_engagement,pages_manage_posts,read_insights",
         }
 
         url = "https://www.facebook.com/v20.0/dialog/oauth?" + urlencode(params)
@@ -395,6 +395,133 @@ class FacebookPagesResource(MethodView):
 
         return jsonify({"success": True, "data": {"pages": safe_pages}}), HTTP_STATUS_CODES["OK"]
 
+# @blp_meta_oauth.route("/social/facebook/page-impressions", methods=["GET"])
+# class FacebookPageImpressionsStoredTokenResource(MethodView):
+#     """
+#     Uses stored SocialAccount token (no selection_key).
+
+#     Query params:
+#       - destination_id (required): Facebook Page ID
+#       - since (optional): YYYY-MM-DD
+#       - until (optional): YYYY-MM-DD
+#       - period (optional): day | week | days_28 (default day)
+#     """
+
+#     @token_required
+#     def get(self):
+#         client_ip = request.remote_addr
+#         log_tag = f"[facebook_insights.py][FacebookPageImpressionsStoredTokenResource][get][{client_ip}]"
+
+#         user = g.get("current_user", {}) or {}
+#         business_id = str(user.get("business_id") or "")
+#         user__id = str(user.get("_id") or "")
+
+#         if not business_id or not user__id:
+#             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+#         page_id = (request.args.get("destination_id") or "").strip()
+#         since = request.args.get("since")
+#         until = request.args.get("until")
+#         period = (request.args.get("period") or "day").lower().strip()
+
+#         if not page_id:
+#             return jsonify({"success": False, "message": "destination_id (page_id) is required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+#         allowed_periods = {"day", "week", "days_28"}
+#         if period not in allowed_periods:
+#             return jsonify({
+#                 "success": False,
+#                 "message": f"Invalid period. Use one of {sorted(allowed_periods)}"
+#             }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+#         # ✅ Load the connected social account from DB
+#         try:
+#             acct = SocialAccount.get_destination(
+#                 business_id=business_id,
+#                 user__id=user__id,
+#                 platform="facebook",
+#                 destination_id=page_id,
+#             )
+#         except Exception as e:
+#             Log.info(f"{log_tag} get_destination failed: {e}")
+#             acct = None
+
+#         if not acct:
+#             return jsonify({
+#                 "success": False,
+#                 "message": "Facebook page not connected for this account",
+#                 "code": "FB_NOT_CONNECTED",
+#             }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+#         access_token = acct.get("access_token_plain")
+#         if not access_token:
+#             return jsonify({
+#                 "success": False,
+#                 "message": "Missing stored Facebook token. Reconnect Facebook.",
+#                 "code": "FB_TOKEN_MISSING",
+#             }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+#         # Metrics (add more if you want)
+#         metrics = [
+#             "page_impressions",
+#             "page_views_total",
+#             "page_follows",
+#             "page_fans",
+#             "page_engaged_users",
+#         ]
+
+#         params = {
+#             "metric": ",".join(metrics),
+#             "period": period,
+#             "access_token": access_token,
+#         }
+#         if since:
+#             params["since"] = since
+#         if until:
+#             params["until"] = until
+
+#         try:
+#             url = f"https://graph.facebook.com/v20.0/{page_id}/insights"
+#             r = requests.get(url, params=params, timeout=30)
+
+#             if r.status_code >= 400:
+#                 Log.info(f"{log_tag} FB insights error: {r.status_code} {r.text}")
+#                 return jsonify({
+#                     "success": False,
+#                     "message": "Failed to fetch page impressions",
+#                     "error": r.text,
+#                     "code": "FB_INSIGHTS_FAILED",
+#                 }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+#             data = r.json() or {}
+
+#             def _series(metric_name: str):
+#                 item = next((x for x in (data.get("data") or []) if x.get("name") == metric_name), None)
+#                 values = item.get("values") if item else []
+#                 out = []
+#                 for v in values or []:
+#                     out.append({"end_time": v.get("end_time"), "value": v.get("value")})
+#                 return out
+
+#             result = {
+#                 "platform": "facebook",
+#                 "destination_id": page_id,
+#                 "destination_name": acct.get("destination_name"),
+#                 "period": period,
+#                 "since": since,
+#                 "until": until,
+#                 "impressions": _series("page_impressions"),
+#                 "impressions_unique": _series("page_impressions_unique"),
+#             }
+
+#             return jsonify({"success": True, "data": result}), HTTP_STATUS_CODES["OK"]
+
+#         except Exception as e:
+#             Log.info(f"{log_tag} exception: {e}")
+#             return jsonify({
+#                 "success": False,
+#                 "message": "Failed to fetch page impressions",
+#             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 # -------------------------------------------------------------------
 # INSTAGRAM: START

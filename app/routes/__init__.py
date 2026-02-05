@@ -79,6 +79,7 @@ from ..resources import (
     blp_drafts,
     blp_schwriter,
     blp_schwriter_batch,
+    blp_meta_impression,
 )
 
 
@@ -121,6 +122,7 @@ def register_social_routes(app, api):
         blp_drafts,
         blp_schwriter,
         blp_schwriter_batch,
+        blp_meta_impression,
     ]
 
     for blueprint in blueprints:
