@@ -54,6 +54,64 @@ def _as_dt(v):
             return None
     return None
 
+def _as_dt_(value) -> Optional[datetime]:
+    """
+    Convert stored DB value into UTC datetime.
+
+    Accepts:
+      - datetime
+      - ISO string
+      - None
+
+    Returns UTC-aware datetime or None.
+    """
+
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo:
+            return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=timezone.utc)
+
+    if isinstance(value, str):
+        return _parse_iso8601_with_tz(value)
+
+    return None
+
+def _parse_iso8601_with_tz(value: str) -> Optional[datetime]:
+    """
+    Parse ISO-8601 string into UTC-aware datetime.
+
+    Accepts:
+      - 2026-02-05T11:55:00+00:00
+      - 2026-02-05T11:55:00Z
+      - 2026-02-05T11:55:00
+
+    Returns UTC datetime.
+    """
+
+    if not value:
+        return None
+
+    s = str(value).strip()
+
+    # Replace trailing Z with +00:00
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
+    try:
+        dt = datetime.fromisoformat(s)
+    except Exception:
+        raise ValueError(f"Invalid isoformat datetime: {value}")
+
+    # Make UTC-aware
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    return dt
 
 from ...schemas.social.scheduled_posts_schema import CreateScheduledPostSchema
 from ...utils.social.publish_payload_utils import _ensure_content_shape
@@ -61,6 +119,9 @@ from ...utils.social.publish_payload_utils import _ensure_content_shape
 blp_drafts = Blueprint("draft_posts", __name__, description="Draft post management")
 
 
+# ---------------------------------------------------------
+# LIST DRAFT POSTS
+# ---------------------------------------------------------
 @blp_drafts.route("/social/drafts", methods=["POST"])
 class CreateDraftPostResource(MethodView):
     """
@@ -173,6 +234,64 @@ class CreateDraftPostResource(MethodView):
             "data": created,
         }), HTTP_STATUS_CODES["CREATED"]
 
+# ---------------------------------------------------------
+# LIST DRAFT POSTS
+# ---------------------------------------------------------
+@blp_drafts.route("/social/drafts", methods=["GET"])
+class ListDraftsResource(MethodView):
+
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[social_drafts_resource.py][ListDraftsResource][get][{client_ip}]"
+
+        user = g.get("current_user", {}) or {}
+        business_id = str(user.get("business_id") or "")
+        user__id = str(user.get("_id") or "")
+
+        if not business_id or not user__id:
+            return jsonify({
+                "success": False,
+                "message": "Unauthorized"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # --------------------------------------
+        # QUERY PARAMS
+        # --------------------------------------
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 20, type=int)
+
+        platform = request.args.get("platform")  # instagram,facebook
+        date_from = request.args.get("date_from")
+        date_to = request.args.get("date_to")
+
+        # --------------------------------------
+        # Call model helper
+        # --------------------------------------
+        try:
+            result = ScheduledPost.list_by_business_id(
+                business_id=business_id,
+                page=page,
+                per_page=per_page,
+                status=getattr(ScheduledPost, "STATUS_DRAFT", "draft"),
+                platform=platform,
+                date_from=_parse_iso8601_with_tz(date_from) if date_from else None,
+                date_to=_parse_iso8601_with_tz(date_to) if date_to else None,
+            )
+
+            return jsonify({
+                "success": True,
+                "data": result,
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.info(f"{log_tag} failed to list drafts: {e}")
+            return jsonify({
+                "success": False,
+                "message": "Failed to list drafts"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+      
+        
 
 @blp_drafts.route("/social/drafts/<post_id>", methods=["PATCH"])
 class UpdateDraftPostResource(MethodView):
