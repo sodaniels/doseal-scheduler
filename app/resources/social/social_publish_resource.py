@@ -401,6 +401,7 @@ class UnifiedPublishResource(MethodView):
             cleaned_dest["content"] = dest_content
 
             # remove override keys (avoid confusion)
+            
             cleaned_dest.pop("text", None)
             cleaned_dest.pop("link", None)
             cleaned_dest.pop("media", None)
