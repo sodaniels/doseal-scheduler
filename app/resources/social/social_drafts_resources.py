@@ -292,7 +292,6 @@ class ListDraftsResource(MethodView):
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
       
         
-
 @blp_drafts.route("/social/drafts/<post_id>", methods=["PATCH"])
 class UpdateDraftPostResource(MethodView):
     """
