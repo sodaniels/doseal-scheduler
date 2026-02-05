@@ -1,3 +1,5 @@
+# app/extensions/queu.py
+
 import os
 from rq import Queue
 from rq_scheduler import Scheduler
@@ -10,3 +12,9 @@ publish_queue = Queue(PUBLISH_QUEUE_NAME, connection=redis_client)
 
 # This scheduler stores scheduled jobs in Redis and later moves them into `publish_queue`
 scheduler = Scheduler(queue=publish_queue, connection=redis_client)
+
+def get_queue(name: str = None) -> Queue:
+    if not name or name == PUBLISH_QUEUE_NAME:
+        return publish_queue
+
+    return Queue(name, connection=redis_client)

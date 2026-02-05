@@ -73,6 +73,7 @@ from .social.oauth_whatsapp_resource import blp_whatsapp_oauth
 from .social.send_now_resource import blp_send_now
 from .social.oauth_pinterest_resource import blp_pinterest_oauth
 from .social.social_publish_resource import blp_unified_publish
+from .social.social_drafts_resources import blp_drafts
 
 
 __all__ = [
@@ -100,6 +101,7 @@ __all__ = [
     "blp_send_now",
     "blp_pinterest_oauth",
     "blp_unified_publish",
+    "blp_drafts",
     #-------------------
     #ADMIN ROUTES
     #-------------------

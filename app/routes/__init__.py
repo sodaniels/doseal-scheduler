@@ -76,6 +76,7 @@ from ..resources import (
     blp_send_now,
     blp_pinterest_oauth,
     blp_unified_publish,
+    blp_drafts,
 )
 
 
@@ -114,7 +115,8 @@ def register_social_routes(app, api):
         blp_fb_webhook,
         blp_send_now,
         blp_pinterest_oauth,
-        blp_unified_publish
+        blp_unified_publish,
+        blp_drafts,
     ]
 
     for blueprint in blueprints:

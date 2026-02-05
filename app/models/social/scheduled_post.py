@@ -15,7 +15,7 @@ class ScheduledPost(BaseModel):
 
     STATUS_DRAFT = "draft"
     STATUS_SCHEDULED = "scheduled"
-    STATUS_ENQUEUED = "enqueued"        # <--- NEW (important)
+    STATUS_ENQUEUED = "enqueued"
     STATUS_PUBLISHING = "publishing"
     STATUS_PENDING = "pending"
     STATUS_PUBLISHED = "published"
@@ -270,7 +270,6 @@ class ScheduledPost(BaseModel):
         )
         return res.modified_count > 0
 
-
     # ----------------------------------------
     # LIST BY BUSINESS
     # ----------------------------------------
@@ -371,7 +370,117 @@ class ScheduledPost(BaseModel):
                 "current_page": page,
                 "per_page": per_page,
             }     
-            
+           
+    # ----------------------------------------
+    # UPDATE FIELDS (generic safe updater)
+    # ----------------------------------------
+    @classmethod
+    def update_fields(
+        cls,
+        post_id: str,
+        business_id: str,
+        updates: Dict[str, Any],
+    ) -> bool:
+        """
+        Update arbitrary fields on a scheduled post (business-scoped).
+
+        Notes:
+        - Always sets updated_at
+        - Removes immutable keys if accidentally passed
+        - Returns True if a document was modified
+        """
+        if not updates or not isinstance(updates, dict):
+            return False
+
+        col = db_ext.get_collection(cls.collection_name)
+
+        # never allow these to be overwritten via update_fields
+        updates = dict(updates)
+        updates.pop("_id", None)
+        updates.pop("business_id", None)
+        updates.pop("user__id", None)
+        updates.pop("created_at", None)
+
+        updates["updated_at"] = datetime.now(timezone.utc)
+
+        res = col.update_one(
+            {"_id": ObjectId(str(post_id)), "business_id": ObjectId(str(business_id))},
+            {"$set": updates},
+        )
+        return res.modified_count > 0
+
+    # ----------------------------------------
+    # UPDATE BY ID (wrapper with common fields)
+    # ----------------------------------------
+    @classmethod
+    def update_by_id(
+        cls,
+        post_id: str,
+        business_id: str,
+        *,
+        content: Optional[Dict[str, Any]] = None,
+        destinations: Optional[list] = None,
+        scheduled_at_utc: Optional[Any] = None,  # datetime or iso string (depending on your _parse_dt)
+        status: Optional[str] = None,
+        error: Optional[str] = None,
+        provider_results: Optional[list] = None,
+        manual_required: Optional[list] = None,
+        mode: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Opinionated updater for the common scheduled-post fields.
+        Uses update_fields() underneath.
+
+        - scheduled_at_utc is stored as datetime (via cls._parse_dt if you already have it)
+        - content/destinations overwrite completely when provided
+        """
+        updates: Dict[str, Any] = {}
+
+        if content is not None:
+            updates["content"] = content
+
+        if destinations is not None:
+            updates["destinations"] = destinations
+
+        if scheduled_at_utc is not None:
+            # if you already have cls._parse_dt used elsewhere, use it here
+            try:
+                updates["scheduled_at_utc"] = cls._parse_dt(scheduled_at_utc)
+            except Exception:
+                # fallback: store as-is (but ideally fix upstream)
+                updates["scheduled_at_utc"] = scheduled_at_utc
+
+            # optional: keep string mirror field if your UI expects it
+            try:
+                dt = updates["scheduled_at_utc"]
+                if hasattr(dt, "isoformat"):
+                    updates["scheduled_at"] = dt.isoformat()
+            except Exception:
+                pass
+
+        if status is not None:
+            updates["status"] = status
+
+        if error is not None:
+            updates["error"] = error
+
+        if provider_results is not None:
+            updates["provider_results"] = provider_results
+
+        if manual_required is not None:
+            updates["manual_required"] = manual_required
+
+        if mode is not None:
+            updates["mode"] = mode
+
+        if extra and isinstance(extra, dict):
+            # allow custom fields (e.g. "title", "draft_name", etc.)
+            for k, v in extra.items():
+                updates[k] = v
+
+        return cls.update_fields(post_id, business_id, updates)
+     
     @classmethod
     def ensure_indexes(cls):
         col = db_ext.get_collection(cls.collection_name)

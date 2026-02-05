@@ -433,3 +433,28 @@ class CreateScheduledPostResource(MethodView):
             "message": "scheduled",
             "data": created,
         }), HTTP_STATUS_CODES["CREATED"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
