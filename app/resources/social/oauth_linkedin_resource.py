@@ -13,15 +13,26 @@ from flask_smorest import Blueprint
 
 from ...utils.logger import Log
 from ...utils.redis import get_redis, set_redis_with_expiry, remove_redis
-from ...constants.service_code import HTTP_STATUS_CODES
+from ...constants.service_code import (
+    HTTP_STATUS_CODES,
+    SYSTEM_USERS
+)
 from ..doseal.admin.admin_business_resource import token_required
-
+from ...utils.json_response import prepared_response
+from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
 from ...models.social.social_account import SocialAccount
+from ...utils.social.pre_process_checks import PreProcessCheck
 from ...utils.schedule_helper import (
     _safe_json_load,
     _store_selection,
     _redirect_to_frontend,
 )
+from ...utils.helpers import make_log_tag
+from ...utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
+)
+
 
 blp_linkedin_oauth = Blueprint("linkedin_oauth", __name__)
 
@@ -262,16 +273,42 @@ class LinkedInOauthStartResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_linkedin.py][LinkedInOauthStartResource][get][{client_ip}]"
+        
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        account_type = user_info.get("account_type")
+        auth_business_id = str(user_info.get("business_id"))
+        target_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
+        
+        log_tag = make_log_tag(
+            "oauth_linkedin_resource.py",
+            "LinkedInOauthStartResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
 
         client_id, client_secret, callback_url = _require_linkedin_env(log_tag)
         if not client_id or not client_secret or not callback_url:
             return jsonify({"success": False, "message": "LinkedIn OAuth env missing"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-        user = g.get("current_user", {}) or {}
-        owner = {"business_id": str(user.get("business_id")), "user__id": str(user.get("_id"))}
+        owner = {"business_id": str(user_info.get("business_id")), "user__id": str(user_info.get("_id"))}
         if not owner["business_id"] or not owner["user__id"]:
             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        
+        #####################PRE TRANSACTION CHECKS#########################
+        
+        # 1. check pre transaction requirements for agents
+        pre_check = PreProcessCheck(business_id=target_business_id, account_type=account_type, admin_id=admin_id)
+        initial_check_result = pre_check.initial_processs_checks()
+        
+        if initial_check_result is not None:
+            return initial_check_result
+        #####################PRE TRANSACTION CHECKS#########################
 
         # state stored in Redis
         state = secrets.token_urlsafe(24)
@@ -306,7 +343,7 @@ class LinkedInOauthStartResource(MethodView):
 class LinkedInOauthCallbackResource(MethodView):
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_linkedin.py][LinkedInOauthCallbackResource][get][{client_ip}]"
+        log_tag = f"[oauth_linkedin_resource.py][LinkedInOauthCallbackResource][get][{client_ip}]"
 
         error = request.args.get("error")
         if error:
@@ -416,7 +453,34 @@ class LinkedInAccountsResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_linkedin.py][LinkedInAccountsResource][get][{client_ip}]"
+        
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        account_type = user_info.get("account_type")
+        auth_business_id = str(user_info.get("business_id"))
+        target_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
+        
+        log_tag = make_log_tag(
+            "oauth_linkedin_resource.py",
+            "LinkedInAccountsResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+        
+        #####################PRE TRANSACTION CHECKS#########################
+        
+        # 1. check pre transaction requirements for agents
+        pre_check = PreProcessCheck(business_id=target_business_id, account_type=account_type, admin_id=admin_id)
+        initial_check_result = pre_check.initial_processs_checks()
+        
+        if initial_check_result is not None:
+            return initial_check_result
+        #####################PRE TRANSACTION CHECKS#########################
 
         selection_key = request.args.get("selection_key")
         if not selection_key:
@@ -481,9 +545,43 @@ class LinkedInConnectAccountResource(MethodView):
     @token_required
     def post(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_linkedin.py][LinkedInConnectAccountResource][post][{client_ip}]"
 
+        user_info = g.get("current_user", {}) or {}
+        auth_user__id = str(user_info.get("_id"))
+        account_type = user_info.get("account_type")
+        auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
+
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         body = request.get_json(silent=True) or {}
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = str(form_business_id)
+        else:
+            target_business_id = auth_business_id
+
+        log_tag = make_log_tag(
+            "oauth_linkedin_resource.py",
+            "LinkedInConnectAccountResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
+
         selection_key = body.get("selection_key")
         destination_id = body.get("destination_id")
         destination_type = body.get("destination_type")  # "member" or "organization"
@@ -517,7 +615,10 @@ class LinkedInConnectAccountResource(MethodView):
         scopes = (token_data.get("scope") or token_data.get("scopes") or "").split()
 
         if not access_token:
-            return jsonify({"success": False, "message": "Invalid OAuth selection (missing token data). Please reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "Invalid OAuth selection (missing token data). Please reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         # Validate destination exists in selection (extra safety)
         allowed = False
@@ -538,26 +639,80 @@ class LinkedInConnectAccountResource(MethodView):
                     break
 
         if not allowed:
-            return jsonify({"success": False, "message": "destination_id not found for this selection_key"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "destination_id not found for this selection_key"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # ------------------------------------------------------------
+        # ✅ NEW: check if this destination already exists
+        #   - if exists and token NOT expired/expiring soon => block (already connected)
+        #   - if exists but expired/expiring soon => allow reconnect WITHOUT consuming quota
+        #   - if not exists => consume quota then create
+        # ------------------------------------------------------------
+        destination_id = str(destination_id)
+
+        try:
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "linkedin",
+                destination_id,
+            )
+        except Exception:
+            existing = None
+
+        enforcer = QuotaEnforcer(target_business_id)
+
+        consume_quota = True
+        if existing:
+            try:
+                if not is_token_expired(existing):
+                    if is_token_expiring_soon(existing, minutes=10):
+                        consume_quota = False
+                        Log.info(f"{log_tag} LinkedIn token expiring soon; allowing OAuth reconnect without consuming quota")
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "message": "This LinkedIn account is already connected.",
+                            "code": "ALREADY_CONNECTED",
+                        }), HTTP_STATUS_CODES["CONFLICT"]
+                else:
+                    consume_quota = False
+                    Log.info(f"{log_tag} LinkedIn token expired; allowing OAuth reconnect without consuming quota")
+            except Exception:
+                consume_quota = False
+                Log.info(f"{log_tag} Could not determine token expiry; allowing overwrite without consuming quota")
+
+        if consume_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
                 business_id=owner["business_id"],
                 user__id=owner["user__id"],
                 platform="linkedin",
-                destination_id=str(destination_id),
+                destination_id=destination_id,
                 destination_type=destination_type,
-                destination_name=destination_name or str(destination_id),
+                destination_name=destination_name or destination_id,
 
-                # OAuth2 token
                 access_token_plain=access_token,
                 refresh_token_plain=refresh_token,
                 token_expires_at=token_expires_at,
 
                 scopes=scopes or ["openid", "profile", "email"],
 
-                # Helpful for internal usage
-                platform_user_id=str(destination_id),
+                platform_user_id=destination_id,
                 platform_username=None,
 
                 meta={
@@ -566,14 +721,35 @@ class LinkedInConnectAccountResource(MethodView):
                 },
             )
 
-            # one-time use
+            # one-time use selection
             try:
                 remove_redis(f"linkedin_select:{selection_key}")
             except Exception:
                 pass
 
-            return jsonify({"success": True, "message": "LinkedIn account connected successfully"}), HTTP_STATUS_CODES["OK"]
+            return jsonify({
+                "success": True,
+                "message": "LinkedIn account connected successfully"
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert LinkedIn destination: {e}")
-            return jsonify({"success": False, "message": "Failed to connect LinkedIn account"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+            if consume_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect LinkedIn account"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+
+
+
+
+
+
+
+
+
+
+

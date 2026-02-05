@@ -162,6 +162,7 @@ class FacebookConnectPageResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
+        admin_id = str(user_info.get("admin_id"))
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = body.get("business_id")
@@ -180,6 +181,16 @@ class FacebookConnectPageResource(MethodView):
             auth_business_id,
             target_business_id
         )
+        
+        #####################PRE TRANSACTION CHECKS#########################
+        
+        # 1. check pre transaction requirements for agents
+        pre_check = PreProcessCheck(business_id=target_business_id, account_type=account_type, admin_id=admin_id)
+        initial_check_result = pre_check.initial_processs_checks()
+        
+        if initial_check_result is not None:
+            return initial_check_result
+        #####################PRE TRANSACTION CHECKS#########################
 
         if not selection_key or not page_id:
             return jsonify({"success": False, "message": "selection_key and page_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
@@ -322,6 +333,7 @@ class FacebookPagesResource(MethodView):
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
+        admin_id = str(user_info.get("admin_id"))
         
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = body.get("business_id")
@@ -340,6 +352,16 @@ class FacebookPagesResource(MethodView):
             auth_business_id,
             target_business_id
         )
+        
+        #####################PRE TRANSACTION CHECKS#########################
+        
+        # 1. check pre transaction requirements for agents
+        pre_check = PreProcessCheck(business_id=target_business_id, account_type=account_type, admin_id=admin_id)
+        initial_check_result = pre_check.initial_processs_checks()
+        
+        if initial_check_result is not None:
+            return initial_check_result
+        #####################PRE TRANSACTION CHECKS#########################
 
         selection_key = request.args.get("selection_key")
         if not selection_key:
@@ -382,19 +404,13 @@ class InstagramOauthStartResource(MethodView):
     def get(self):
         client_ip = request.remote_addr
         
-        body = request.get_json(silent=True) or {}
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
+        target_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
-        
-        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
-        form_business_id = body.get("business_id")
-        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
-            target_business_id = form_business_id
-        else:
-            target_business_id = auth_business_id
-            
+        admin_id = str(user_info.get("admin_id"))
+
         log_tag = make_log_tag(
             "oauth_facebook_resource.py",
             "FacebookConnectPageResource",
@@ -405,6 +421,16 @@ class InstagramOauthStartResource(MethodView):
             auth_business_id,
             target_business_id
         )
+        
+        #####################PRE TRANSACTION CHECKS#########################
+        
+        # 1. check pre transaction requirements for agents
+        pre_check = PreProcessCheck(business_id=auth_business_id, account_type=account_type, admin_id=admin_id)
+        initial_check_result = pre_check.initial_processs_checks()
+        
+        if initial_check_result is not None:
+            return initial_check_result
+        #####################PRE TRANSACTION CHECKS#########################
 
         redirect_uri = _require_env("INSTAGRAM_REDIRECT_URI", log_tag)
         meta_app_id = _require_env("META_APP_ID", log_tag)
@@ -739,14 +765,49 @@ class ThreadsOauthStartResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[oauth_meta.py][ThreadsOauthStartResource][get][{client_ip}]"
+        
+        user = g.get("current_user", {}) or {}
+        auth_user__id = str(user.get("_id"))
+        auth_business_id = str(user.get("business_id"))
+        account_type = user.get("account_type")
+        admin_id = str(user.get("admin_id"))
+        body = request.get_json(silent=True) or {}
+
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = body.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+            
+        log_tag = make_log_tag(
+            "oauth_facebook_resource.py",
+            "ThreadsOauthStartResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id
+        )
+        
+        #####################PRE TRANSACTION CHECKS#########################
+        
+        # 1. check pre transaction requirements for agents
+        pre_check = PreProcessCheck(business_id=target_business_id, account_type=account_type, admin_id=admin_id)
+        initial_check_result = pre_check.initial_processs_checks()
+        
+        if initial_check_result is not None:
+            return initial_check_result
+        #####################PRE TRANSACTION CHECKS#########################
+        
 
         redirect_uri = _require_env("THREADS_REDIRECT_URI", log_tag)
         meta_app_id = _require_env("THREADS_APP_ID", log_tag)
         if not redirect_uri or not meta_app_id:
             return jsonify({"success": False, "message": "Server OAuth config missing"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-        user = g.get("current_user", {}) or {}
+        
         owner = {"business_id": str(user.get("business_id")), "user__id": str(user.get("_id"))}
         if not owner["business_id"] or not owner["user__id"]:
             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
@@ -893,7 +954,7 @@ class ThreadsAccountsResource(MethodView):
 
 
 # -------------------------------------------------------------------
-# THREADS: CONNECT ACCOUNT
+# THREADS: CONNECT ACCOUNT (finalize into social_accounts)
 # -------------------------------------------------------------------
 @blp_meta_oauth.route("/social/threads/connect-account", methods=["POST"])
 class ThreadsConnectAccountResource(MethodView):
@@ -908,34 +969,18 @@ class ThreadsConnectAccountResource(MethodView):
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
         account_type = user_info.get("account_type")
 
-        if not selection_key or not threads_user_id:
-            return jsonify({"success": False, "message": "selection_key and threads_user_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        sel = _load_selection("threads", selection_key)
-        if not sel:
-            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        owner = sel.get("owner") or {}
-        account = sel.get("account") or {}
-
-        user = g.get("current_user", {}) or {}
-        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
-            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
-
-        if str(account.get("destination_id")) != str(threads_user_id):
-            return jsonify({"success": False, "message": "Invalid threads_user_id for this selection_key"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        # Optional business override for system roles
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = body.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
-            target_business_id = form_business_id
+            target_business_id = str(form_business_id)
         else:
             target_business_id = auth_business_id
 
         log_tag = make_log_tag(
-            "oauth_facebook_resource.py",
+            "oauth_threads_resource.py",
             "ThreadsConnectAccountResource",
             "post",
             client_ip,
@@ -944,49 +989,156 @@ class ThreadsConnectAccountResource(MethodView):
             auth_business_id,
             target_business_id
         )
+        
+        #####################PRE TRANSACTION CHECKS#########################
+        
+        # 1. check pre transaction requirements for agents
+        pre_check = PreProcessCheck(business_id=auth_business_id, account_type=account_type, admin_id=admin_id)
+        initial_check_result = pre_check.initial_processs_checks()
+        
+        if initial_check_result is not None:
+            return initial_check_result
+        #####################PRE TRANSACTION CHECKS#########################
 
-        # Plan enforcement
-        enforcer = QuotaEnforcer(target_business_id)
+        if not selection_key or not threads_user_id:
+            return jsonify({
+                "success": False,
+                "message": "selection_key and threads_user_id are required"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        sel = _load_selection("threads", selection_key)
+        if not sel:
+            return jsonify({
+                "success": False,
+                "message": "Selection expired. Please reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        owner = sel.get("owner") or {}
+        account = sel.get("account") or {}
+
+        user = g.get("current_user", {}) or {}
+        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
+            return jsonify({
+                "success": False,
+                "message": "Not allowed for this selection_key"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # Validate selection payload matches requested Threads user id
+        if str(account.get("destination_id")) != str(threads_user_id):
+            return jsonify({
+                "success": False,
+                "message": "Invalid threads_user_id for this selection_key"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Threads destination_id
+        destination_id = str(account.get("destination_id") or "")
+        if not destination_id:
+            return jsonify({
+                "success": False,
+                "message": "Missing destination_id from selection"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        access_token = account.get("access_token")
+        if not access_token:
+            return jsonify({
+                "success": False,
+                "message": "Missing access_token in selection. Reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # ------------------------------------------------------------
+        # ✅ NEW: check if this destination already exists
+        #   - if exists and token is not expired/expiring soon => block (already connected)
+        #   - if exists but expired/expiring soon => allow reconnect WITHOUT consuming quota
+        #   - if not exists => consume quota then create
+        # ------------------------------------------------------------
         try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",
-                reason="social_accounts:create",
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "threads",
+                destination_id,
             )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} plan limit reached: {e.meta}")
-            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+        except Exception:
+            existing = None
+
+        # ---- PLAN ENFORCER (scoped to target business) ----
+        enforcer = QuotaEnforcer(target_business_id)
+
+        consume_quota = True
+        if existing:
+            try:
+                if not is_token_expired(existing):
+                    if is_token_expiring_soon(existing, minutes=10):
+                        consume_quota = False
+                        Log.info(f"{log_tag} Threads token expiring soon; allowing OAuth reconnect without consuming quota")
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "message": "This Threads account is already connected.",
+                            "code": "ALREADY_CONNECTED",
+                        }), HTTP_STATUS_CODES["CONFLICT"]
+                else:
+                    consume_quota = False
+                    Log.info(f"{log_tag} Threads token expired; allowing OAuth reconnect without consuming quota")
+            except Exception:
+                # If expiry cannot be determined, be safe: overwrite without quota (same destination)
+                consume_quota = False
+                Log.info(f"{log_tag} Could not determine token expiry; allowing overwrite without consuming quota")
+
+        if consume_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
                 business_id=owner["business_id"],
                 user__id=owner["user__id"],
                 platform="threads",
-                destination_id=str(account.get("destination_id")),
+
+                destination_id=destination_id,
                 destination_type="user",
                 destination_name=account.get("name") or "Threads Account",
-                access_token_plain=account.get("access_token"),
+
+                access_token_plain=access_token,
                 refresh_token_plain=None,
-                token_expires_at=None,
+
+                # If you later add expiry parsing (recommended), store it.
+                token_expires_at=existing.get("token_expires_at") if isinstance(existing, dict) else None,
+
                 scopes=["threads_basic", "threads_content_publish"],
-                platform_user_id=str(account.get("destination_id")),
+                platform_user_id=destination_id,
                 platform_username=account.get("name"),
+
                 meta={
-                    "threads_user_id": str(account.get("destination_id")),
+                    "threads_user_id": destination_id,
                     "name": account.get("name"),
                 },
             )
 
             _delete_selection("threads", selection_key)
-            return jsonify({"success": True, "message": "Threads account connected successfully"}), HTTP_STATUS_CODES["OK"]
+
+            return jsonify({
+                "success": True,
+                "message": "Threads account connected successfully"
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-            return jsonify({"success": False, "message": "Failed to connect Threads"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
+            if consume_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect Threads"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
 
