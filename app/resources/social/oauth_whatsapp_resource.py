@@ -15,8 +15,9 @@ from ..doseal.admin.admin_business_resource import token_required
 
 from ...models.social.social_account import SocialAccount
 from ...services.social.adapters.whatsapp_adapter import WhatsAppAdapter
-
 from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
+from ...utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
+from ...utils.social.pre_process_checks import PreProcessCheck
 from ...utils.helpers import make_log_tag
 
 from ...utils.schedule_helper import (
@@ -24,6 +25,10 @@ from ...utils.schedule_helper import (
     _store_state, _consume_state,
     _store_selection, _load_selection, _delete_selection,
     _redirect_to_frontend,
+)
+from ...utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
 )
 
 blp_whatsapp_oauth = Blueprint("whatsapp_oauth", __name__)
@@ -41,6 +46,7 @@ class WhatsAppOauthStartResource(MethodView):
         body = request.get_json(silent=True) or {}
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
+        admin_id = str(user_info.get("admin_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
 
@@ -60,6 +66,18 @@ class WhatsAppOauthStartResource(MethodView):
             auth_business_id,
             target_business_id
         )
+        
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         redirect_uri = _require_env("WHATSAPP_REDIRECT_URI", log_tag)
         meta_app_id = _require_env("META_APP_ID", log_tag)
@@ -229,6 +247,15 @@ class WhatsAppPhoneNumbersResource(MethodView):
 
 # -------------------------------------------------------------------
 # WHATSAPP: CONNECT NUMBER (finalize into social_accounts)
+#   - If destination already exists and token not expired/expiring soon => block (already connected)
+#   - If exists but expired/expiring soon => allow reconnect WITHOUT consuming quota (refresh token)
+#   - If not exists => consume quota then create
+#
+# NOTE:
+# WhatsApp Cloud API tokens are usually long-lived / system-user tokens depending on setup.
+# If token_expires_at is None, treat as "unknown" and DO NOT block reconnect (same account overwrite)
+# OR if you want strict behaviour: treat None as "not expired" and block.
+# Below: we treat None as "unknown" => allow overwrite without quota.
 # -------------------------------------------------------------------
 @blp_whatsapp_oauth.route("/social/whatsapp/connect-number", methods=["POST"])
 class WhatsAppConnectNumberResource(MethodView):
@@ -246,9 +273,10 @@ class WhatsAppConnectNumberResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
 
+        # Optional business override for system roles
         form_business_id = body.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
-            target_business_id = form_business_id
+            target_business_id = str(form_business_id)
         else:
             target_business_id = auth_business_id
 
@@ -264,53 +292,123 @@ class WhatsAppConnectNumberResource(MethodView):
         )
 
         if not selection_key or not phone_number_id:
-            return jsonify({"success": False, "message": "selection_key and phone_number_id are required"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "selection_key and phone_number_id are required"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         sel = _load_selection("wa", selection_key)
         if not sel:
-            return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "Selection expired. Please reconnect."
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         owner = sel.get("owner") or {}
         user = g.get("current_user", {}) or {}
-        if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
-            return jsonify({"success": False, "message": "Not allowed for this selection_key"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        if (
+            str(user.get("business_id")) != str(owner.get("business_id"))
+            or str(user.get("_id")) != str(owner.get("user__id"))
+        ):
+            return jsonify({
+                "success": False,
+                "message": "Not allowed for this selection_key"
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
         access_token = sel.get("access_token")
         if not access_token:
-            return jsonify({"success": False, "message": "Missing token in selection (reconnect)"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            return jsonify({
+                "success": False,
+                "message": "Missing token in selection (reconnect)"
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # ------------------------------------------------------------
+        # ✅ NEW: check if this destination already exists
+        # ------------------------------------------------------------
+        phone_number_id = str(phone_number_id)
+        try:
+            existing = SocialAccount.get_destination(
+                owner["business_id"],
+                owner["user__id"],
+                "whatsapp",
+                phone_number_id,
+            )
+        except Exception:
+            existing = None
 
         enforcer = QuotaEnforcer(target_business_id)
-        try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",
-                reason="social_accounts:create",
-            )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} plan limit reached: {e.meta}")
-            return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+
+        consume_quota = True
+        if existing:
+            # WhatsApp tokens may not have expiry set; handle safely.
+            try:
+                # If expiry is known and not expired => block unless expiring soon
+                if not is_token_expired(existing):
+                    if is_token_expiring_soon(existing, minutes=10):
+                        consume_quota = False
+                        Log.info(f"{log_tag} WA token expiring soon; allowing OAuth reconnect without consuming quota")
+                    else:
+                        return jsonify({
+                            "success": False,
+                            "message": "This WhatsApp number is already connected.",
+                            "code": "ALREADY_CONNECTED",
+                        }), HTTP_STATUS_CODES["CONFLICT"]
+                else:
+                    consume_quota = False
+                    Log.info(f"{log_tag} WA token expired; allowing OAuth reconnect without consuming quota")
+            except Exception:
+                # If expiry cannot be determined (token_expires_at missing),
+                # treat reconnect as a token refresh for SAME phone_number_id => no quota.
+                consume_quota = False
+                Log.info(f"{log_tag} Could not determine WA token expiry; allowing overwrite without consuming quota")
+
+        # ------------------------------------------------------------
+        # ✅ Only reserve quota when creating a NEW destination
+        # ------------------------------------------------------------
+        if consume_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="social_accounts",
+                    limit_key="max_social_accounts",
+                    qty=1,
+                    period="billing",
+                    reason="social_accounts:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         try:
             SocialAccount.upsert_destination(
                 business_id=owner["business_id"],
                 user__id=owner["user__id"],
                 platform="whatsapp",
-                destination_id=str(phone_number_id),
+                destination_id=phone_number_id,
                 destination_type="phone_number",
                 destination_name=str(body.get("display_phone_number") or phone_number_id),
 
                 access_token_plain=access_token,
                 refresh_token_plain=None,
-                token_expires_at=None,
-                scopes=["business_management", "whatsapp_business_management", "whatsapp_business_messaging"],
 
-                platform_user_id=str(phone_number_id),
+                # if you later compute expiry, store it; else keep existing
+                token_expires_at=(
+                    existing.get("token_expires_at")
+                    if isinstance(existing, dict)
+                    else None
+                ),
+
+                # keep your scopes, but fix the common naming
+                scopes=[
+                    "whatsapp_business_management",
+                    "whatsapp_business_messaging",
+                    "business_management",
+                ],
+
+                platform_user_id=phone_number_id,
                 platform_username=str(body.get("display_phone_number") or ""),
 
                 meta={
-                    "waba_id": str(waba_id or ""),
+                    "waba_id": str(waba_id or (existing.get("meta", {}).get("waba_id") if isinstance(existing, dict) else "") or ""),
                     "display_phone_number": body.get("display_phone_number"),
                     "verified_name": body.get("verified_name"),
                     "quality_rating": body.get("quality_rating"),
@@ -319,9 +417,32 @@ class WhatsAppConnectNumberResource(MethodView):
             )
 
             _delete_selection("wa", selection_key)
-            return jsonify({"success": True, "message": "WhatsApp number connected successfully"}), HTTP_STATUS_CODES["OK"]
+
+            return jsonify({
+                "success": True,
+                "message": "WhatsApp number connected successfully"
+            }), HTTP_STATUS_CODES["OK"]
 
         except Exception as e:
             Log.info(f"{log_tag} Failed to upsert: {e}")
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-            return jsonify({"success": False, "message": "Failed to connect WhatsApp number"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+            if consume_quota:
+                enforcer.release(counter_name="social_accounts", qty=1, period="billing")
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect WhatsApp number"
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
