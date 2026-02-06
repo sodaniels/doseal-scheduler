@@ -80,6 +80,7 @@ from ..resources import (
     blp_schwriter,
     blp_schwriter_batch,
     blp_meta_impression,
+    blp_instagram_insights,
 )
 
 
@@ -123,6 +124,7 @@ def register_social_routes(app, api):
         blp_schwriter,
         blp_schwriter_batch,
         blp_meta_impression,
+        blp_instagram_insights,
     ]
 
     for blueprint in blueprints:
