@@ -365,6 +365,7 @@ def _fetch_account_insights(
     all_metrics: Dict[str, List[Dict[str, Any]]] = {}
     deprecated_found: List[str] = []
     
+    
     # De-duplicate metrics
     seen = set()
     uniq_metrics = []
