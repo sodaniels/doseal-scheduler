@@ -887,3 +887,343 @@ class InstagramMediaInsightsResource(MethodView):
                 "success": False,
                 "message": f"Request failed: {str(e)}",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+# -------------------------------------------------------------------
+# INSTAGRAM MEDIA LIST — Get all media for an account
+# -------------------------------------------------------------------
+
+@blp_instagram_insights.route("/social/instagram/media-list", methods=["GET"])
+class InstagramMediaListResource(MethodView):
+    """
+    Get list of media (posts) for an Instagram account.
+
+    Query params:
+      - destination_id (required): Instagram Business/Creator Account ID
+      - limit: Number of posts to return (default: 25, max: 100)
+      - after: Pagination cursor for next page
+      - before: Pagination cursor for previous page
+      - fields: Comma-separated fields (optional, has defaults)
+      
+    Default fields returned:
+      - id, caption, media_type, timestamp
+      - like_count, comments_count
+      - permalink, media_url, thumbnail_url
+      
+    Media types:
+      - IMAGE: Single image post
+      - VIDEO: Single video post  
+      - CAROUSEL_ALBUM: Multiple images/videos
+      - REELS: Instagram Reel
+    """
+
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[instagram_insights][media_list][{client_ip}]"
+
+        user = g.get("current_user") or {}
+        business_id = str(user.get("business_id") or "")
+        user__id = str(user.get("_id") or "")
+
+        if not business_id or not user__id:
+            return jsonify({
+                "success": False,
+                "message": "Unauthorized",
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # Parse query parameters
+        ig_user_id = (request.args.get("destination_id") or "").strip()
+        limit = request.args.get("limit", "25").strip()
+        after_cursor = (request.args.get("after") or "").strip() or None
+        before_cursor = (request.args.get("before") or "").strip() or None
+        fields_qs = (request.args.get("fields") or "").strip()
+
+        # Validate required parameters
+        if not ig_user_id:
+            return jsonify({
+                "success": False,
+                "message": "destination_id is required",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Validate and cap limit
+        try:
+            limit = min(int(limit), 100)
+            if limit < 1:
+                limit = 25
+        except ValueError:
+            limit = 25
+
+        # Default fields if not specified
+        default_fields = [
+            "id",
+            "caption",
+            "media_type",
+            "media_product_type",
+            "timestamp",
+            "like_count",
+            "comments_count",
+            "permalink",
+            "media_url",
+            "thumbnail_url",
+        ]
+        
+        if fields_qs:
+            fields = [f.strip() for f in fields_qs.split(",") if f.strip()]
+        else:
+            fields = default_fields
+
+        # --------------------------------------------------
+        # Load stored SocialAccount
+        # --------------------------------------------------
+
+        acct = SocialAccount.get_destination(
+            business_id=business_id,
+            user__id=user__id,
+            platform="instagram",
+            destination_id=ig_user_id,
+        )
+
+        if not acct:
+            return jsonify({
+                "success": False,
+                "code": "IG_NOT_CONNECTED",
+                "message": "Instagram account not connected",
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        access_token = acct.get("access_token_plain")
+        if not access_token:
+            return jsonify({
+                "success": False,
+                "code": "IG_TOKEN_MISSING",
+                "message": "Reconnect Instagram - no access token found",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # --------------------------------------------------
+        # Fetch media list from Instagram API
+        # --------------------------------------------------
+
+        url = f"https://graph.facebook.com/{GRAPH_VERSION}/{ig_user_id}/media"
+        params = {
+            "fields": ",".join(fields),
+            "limit": limit,
+            "access_token": access_token,
+        }
+        
+        # Add pagination cursors if provided
+        if after_cursor:
+            params["after"] = after_cursor
+        if before_cursor:
+            params["before"] = before_cursor
+
+        try:
+            r = requests.get(url, params=params, timeout=30)
+            
+            if r.status_code >= 400:
+                error_data = r.json() if r.text else {}
+                parsed_error = _parse_ig_error(error_data)
+                
+                error_code = parsed_error.get("code")
+                
+                if error_code == 190:
+                    return jsonify({
+                        "success": False,
+                        "code": "IG_TOKEN_EXPIRED",
+                        "message": "Instagram access token has expired. Please reconnect.",
+                    }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+                elif error_code in [10, 200, 210]:
+                    return jsonify({
+                        "success": False,
+                        "code": "IG_PERMISSION_DENIED",
+                        "message": "Missing permissions. Token needs: instagram_basic",
+                    }), HTTP_STATUS_CODES["FORBIDDEN"]
+                
+                return jsonify({
+                    "success": False,
+                    "code": "IG_MEDIA_LIST_ERROR",
+                    "message": parsed_error.get("message", "Failed to fetch media list"),
+                    "error": parsed_error,
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            payload = r.json() or {}
+            media_list = payload.get("data", [])
+            paging = payload.get("paging", {})
+            
+            # Extract pagination info
+            cursors = paging.get("cursors", {})
+            pagination = {
+                "has_next": "next" in paging,
+                "has_previous": "previous" in paging,
+                "after": cursors.get("after"),
+                "before": cursors.get("before"),
+            }
+            
+            # Build response
+            result = {
+                "platform": "instagram",
+                "graph_version": GRAPH_VERSION,
+                "destination_id": ig_user_id,
+                "count": len(media_list),
+                "limit": limit,
+                "media": media_list,
+                "pagination": pagination,
+            }
+            
+            return jsonify({
+                "success": True,
+                "data": result,
+            }), HTTP_STATUS_CODES["OK"]
+            
+        except requests.exceptions.Timeout:
+            Log.error(f"{log_tag} Media list timeout")
+            return jsonify({
+                "success": False,
+                "message": "Request timeout",
+            }), HTTP_STATUS_CODES["GATEWAY_TIMEOUT"]
+        except requests.exceptions.RequestException as e:
+            Log.error(f"{log_tag} Media list error: {e}")
+            return jsonify({
+                "success": False,
+                "message": f"Request failed: {str(e)}",
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+# -------------------------------------------------------------------
+# INSTAGRAM MEDIA DETAILS — Get details for a specific media
+# -------------------------------------------------------------------
+
+@blp_instagram_insights.route("/social/instagram/media-details", methods=["GET"])
+class InstagramMediaDetailsResource(MethodView):
+    """
+    Get detailed information for a specific Instagram media item.
+
+    Query params:
+      - destination_id (required): Instagram Business/Creator Account ID
+      - media_id (required): Instagram Media ID
+      - fields: Comma-separated fields (optional, has defaults)
+      
+    Returns full media details including children for carousels.
+    """
+
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[instagram_insights][media_details][{client_ip}]"
+
+        user = g.get("current_user") or {}
+        business_id = str(user.get("business_id") or "")
+        user__id = str(user.get("_id") or "")
+
+        if not business_id or not user__id:
+            return jsonify({
+                "success": False,
+                "message": "Unauthorized",
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # Parse query parameters
+        ig_user_id = (request.args.get("destination_id") or "").strip()
+        media_id = (request.args.get("media_id") or "").strip()
+        fields_qs = (request.args.get("fields") or "").strip()
+
+        if not ig_user_id:
+            return jsonify({
+                "success": False,
+                "message": "destination_id is required",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+        if not media_id:
+            return jsonify({
+                "success": False,
+                "message": "media_id is required",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Default fields
+        default_fields = [
+            "id",
+            "caption",
+            "media_type",
+            "media_product_type",
+            "timestamp",
+            "like_count",
+            "comments_count",
+            "permalink",
+            "media_url",
+            "thumbnail_url",
+            "children{id,media_type,media_url,thumbnail_url}",
+        ]
+        
+        if fields_qs:
+            fields = [f.strip() for f in fields_qs.split(",") if f.strip()]
+        else:
+            fields = default_fields
+
+        # Load stored SocialAccount
+        acct = SocialAccount.get_destination(
+            business_id=business_id,
+            user__id=user__id,
+            platform="instagram",
+            destination_id=ig_user_id,
+        )
+
+        if not acct:
+            return jsonify({
+                "success": False,
+                "code": "IG_NOT_CONNECTED",
+                "message": "Instagram account not connected",
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        access_token = acct.get("access_token_plain")
+        if not access_token:
+            return jsonify({
+                "success": False,
+                "code": "IG_TOKEN_MISSING",
+                "message": "Reconnect Instagram - no access token found",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Fetch media details
+        url = f"https://graph.facebook.com/{GRAPH_VERSION}/{media_id}"
+        params = {
+            "fields": ",".join(fields),
+            "access_token": access_token,
+        }
+
+        try:
+            r = requests.get(url, params=params, timeout=30)
+            
+            if r.status_code >= 400:
+                error_data = r.json() if r.text else {}
+                parsed_error = _parse_ig_error(error_data)
+                
+                return jsonify({
+                    "success": False,
+                    "code": "IG_MEDIA_DETAILS_ERROR",
+                    "message": parsed_error.get("message", "Failed to fetch media details"),
+                    "error": parsed_error,
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            media_data = r.json() or {}
+            
+            # Process children if present (for carousels)
+            if "children" in media_data and "data" in media_data["children"]:
+                media_data["children"] = media_data["children"]["data"]
+            
+            result = {
+                "platform": "instagram",
+                "graph_version": GRAPH_VERSION,
+                "media": media_data,
+            }
+            
+            return jsonify({
+                "success": True,
+                "data": result,
+            }), HTTP_STATUS_CODES["OK"]
+            
+        except requests.exceptions.RequestException as e:
+            Log.error(f"{log_tag} Media details error: {e}")
+            return jsonify({
+                "success": False,
+                "message": f"Request failed: {str(e)}",
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+
