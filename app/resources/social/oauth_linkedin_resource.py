@@ -77,7 +77,7 @@ def _linkedin_scopes() -> str:
     For pages/orgs:
       - depends on your LinkedIn product access. Often requires additional approval.
     """
-    return os.getenv("LINKEDIN_SCOPES", "openid profile email")
+    return os.getenv("LINKEDIN_SCOPES", "openid profile email") #w_member_social r_liteprofile r_emailaddress w_member_social r_organization_social rw_organization_admin w_organization_social
 
 
 def _linkedin_auth_url() -> str:

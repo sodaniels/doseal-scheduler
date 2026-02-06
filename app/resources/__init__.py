@@ -76,10 +76,11 @@ from .social.social_publish_resource import blp_unified_publish
 from .social.social_drafts_resources import blp_drafts
 from .social.schwriter_resource import blp_schwriter
 from .social.schwriter_batch_resource import blp_schwriter_batch
-from .social.instagram_insights_resource import blp_instagram_insights
+from .social.insights.instagram_insights_resource import blp_instagram_insights
 from .social.insights.facebook_insights_resource import blp_meta_impression
 from .social.insights.twitter_insights_resource import blp_twitter_insights
 from .social.insights.linkedin_insights_resource import blp_linkedin_insights
+from .social.insights.tiktok_insights_resources import blp_tiktok_insights
 
 
 __all__ = [
@@ -114,6 +115,7 @@ __all__ = [
     "blp_instagram_insights",
     "blp_twitter_insights",
     "blp_linkedin_insights",
+    "blp_tiktok_insights",
     #-------------------
     #ADMIN ROUTES
     #-------------------

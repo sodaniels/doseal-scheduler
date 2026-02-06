@@ -59,7 +59,7 @@ TIKTOK_TOKEN_URL = os.getenv("TIKTOK_TOKEN_URL", "https://open.tiktokapis.com/v2
 TIKTOK_USER_INFO_URL = os.getenv("TIKTOK_USER_INFO_URL", "https://open.tiktokapis.com/v2/user/info/")
 
 # Scopes you already enabled in dashboard + shown on consent screen
-DEFAULT_TIKTOK_SCOPES = "user.info.basic,video.upload,video.publish"
+DEFAULT_TIKTOK_SCOPES = "user.info.basic,video.upload,video.publish,user.info.stats,video.list"
 
 
 def _require_tiktok_env(log_tag: str):

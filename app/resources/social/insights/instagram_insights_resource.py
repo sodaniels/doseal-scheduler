@@ -10,10 +10,10 @@ from flask import g, jsonify, request
 from flask.views import MethodView
 from flask_smorest import Blueprint
 
-from ...constants.service_code import HTTP_STATUS_CODES
-from ...models.social.social_account import SocialAccount
-from ...utils.logger import Log
-from ..doseal.admin.admin_business_resource import token_required
+from ....constants.service_code import HTTP_STATUS_CODES
+from ....models.social.social_account import SocialAccount
+from ....utils.logger import Log
+from ...doseal.admin.admin_business_resource import token_required
 
 
 # -------------------------------------------------------------------

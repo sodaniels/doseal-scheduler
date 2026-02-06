@@ -83,6 +83,7 @@ from ..resources import (
     blp_instagram_insights,
     blp_twitter_insights,
     blp_linkedin_insights,
+    blp_tiktok_insights,
 )
 
 
@@ -129,6 +130,7 @@ def register_social_routes(app, api):
         blp_instagram_insights,
         blp_twitter_insights,
         blp_linkedin_insights,
+        blp_tiktok_insights,
     ]
 
     for blueprint in blueprints:
