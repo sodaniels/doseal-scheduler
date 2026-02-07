@@ -86,7 +86,7 @@ class SocialAggregator:
         """
         Combines analytics across all connected accounts for this user/business.
         """
-        # Pull all destinations from your SocialAccount collection
+        # Pull all destinations from SocialAccount collection
         all_accounts = []
         for platform in self.providers.keys():
             items = SocialAccount.list_destinations(business_id, user__id, platform) or []
