@@ -122,3 +122,60 @@ class NotificationSettings(BaseModel):
         doc["business_id"] = str(doc["business_id"])
         doc["user__id"] = str(doc["user__id"])
         return doc
+
+
+    @staticmethod
+    def build_default_settings() -> dict:
+        return {
+            "email_notifications": {
+                "scheduled_messages": {
+                    "send_failed": True,
+                },
+                "organization_and_teams": {
+                    "approval_created": True,
+                    "rejected_in_pre_review": True,
+                },
+                "internal_comments": {
+                    "mentions_and_replies": True,
+                    "comments_on_my_posts": True,
+                    "conversations_im_in": True,
+                },
+            },
+            "product_notifications": {
+                "message_approvals": {
+                    "requires_my_approval": True,
+                    "rejected_in_pre_screening": True,
+                    "rejected": True,
+                    "approved": True,
+                    "expired": True,
+                }
+            }
+        }
+
+    @classmethod
+    def seed_for_user(cls, *, business_id: str, user__id: str) -> bool:
+        col = db_ext.get_collection(cls.collection_name)
+
+        now = datetime.now(timezone.utc)
+
+        defaults = cls.build_default_settings()
+
+        set_on_insert = {
+            **defaults,
+            "business_id": ObjectId(str(business_id)),
+            "user__id": ObjectId(str(user__id)),
+            "created_at": now,
+        }
+
+        update_doc = {
+            "$setOnInsert": set_on_insert,
+            "$set": {"updated_at": now},
+        }
+
+        res = col.update_one(
+            {"business_id": set_on_insert["business_id"], "user__id": set_on_insert["user__id"]},
+            update_doc,
+            upsert=True,
+        )
+        Log.info(f"[notification_settings.py][NotificationSettings][seed_for_user]business_id={business_id} notification_id={res.upserted_id}")
+        return bool(res.upserted_id) or res.modified_count > 0

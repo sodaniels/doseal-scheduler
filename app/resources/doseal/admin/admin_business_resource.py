@@ -28,6 +28,7 @@ from ....utils.helpers import generate_tokens
 from ....models.business_model import Client, Token
 from ....models.user_model import User
 from ....models.admin.super_superadmin_model import Role
+from ....models.notifications.notification_settings import NotificationSettings
 
 
 from ....utils.logger import Log # import logging
@@ -409,6 +410,15 @@ class RegisterBusinessResource(MethodView):
                     user_client_id = user.save()
                     
                     if user_client_id:
+                        
+                        # seed notifications
+                        try:
+                            NotificationSettings.seed_for_user(
+                                business_id=str(business_id),
+                                user__id=str(user_client_id),
+                            )
+                        except Exception as e:
+                            Log.info(f"{log_tag} Error seeding notifictions: {e}")
                         
                         #Seed roles for business
                         try:
