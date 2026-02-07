@@ -81,6 +81,7 @@ from .social.insights.facebook_insights_resource import blp_meta_impression
 from .social.insights.twitter_insights_resource import blp_twitter_insights
 from .social.insights.linkedin_insights_resource import blp_linkedin_insights
 from .social.insights.tiktok_insights_resources import blp_tiktok_insights
+from .social.insights.pinterest_insights_resource import blp_pinterest_insights
 from .social.insights.social_dashboard_resource import blp_social_dashboard
 
 
@@ -118,6 +119,7 @@ __all__ = [
     "blp_linkedin_insights",
     "blp_tiktok_insights",
     "blp_social_dashboard",
+    "blp_pinterest_insights",
     #-------------------
     #ADMIN ROUTES
     #-------------------

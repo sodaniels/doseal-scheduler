@@ -12,6 +12,9 @@ from .providers.tiktok_provider import TikTokProvider
 from .providers.x_provider import XProvider
 from .providers.linkedin_provider import LinkedInProvider
 from ...models.social.social_account import SocialAccount
+from .providers.threads_provider import ThreadsProvider
+from .providers.youtube_provider import YouTubeProvider
+from .providers.pinterest_provider import PinterestProvider
 
 
 CANON_KEYS = [
@@ -60,12 +63,16 @@ def _merge_timeline(all_points: Dict[str, Dict[str, Any]], platform_points: List
 
 class SocialAggregator:
     def __init__(self):
+        
         self.providers = {
             "facebook": FacebookProvider(),
             "instagram": InstagramProvider(),
             "tiktok": TikTokProvider(),
             "x": XProvider(),
             "linkedin": LinkedInProvider(),
+            "threads": ThreadsProvider(),
+            "youtube": YouTubeProvider(),
+            "pinterest": PinterestProvider(),
         }
 
     def build_overview(

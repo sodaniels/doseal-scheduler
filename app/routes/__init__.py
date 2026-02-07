@@ -85,6 +85,7 @@ from ..resources import (
     blp_linkedin_insights,
     blp_tiktok_insights,
     blp_social_dashboard,
+    blp_pinterest_insights,
 )
 
 
@@ -132,6 +133,7 @@ def register_social_routes(app, api):
         blp_twitter_insights,
         blp_linkedin_insights,
         blp_tiktok_insights,
+        blp_pinterest_insights,
         blp_social_dashboard,
     ]
 
