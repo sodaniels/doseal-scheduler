@@ -1368,7 +1368,7 @@ class PinterestPinDetailsResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[pinterest_insights][pin_details][{client_ip}]"
+        log_tag = f"[pinterest_insights_resource.py][PinterestPinDetailsResource][get][{client_ip}]"
 
         user = g.get("current_user") or {}
         business_id = str(user.get("business_id") or "")
