@@ -11,6 +11,7 @@ from ....constants.service_code import HTTP_STATUS_CODES
 from ....utils.logger import Log
 from ...doseal.admin.admin_business_resource import token_required
 from ....services.social.aggregator import SocialAggregator
+from ....models.social.social_dashboard_summary import SocialDashboardSummary
 from ....extensions.queue import enqueue
 
 
@@ -34,15 +35,44 @@ def _default_range(days: int = 30):
     return _fmt_ymd(since), _fmt_ymd(until)
 
 
+def _get_range_from_query():
+    """
+    Resolves (since, until) using query args:
+      - since/until, or
+      - days (default 30)
+    Returns: (since_ymd, until_ymd, err_message|None)
+    """
+    since = (request.args.get("since") or "").strip() or None
+    until = (request.args.get("until") or "").strip() or None
+    days = (request.args.get("days") or "").strip() or None
+
+    if (since and not _parse_ymd(since)) or (until and not _parse_ymd(until)):
+        return None, None, "Invalid date format. Use YYYY-MM-DD"
+
+    if not since or not until:
+        if days:
+            try:
+                d = max(1, min(int(days), 365))
+            except ValueError:
+                d = 30
+            since, until = _default_range(d)
+        else:
+            since, until = _default_range(30)
+
+    if _parse_ymd(since) and _parse_ymd(until) and _parse_ymd(since) > _parse_ymd(until):
+        return None, None, "'since' must be <= 'until'"
+
+    return since, until, None
+
+
 @blp_social_dashboard.route("/social/dashboard/overview", methods=["GET"])
 class SocialDashboardOverviewResource(MethodView):
     """
     Combined analytics for all connected social accounts.
 
-    Query:
-      - since=YYYY-MM-DD (optional)
-      - until=YYYY-MM-DD (optional)
-      - days=30 (optional alternative)
+    Strategy:
+      1) Try LIVE aggregation (and persist summary)
+      2) If live fails (exception) OR you choose to treat live as unreliable, fallback to cached summary
     """
 
     @token_required
@@ -57,50 +87,83 @@ class SocialDashboardOverviewResource(MethodView):
         if not business_id or not user__id:
             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
-        since = (request.args.get("since") or "").strip() or None
-        until = (request.args.get("until") or "").strip() or None
-        days = (request.args.get("days") or "").strip() or None
+        since, until, err = _get_range_from_query()
+        if err:
+            return jsonify({"success": False, "message": err}), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        if (since and not _parse_ymd(since)) or (until and not _parse_ymd(until)):
-            return jsonify({"success": False, "message": "Invalid date format. Use YYYY-MM-DD"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        # You can set this true if you want to fallback even when live returns with errors
+        FALLBACK_IF_ANY_LIVE_ERROR = False
 
-        if not since or not until:
-            if days:
-                try:
-                    d = max(1, min(int(days), 365))
-                except ValueError:
-                    d = 30
-                since, until = _default_range(d)
-            else:
-                since, until = _default_range(30)
-
-        if _parse_ymd(since) > _parse_ymd(until):
-            return jsonify({"success": False, "message": "'since' must be <= 'until'"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
+        # 1) Try LIVE
         try:
             agg = SocialAggregator()
+
+            # and it stores SocialDashboardSummary for the range.
             data = agg.build_overview(
                 business_id=business_id,
                 user__id=user__id,
                 since_ymd=since,
                 until_ymd=until,
+                persist=True,
             )
-            return jsonify({"success": True, "data": data}), HTTP_STATUS_CODES["OK"]
+
+            # Optional strict rule: if ANY provider errors, fallback to cached
+            if FALLBACK_IF_ANY_LIVE_ERROR and (data.get("errors") or []):
+                raise Exception("LIVE_PARTIAL_FAILED")
+
+            return jsonify({"success": True, "data": data, "source": "live"}), HTTP_STATUS_CODES["OK"]
+
         except Exception as e:
-            Log.error(f"{log_tag} error: {e}")
-            return jsonify({"success": False, "message": "Internal error"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+            Log.error(f"{log_tag} live failed: {e}")
+
+            # 2) Fallback to CACHED SUMMARY
+            cached = SocialDashboardSummary.get_summary(
+                business_id=business_id,
+                user__id=user__id,
+                since_ymd=since,
+                until_ymd=until,
+            )
+
+            if cached and cached.get("data"):
+                return jsonify(
+                    {
+                        "success": True,
+                        "data": cached["data"],
+                        "source": "cached",
+                        "cached_meta": {
+                            "summary_id": cached.get("_id"),
+                            "updated_at": cached.get("updated_at"),
+                            "source": cached.get("source"),
+                            "meta": cached.get("meta") or {},
+                        },
+                    }
+                ), HTTP_STATUS_CODES["OK"]
+
+            return jsonify(
+                {
+                    "success": False,
+                    "message": "Live aggregation failed and no cached summary exists for this range.",
+                }
+            ), HTTP_STATUS_CODES["SERVICE_UNAVAILABLE"]
 
 
 @blp_social_dashboard.route("/social/refresh-dashboard", methods=["POST"])
 class SocialDashboardRefreshResource(MethodView):
     """
-    Refresh dashboard analytics data
+    Refresh dashboard analytics data.
+
+    This triggers the background job that populates your daily snapshots (and/or summaries),
+    depending on what your jobs_snapshot.snapshot_daily does.
+
+    NOTE:
+      If you want to refresh ONLY this business/user range, create another job that accepts
+      (business_id, user__id, since, until) and call aggregator.persist_summary().
     """
 
     @token_required
     def post(self):
         client_ip = request.remote_addr
-        log_tag = f"[social_dashboard_resource.py][SocialDashboardRefreshResource][get][{client_ip}]"
+        log_tag = f"[social_dashboard_resource.py][SocialDashboardRefreshResource][post][{client_ip}]"
 
         user = g.get("current_user") or {}
         business_id = str(user.get("business_id") or "")
@@ -109,44 +172,36 @@ class SocialDashboardRefreshResource(MethodView):
         if not business_id or not user__id:
             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
-        since = (request.args.get("since") or "").strip() or None
-        until = (request.args.get("until") or "").strip() or None
-        days = (request.args.get("days") or "").strip() or None
-
-        if (since and not _parse_ymd(since)) or (until and not _parse_ymd(until)):
-            return jsonify({"success": False, "message": "Invalid date format. Use YYYY-MM-DD"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        if not since or not until:
-            if days:
-                try:
-                    d = max(1, min(int(days), 365))
-                except ValueError:
-                    d = 30
-                since, until = _default_range(d)
-            else:
-                since, until = _default_range(30)
-
-        if _parse_ymd(since) > _parse_ymd(until):
-            return jsonify({"success": False, "message": "'since' must be <= 'until'"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        since, until, err = _get_range_from_query()
+        if err:
+            return jsonify({"success": False, "message": err}), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         try:
+            # If your snapshot job does ALL businesses, it's ok but wasteful.
+            # Better: enqueue a job specifically for this business.
+            # Example (recommended):
+            # enqueue("app.services.social.jobs_snapshot.snapshot_daily_for_business", business_id, queue_name="publish", job_timeout=600)
+
             enqueue(
-                "app.services.social.jobs_snapshot.snapshot_daily",
+                "app.services.social.jobs_snapshot.snapshot_daily_for_business",
+                business_id,
                 queue_name="publish",
                 job_timeout=600,
             )
 
-            return jsonify({"success": True, "message": "Snapshot job enqueued"}), 200
+            # Optional: also refresh the persisted SUMMARY for this range in background
+            # You would implement a job:
+            #   app.services.social.jobs_snapshot.refresh_summary_range(business_id, user__id, since, until)
+            # enqueue("app.services.social.jobs_snapshot.refresh_summary_range", business_id, user__id, since, until, queue_name="publish", job_timeout=600)
+
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "Refresh job enqueued",
+                    "range": {"since": since, "until": until},
+                }
+            ), HTTP_STATUS_CODES["OK"]
+
         except Exception as e:
             Log.error(f"{log_tag} error: {e}")
             return jsonify({"success": False, "message": "Internal error"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
-
-
-
-
-
-
-
-
-
