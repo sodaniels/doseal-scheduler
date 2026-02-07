@@ -1018,7 +1018,11 @@ def build_receipt_sms(p: dict) -> str:
     return sms
 
 
-
+def env_bool(key: str, default: bool = False) -> bool:
+    val = os.getenv(key)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
 
 
 

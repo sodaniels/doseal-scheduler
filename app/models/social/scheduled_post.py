@@ -24,6 +24,7 @@ class ScheduledPost(BaseModel):
     STATUS_CANCELLED = "cancelled"
     STATUS_SUSPENDED_HOLD = "suspended_hold"
     STATUS_MISSED_SUSPENSION = "missed_suspension"
+    STATUS_HELD = "held"
 
     def __init__(
         self,
