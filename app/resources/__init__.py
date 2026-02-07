@@ -78,7 +78,7 @@ from .social.schwriter_resource import blp_schwriter
 from .social.schwriter_batch_resource import blp_schwriter_batch
 from .social.insights.instagram_insights_resource import blp_instagram_insights
 from .social.insights.facebook_insights_resource import blp_meta_impression
-from .social.insights.twitter_insights_resource import blp_twitter_insights
+from .social.insights.x_insights_resource import blp_twitter_insights
 from .social.insights.linkedin_insights_resource import blp_linkedin_insights
 from .social.insights.tiktok_insights_resources import blp_tiktok_insights
 from .social.insights.pinterest_insights_resource import blp_pinterest_insights

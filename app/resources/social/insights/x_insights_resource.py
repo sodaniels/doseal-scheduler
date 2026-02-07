@@ -46,7 +46,7 @@ X_OAUTH2_TOKEN_URL = "https://api.x.com/2/oauth2/token"
 
 # Your SocialAccount platform key(s)
 # Use "twitter" if that's what you already stored, but we also fallback to "x".
-PLATFORM_PRIMARY = "twitter"
+PLATFORM_PRIMARY = "x"
 PLATFORM_FALLBACK = "x"
 
 
@@ -634,8 +634,8 @@ def _normalize_tweet_metrics(js: Dict[str, Any]) -> Dict[str, Any]:
 # X (Twitter): ACCOUNT INSIGHTS
 # -------------------------------------------------------------------
 
-@blp_twitter_insights.route("/social/twitter/account-insights", methods=["GET"])
-class TwitterAccountInsightsResource(MethodView):
+@blp_twitter_insights.route("/social/x/account-insights", methods=["GET"])
+class XAccountInsightsResource(MethodView):
     """
     X account analytics using stored SocialAccount token.
 
@@ -648,7 +648,7 @@ class TwitterAccountInsightsResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[twitter_insights][account][{client_ip}]"
+        log_tag = f"[x_insights.py][account][{client_ip}]"
 
         user = g.get("current_user") or {}
         business_id = str(user.get("business_id") or "")
@@ -708,6 +708,8 @@ class TwitterAccountInsightsResource(MethodView):
             refresh_token=ensured.get("refresh_token"),
             log_tag=log_tag,
         )
+        
+        Log.info(f"rr: {rr}")
 
         if not rr.get("success"):
             # Normalize error contract like your other endpoints
