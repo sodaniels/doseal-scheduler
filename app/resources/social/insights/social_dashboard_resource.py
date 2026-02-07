@@ -149,17 +149,6 @@ class SocialDashboardOverviewResource(MethodView):
 
 @blp_social_dashboard.route("/social/refresh-dashboard", methods=["POST"])
 class SocialDashboardRefreshResource(MethodView):
-    """
-    Refresh dashboard analytics data.
-
-    This triggers the background job that populates your daily snapshots (and/or summaries),
-    depending on what your jobs_snapshot.snapshot_daily does.
-
-    NOTE:
-      If you want to refresh ONLY this business/user range, create another job that accepts
-      (business_id, user__id, since, until) and call aggregator.persist_summary().
-    """
-
     @token_required
     def post(self):
         client_ip = request.remote_addr
@@ -172,36 +161,15 @@ class SocialDashboardRefreshResource(MethodView):
         if not business_id or not user__id:
             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
-        since, until, err = _get_range_from_query()
-        if err:
-            return jsonify({"success": False, "message": err}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
+        # enqueue per business, not all businesses
         try:
-            # If your snapshot job does ALL businesses, it's ok but wasteful.
-            # Better: enqueue a job specifically for this business.
-            # Example (recommended):
-            # enqueue("app.services.social.jobs_snapshot.snapshot_daily_for_business", business_id, queue_name="publish", job_timeout=600)
-
             enqueue(
                 "app.services.social.jobs_snapshot.snapshot_daily_for_business",
                 business_id,
                 queue_name="publish",
                 job_timeout=600,
             )
-
-            # Optional: also refresh the persisted SUMMARY for this range in background
-            # You would implement a job:
-            #   app.services.social.jobs_snapshot.refresh_summary_range(business_id, user__id, since, until)
-            # enqueue("app.services.social.jobs_snapshot.refresh_summary_range", business_id, user__id, since, until, queue_name="publish", job_timeout=600)
-
-            return jsonify(
-                {
-                    "success": True,
-                    "message": "Refresh job enqueued",
-                    "range": {"since": since, "until": until},
-                }
-            ), HTTP_STATUS_CODES["OK"]
-
+            return jsonify({"success": True, "message": "Snapshot job enqueued"}), 200
         except Exception as e:
             Log.error(f"{log_tag} error: {e}")
             return jsonify({"success": False, "message": "Internal error"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
