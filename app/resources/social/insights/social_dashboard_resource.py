@@ -90,6 +90,7 @@ class SocialDashboardOverviewResource(MethodView):
             Log.error(f"{log_tag} error: {e}")
             return jsonify({"success": False, "message": "Internal error"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+
 @blp_social_dashboard.route("/social/refresh-dashboard", methods=["POST"])
 class SocialDashboardRefreshResource(MethodView):
     """

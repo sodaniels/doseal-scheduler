@@ -88,12 +88,6 @@ class FacebookProvider(SocialProviderBase):
                 debug={"fallback": True, "live_error": "FB_TOKEN_MISSING"},
             )
 
-        # Ensure indexes (safe; idempotent). If you prefer, do this at app startup instead.
-        try:
-            SnapshotStore.ensure_indexes()
-        except Exception:
-            pass
-
         try:
             # Canonical accumulators
             timeline_map: Dict[str, Dict[str, Any]] = {}
