@@ -84,6 +84,7 @@ from .social.insights.tiktok_insights_resources import blp_tiktok_insights
 from .social.insights.pinterest_insights_resource import blp_pinterest_insights
 from .social.insights.social_dashboard_resource import blp_social_dashboard
 from .social.business_suspension_resource import blp_business_suspension
+from .notifications.notification_settings_resource import blp_notifications
 
 __all__ = [
     #-------------------
@@ -121,6 +122,7 @@ __all__ = [
     "blp_social_dashboard",
     "blp_pinterest_insights",
     "blp_business_suspension",
+    "blp_notifications",
     #-------------------
     #ADMIN ROUTES
     #-------------------

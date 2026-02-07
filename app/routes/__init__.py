@@ -87,6 +87,7 @@ from ..resources import (
     blp_social_dashboard,
     blp_pinterest_insights,
     blp_business_suspension,
+    blp_notifications,
 )
 
 
@@ -137,6 +138,7 @@ def register_social_routes(app, api):
         blp_pinterest_insights,
         blp_social_dashboard,
         blp_business_suspension,
+        blp_notifications,
     ]
 
     for blueprint in blueprints:
