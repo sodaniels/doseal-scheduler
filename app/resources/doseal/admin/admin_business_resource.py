@@ -455,7 +455,6 @@ class RegisterBusinessResource(MethodView):
                             
                             if update_code:
                                 Log.info(f"{log_tag}\t reset_url: {reset_url}")
-                                # send_user_registration_email(business_data["email"], user_data['fullname'], reset_url)
                                 try:
                                     result = send_user_registration_email(business_data["email"], user_data["fullname"], reset_url)
                                     Log.info(f"Email sent result={result}")

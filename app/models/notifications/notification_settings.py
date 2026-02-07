@@ -125,33 +125,52 @@ class NotificationSettings(BaseModel):
 
 
     @staticmethod
-    def build_default_settings() -> dict:
+    def build_default_settings() -> Dict[str, Any]:
+        """
+        ✅ This matches the NEW desired shape:
+        channels.email + channels.in_app
+        """
         return {
-            "email_notifications": {
-                "scheduled_messages": {
-                    "send_failed": True,
-                },
-                "organization_and_teams": {
-                    "approval_created": True,
-                    "rejected_in_pre_review": True,
-                },
-                "internal_comments": {
+            "channels": {
+                "email": {
+                    "scheduled_send_failed": True,
+                    "scheduled_send_succeeded": False,
+
+                    "message_requires_approval": True,
+                    "message_rejected_in_pre_review": True,
+
+                    "message_requires_my_approval": True,
+                    "message_rejected_in_pre_screening": True,
+
+                    "message_rejected": True,
+                    "message_approved": False,
+                    "message_expired": True,
+
                     "mentions_and_replies": True,
-                    "comments_on_my_posts": True,
-                    "conversations_im_in": True,
+                    "comments_on_my_posts_or_drafts": True,
+                    "conversations_im_part_of": True,
                 },
-            },
-            "product_notifications": {
-                "message_approvals": {
-                    "requires_my_approval": True,
-                    "rejected_in_pre_screening": True,
-                    "rejected": True,
-                    "approved": True,
-                    "expired": True,
-                }
+                "in_app": {
+                    "scheduled_send_failed": True,
+                    "scheduled_send_succeeded": True,
+
+                    "message_requires_approval": True,
+                    "message_rejected_in_pre_review": True,
+
+                    "message_requires_my_approval": True,
+                    "message_rejected_in_pre_screening": True,
+
+                    "message_rejected": True,
+                    "message_approved": True,
+                    "message_expired": True,
+
+                    "mentions_and_replies": True,
+                    "comments_on_my_posts_or_drafts": True,
+                    "conversations_im_part_of": True,
+                },
             }
         }
-
+        
     @classmethod
     def seed_for_user(cls, *, business_id: str, user__id: str) -> bool:
         col = db_ext.get_collection(cls.collection_name)

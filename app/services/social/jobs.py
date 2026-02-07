@@ -7,8 +7,11 @@ import time, os
 import requests
 import math
 
+#models
 from ...models.social.scheduled_post import ScheduledPost
 from ...models.social.social_account import SocialAccount
+
+#services
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
 from ...services.social.adapters.instagram_adapter import InstagramAdapter
 from ...services.social.adapters.x_adapter import XAdapter
@@ -18,7 +21,11 @@ from ...services.social.adapters.threads_adapter import ThreadsAdapter
 from ...services.social.adapters.youtube_adapter import YouTubeAdapter
 from ...services.social.adapters.whatsapp_adapter import WhatsAppAdapter
 from ...services.social.adapters.pinterest_adapter import PinterestAdapter
+from ...services.notifications.notification_service import NotificationService
+
+#helpers
 from ...utils.logger import Log
+
 
 from .appctx import run_in_app_context
 
@@ -1592,6 +1599,20 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
             if r.get("status") == "success":
                 any_success = True
+                
+                #Send email after success
+                if NotificationService.is_enabled(
+                        business_id=business_id,
+                        user__id=post.get("user__id"),
+                        channel="email",
+                        item_key="scheduled_send_succeeded",
+                        default=False,
+                    ):
+                        # optionally send success email
+                        pass
+                
+                
+                
             else:
                 any_failed = True
                 Log.info(f"{log_tag} destination failed: {r}")
