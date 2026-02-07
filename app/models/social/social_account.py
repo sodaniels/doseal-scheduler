@@ -157,7 +157,6 @@ class SocialAccount(BaseModel):
         col = db_ext.get_collection(cls.collection_name)
         items = list(col.find({"business_id": bid}).sort("created_at", -1))
 
-        # Normalise IDs
         for x in items:
             x["_id"] = str(x["_id"])
             x["business_id"] = str(x["business_id"])
@@ -165,6 +164,68 @@ class SocialAccount(BaseModel):
                 x["user__id"] = str(x["user__id"])
         return items
 
+    @classmethod
+    def list_business_ids_with_accounts(cls) -> List[str]:
+        """
+        Return distinct business_id values that exist in social_accounts.
+        (No token filtering here; just existence.)
+        """
+        col = db_ext.get_collection(cls.collection_name)
+        raw_ids = col.distinct("business_id") or []
+        out: List[str] = []
+        for bid in raw_ids:
+            try:
+                out.append(str(bid))
+            except Exception:
+                pass
+        return out
+
+    @classmethod
+    def list_all_connected(cls) -> List[Dict[str, Any]]:
+        """
+        Return all social accounts that appear 'connected'.
+
+        Connected = has a usable access token field.
+        You use access_token_plain in most of your code,
+        but some older code may store access_token.
+        """
+        col = db_ext.get_collection(cls.collection_name)
+
+        q = {
+            "$or": [
+                {"access_token": {"$exists": True, "$ne": ""}},
+                {"access_token": {"$exists": True, "$ne": ""}},
+            ]
+        }
+
+        items = list(col.find(q).sort("created_at", -1))
+
+        for x in items:
+            x["_id"] = str(x["_id"])
+            if x.get("business_id") is not None:
+                x["business_id"] = str(x["business_id"])
+            if x.get("user__id") is not None:
+                x["user__id"] = str(x["user__id"])
+        return items
+
+    @classmethod
+    def count_all(cls) -> int:
+        """Quick sanity check: how many SocialAccount docs exist."""
+        col = db_ext.get_collection(cls.collection_name)
+        return int(col.count_documents({}))
+
+    @classmethod
+    def count_connected(cls) -> int:
+        """Quick sanity check: how many connected accounts exist."""
+        col = db_ext.get_collection(cls.collection_name)
+        q = {
+            "$or": [
+                {"access_token_plain": {"$exists": True, "$ne": ""}},
+                {"access_token": {"$exists": True, "$ne": ""}},
+            ]
+        }
+        return int(col.count_documents(q))
+    
     @classmethod
     def get_by_id_and_business_id(cls, account_id, business_id: str) -> List[Dict[str, Any]]:
         """
