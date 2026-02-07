@@ -3,31 +3,118 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
+from pymongo import ASCENDING, DESCENDING
 
 from ...extensions.db import db as db_ext
-from ...utils.logger import Log
+
+
+CANON_KEYS = [
+    "followers",
+    "new_followers",
+    "posts",
+    "impressions",
+    "engagements",
+    "likes",
+    "comments",
+    "shares",
+    "reactions",
+]
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_oid(x: Any) -> Any:
+    try:
+        if isinstance(x, ObjectId):
+            return x
+        if isinstance(x, str) and ObjectId.is_valid(x):
+            return ObjectId(x)
+    except Exception:
+        pass
+    return x
+
+
+def _num(v: Any) -> float:
+    try:
+        if v is None:
+            return 0.0
+        if isinstance(v, bool):
+            return 0.0
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            vv = v.strip()
+            if not vv:
+                return 0.0
+            return float(vv)
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+def _normalize_data(data: Dict[str, Any]) -> Dict[str, float]:
+    out = {}
+    for k in CANON_KEYS:
+        out[k] = _num((data or {}).get(k))
+    return out
 
 
 class SocialDailySnapshot:
     """
-    Store daily snapshots per destination (page/account) per platform.
+    Collection design (recommended):
+      {
+        _id,
+        business_id: ObjectId,
+        user__id: ObjectId,
+        platform: "facebook"|"instagram"|...,
+        destination_id: "12345",
+        date_ymd: "2026-02-07",
+        data: { followers, new_followers, posts, impressions, engagements, likes, comments, shares, reactions },
+        created_at,
+        updated_at
+      }
 
-    Why:
-    - Many platforms do NOT provide follower_count time series.
-    - Even when they do, you want stable local data for charts + speed.
-
-    Unique key recommendation:
-      (business_id, user__id, platform, destination_id, date)
+    Unique index:
+      (business_id, user__id, platform, destination_id, date_ymd)
     """
 
     collection_name = "social_daily_snapshots"
 
-    @staticmethod
-    def _col():
-        return db_ext.get_collection(SocialDailySnapshot.collection_name)
+    @classmethod
+    def col(cls):
+        return db_ext.get_collection(cls.collection_name)
+
+    @classmethod
+    def ensure_indexes(cls):
+        c = cls.col()
+        # Unique per-day snapshot per destination
+        c.create_index(
+            [
+                ("business_id", ASCENDING),
+                ("user__id", ASCENDING),
+                ("platform", ASCENDING),
+                ("destination_id", ASCENDING),
+                ("date_ymd", ASCENDING),
+            ],
+            unique=True,
+            name="uniq_daily_snapshot",
+        )
+        # For range queries
+        c.create_index(
+            [
+                ("business_id", ASCENDING),
+                ("user__id", ASCENDING),
+                ("platform", ASCENDING),
+                ("destination_id", ASCENDING),
+                ("date_ymd", DESCENDING),
+            ],
+            name="idx_daily_snapshot_range",
+        )
 
     @classmethod
     def upsert_snapshot(
@@ -39,33 +126,44 @@ class SocialDailySnapshot:
         destination_id: str,
         date_ymd: str,
         data: Dict[str, Any],
+        meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        col = cls._col()
-        now = datetime.now(timezone.utc)
+        """
+        Upsert a day snapshot.
+        """
+        c = cls.col()
 
-        doc = {
-            "business_id": ObjectId(business_id),
-            "user__id": ObjectId(user__id),
-            "platform": platform,
-            "destination_id": destination_id,
-            "date": date_ymd,  # YYYY-MM-DD
-            "data": data,
-            "updated_at": now,
+        bid = _as_oid(business_id)
+        uid = _as_oid(user__id)
+
+        doc_data = _normalize_data(data or {})
+        now = _utcnow()
+
+        q = {
+            "business_id": bid,
+            "user__id": uid,
+            "platform": (platform or "").strip().lower(),
+            "destination_id": str(destination_id or "").strip(),
+            "date_ymd": str(date_ymd or "").strip(),
         }
 
-        col.update_one(
-            {
-                "business_id": ObjectId(business_id),
-                "user__id": ObjectId(user__id),
-                "platform": platform,
-                "destination_id": destination_id,
-                "date": date_ymd,
+        upd = {
+            "$set": {
+                **q,
+                "data": doc_data,
+                "meta": meta or {},
+                "updated_at": now,
             },
-            {"$set": doc, "$setOnInsert": {"created_at": now}},
-            upsert=True,
-        )
+            "$setOnInsert": {"created_at": now},
+        }
 
-        return {"success": True}
+        res = c.update_one(q, upd, upsert=True)
+
+        return {
+            "matched": res.matched_count,
+            "modified": res.modified_count,
+            "upserted_id": str(res.upserted_id) if res.upserted_id else None,
+        }
 
     @classmethod
     def get_range(
@@ -77,23 +175,33 @@ class SocialDailySnapshot:
         destination_id: str,
         since_ymd: str,
         until_ymd: str,
-    ):
-        col = cls._col()
-        cursor = col.find(
-            {
-                "business_id": ObjectId(business_id),
-                "user__id": ObjectId(user__id),
-                "platform": platform,
-                "destination_id": destination_id,
-                "date": {"$gte": since_ymd, "$lte": until_ymd},
-            },
-            {"_id": 0, "date": 1, "data": 1},
-        ).sort("date", 1)
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns list of snapshots in [since, until], ascending by date.
+        """
+        c = cls.col()
+        bid = _as_oid(business_id)
+        uid = _as_oid(user__id)
 
-        return list(cursor)
+        q = {
+            "business_id": bid,
+            "user__id": uid,
+            "platform": (platform or "").strip().lower(),
+            "destination_id": str(destination_id or "").strip(),
+            "date_ymd": {"$gte": since_ymd, "$lte": until_ymd},
+        }
+
+        items = list(c.find(q).sort("date_ymd", ASCENDING))
+
+        # normalize ids for callers
+        for x in items:
+            x["_id"] = str(x["_id"])
+            x["business_id"] = str(x["business_id"])
+            x["user__id"] = str(x["user__id"])
+        return items
 
     @classmethod
-    def get_latest(
+    def latest(
         cls,
         *,
         business_id: str,
@@ -101,15 +209,21 @@ class SocialDailySnapshot:
         platform: str,
         destination_id: str,
     ) -> Optional[Dict[str, Any]]:
-        col = cls._col()
-        doc = col.find_one(
-            {
-                "business_id": ObjectId(business_id),
-                "user__id": ObjectId(user__id),
-                "platform": platform,
-                "destination_id": destination_id,
-            },
-            sort=[("date", -1)],
-            projection={"_id": 0, "date": 1, "data": 1},
-        )
+        c = cls.col()
+        bid = _as_oid(business_id)
+        uid = _as_oid(user__id)
+
+        q = {
+            "business_id": bid,
+            "user__id": uid,
+            "platform": (platform or "").strip().lower(),
+            "destination_id": str(destination_id or "").strip(),
+        }
+        doc = c.find_one(q, sort=[("date_ymd", DESCENDING)])
+        if not doc:
+            return None
+
+        doc["_id"] = str(doc["_id"])
+        doc["business_id"] = str(doc["business_id"])
+        doc["user__id"] = str(doc["user__id"])
         return doc

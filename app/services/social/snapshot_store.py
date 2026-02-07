@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 # from ...models.social.social_daily_snapshot import SocialDailySnapshot, CANON_KEYS
-from ...services.social.social_daily_snapshot import SocialDailySnapshot, CANON_KEYS
+from ...models.social.social_daily_snapshot import SocialDailySnapshot, CANON_KEYS
 
 
 def _f(v: Any) -> float:
