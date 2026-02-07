@@ -1,4 +1,4 @@
-
+#app/models/social/scheduled_post.py
 
 from datetime import datetime, timezone
 from bson import ObjectId
@@ -22,6 +22,8 @@ class ScheduledPost(BaseModel):
     STATUS_FAILED = "failed"
     STATUS_PARTIAL = "partial"
     STATUS_CANCELLED = "cancelled"
+    STATUS_SUSPENDED_HOLD = "suspended_hold"
+    STATUS_MISSED_SUSPENSION = "missed_suspension"
 
     def __init__(
         self,
@@ -481,6 +483,57 @@ class ScheduledPost(BaseModel):
 
         return cls.update_fields(post_id, business_id, updates)
      
+    # ----------------------------------------
+    # SUSPEND schedulling
+    # ----------------------------------------
+    @classmethod
+    def mark_missed_due_to_suspension(
+        cls,
+        *,
+        post_id: str,
+        business_id: str,
+        reason: str = None,
+        suspended_at: Any = None,
+    ) -> bool:
+        """
+        Mark a scheduled/enqueued post as missed because org was suspended at publish-time.
+        """
+        extra = {
+            "status": cls.STATUS_MISSED_SUSPENSION,
+            "missed_reason": (reason or "").strip() or "Publishing suspended",
+            "missed_at": datetime.now(timezone.utc),
+        }
+        if suspended_at:
+            try:
+                extra["suspended_at"] = cls._parse_dt(suspended_at) or suspended_at
+            except Exception:
+                extra["suspended_at"] = suspended_at
+
+        return cls.update_fields(post_id, business_id, extra)
+
+    @classmethod
+    def mark_suspended_hold(
+        cls,
+        *,
+        post_id: str,
+        business_id: str,
+        reason: str = None,
+        suspended_at: Any = None,
+    ) -> bool:
+        """
+        Optional: freeze future scheduled posts immediately when suspension happens.
+        """
+        extra = {
+            "status": cls.STATUS_SUSPENDED_HOLD,
+            "hold_reason": (reason or "").strip() or "Publishing suspended",
+            "hold_at": datetime.now(timezone.utc),
+        }
+        if suspended_at:
+            extra["suspended_at"] = suspended_at
+
+        return cls.update_fields(post_id, business_id, extra)
+    
+    
     @classmethod
     def ensure_indexes(cls):
         col = db_ext.get_collection(cls.collection_name)

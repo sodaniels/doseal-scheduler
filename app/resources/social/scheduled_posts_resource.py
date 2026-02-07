@@ -1,3 +1,5 @@
+#app/resources/social/scheduled_posts_resources.py
+
 from datetime import datetime, timezone
 import uuid
 import os
@@ -6,6 +8,8 @@ from flask.views import MethodView
 from flask import request, jsonify, g
 from flask_smorest import Blueprint
 from marshmallow import ValidationError
+from bson import ObjectId
+
 
 from ...schemas.social.scheduled_posts_schema import CreateScheduledPostSchema
 from ...extensions.queue import scheduler
@@ -13,6 +17,7 @@ from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 from ...models.social.scheduled_post import ScheduledPost
 from ...utils.logger import Log
+from ...extensions import db as db_ext
 from ...utils.media.cloudinary_client import (
     upload_image_file, upload_video_file
 )
@@ -145,7 +150,49 @@ def _ensure_content_shape(body: dict) -> dict:
     body["content"] = content
     return body
 
+def _get_business_suspension(business_id: str) -> dict:
+    """
+    Checks business_suspensions for an active suspension.
 
+    Returns:
+      {
+        is_suspended: bool,
+        reason: str,
+        suspended_at: datetime,
+        suspended_by: str,
+        scope: str,
+        platforms: list | None,
+        destinations: list | None
+      }
+    """
+
+    if not business_id:
+        return {"is_suspended": False}
+
+    col = db_ext.get_collection("business_suspensions")
+
+    doc = col.find_one(
+        {
+            "business_id": ObjectId(str(business_id)),
+            "is_active": True,
+        },
+        sort=[("suspended_at", -1)],
+    )
+
+    if not doc:
+        return {"is_suspended": False}
+
+    return {
+        "is_suspended": True,
+        "reason": doc.get("reason"),
+        "suspended_at": doc.get("suspended_at"),
+        "suspended_by": str(doc.get("suspended_by")) if doc.get("suspended_by") else None,
+        "scope": doc.get("scope") or "all",
+        "platforms": doc.get("platforms"),
+        "destinations": doc.get("destinations"),
+    }
+    
+    
 # -------------------------------------------
 # Upload: Image
 # -------------------------------------------
@@ -304,15 +351,9 @@ class CreateScheduledPostResource(MethodView):
         # ✅ 2) USE SCHEMA NORMALIZED OUTPUTS
         # ---------------------------------------------------
         scheduled_at_utc = payload["_scheduled_at_utc"]
-
-        # your schema injects this canonical shape
         normalized_content = payload["_normalized_content"]
 
-        # IMPORTANT: your schema does NOT guarantee "_normalized_media"
-        # so media MUST come from normalized_content["media"]
         normalized_media = normalized_content.get("media")
-
-        # enforce canonical: list[dict] or None
         if isinstance(normalized_media, dict):
             normalized_media = [normalized_media]
         elif not isinstance(normalized_media, list):
@@ -321,15 +362,25 @@ class CreateScheduledPostResource(MethodView):
         destinations = payload["destinations"]
         manual_required = payload.get("_manual_required") or []
 
-        # If your schema marks FB story as manual_required and config says reject,
-        # you may hard-fail here. (Optional)
+        # Optional hard block for manual-required destinations
         if manual_required and FACEBOOK_STORY_MODE == "reject":
-            # If you want to block entirely:
-            # return jsonify({"success": False, "message": "Some destinations require manual publishing"}), HTTP_STATUS_CODES["BAD_REQUEST"]
             pass
 
         # ---------------------------------------------------
-        # ✅ 3) BUILD DB DOCUMENT (canonical form)
+        # ✅ 3) CHECK BUSINESS SUSPENSION (before DB insert/enqueue decision)
+        # ---------------------------------------------------
+        susp = {}
+        try:
+            susp = _get_business_suspension(business_id)
+        except Exception as e:
+            # if suspension lookup fails, do NOT block scheduling
+            Log.info(f"{log_tag} suspension lookup failed (ignored): {e}")
+            susp = {"is_suspended": False}
+
+        is_suspended = bool(susp.get("is_suspended"))
+
+        # ---------------------------------------------------
+        # ✅ 4) BUILD DB DOCUMENT (canonical form)
         # ---------------------------------------------------
         post_doc = {
             "business_id": business_id,
@@ -344,17 +395,24 @@ class CreateScheduledPostResource(MethodView):
             "content": {
                 "text": normalized_content.get("text"),
                 "link": normalized_content.get("link"),
-                "media": normalized_media,  # ✅ ALWAYS list[dict] or None
+                "media": normalized_media,
             },
 
             "provider_results": [],
             "error": None,
 
             "manual_required": manual_required or None,
+
+            # ✅ store suspension info for UI (optional)
+            "suspension": {
+                "is_suspended": is_suspended,
+                "reason": susp.get("reason"),
+                "suspended_at": susp.get("suspended_at"),
+            } if is_suspended else None,
         }
 
         # ---------------------------------------------------
-        # ✅ 4) INSERT INTO DB
+        # ✅ 5) INSERT INTO DB
         # ---------------------------------------------------
         try:
             created = ScheduledPost.create(post_doc)
@@ -373,7 +431,7 @@ class CreateScheduledPostResource(MethodView):
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
         # ---------------------------------------------------
-        # ✅ 5) MANUAL REQUIRED → DO NOT ENQUEUE
+        # ✅ 6) MANUAL REQUIRED → DO NOT ENQUEUE
         # ---------------------------------------------------
         if manual_required:
             return jsonify({
@@ -383,7 +441,17 @@ class CreateScheduledPostResource(MethodView):
             }), HTTP_STATUS_CODES["CREATED"]
 
         # ---------------------------------------------------
-        # ✅ 6) ENQUEUE JOB
+        # ✅ 7) ORG SUSPENDED → DO NOT ENQUEUE (still scheduled)
+        # ---------------------------------------------------
+        if is_suspended:
+            return jsonify({
+                "success": True,
+                "message": "scheduled (publishing suspended)",
+                "data": created,
+            }), HTTP_STATUS_CODES["CREATED"]
+
+        # ---------------------------------------------------
+        # ✅ 8) ENQUEUE JOB
         # ---------------------------------------------------
         try:
             from ...services.social.jobs import publish_scheduled_post
@@ -407,7 +475,6 @@ class CreateScheduledPostResource(MethodView):
                 meta={"business_id": business_id, "post_id": post_id},
             )
 
-            # TTL configuration (set after enqueue_at)
             try:
                 job.result_ttl = 500
                 job.failure_ttl = 86400
@@ -433,7 +500,6 @@ class CreateScheduledPostResource(MethodView):
             "message": "scheduled",
             "data": created,
         }), HTTP_STATUS_CODES["CREATED"]
-
 
 
 
