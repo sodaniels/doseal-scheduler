@@ -1,4 +1,23 @@
 # app/resources/social/facebook_insights_resource.py
+#
+# Facebook Page analytics using STORED SocialAccount token
+#
+# Facebook Graph API v21.0:
+# - Page info and metrics
+# - Page insights (time series)
+# - Post list and insights
+# - Video insights
+#
+# What you can get:
+# - Page metrics: followers, fans, engagement
+# - Post metrics: impressions, reach, reactions, comments, shares
+# - Video metrics: views, watch time
+#
+# Key limitations:
+# - Many metrics deprecated Nov 2025 (New Pages Experience)
+# - Use followers_count from page fields instead of page_fans
+# - Insights require read_insights permission
+# - Rate limits apply
 
 from __future__ import annotations
 
@@ -25,12 +44,16 @@ blp_meta_impression = Blueprint(
     __name__,
 )
 
-# Use v21.0 - stable version
+# Facebook Graph API version
 GRAPH_VERSION = "v21.0"
+GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_VERSION}"
+
+# Platform identifier
+PLATFORM_ID = "facebook"
 
 
 # -------------------------------------------------------------------
-# Valid Metrics (Updated Feb 2025 - Post Nov 2025 Deprecation)
+# Valid Metrics Reference (Updated Feb 2025 - Post Nov 2025 Deprecation)
 # -------------------------------------------------------------------
 # IMPORTANT: As of November 15, 2025, Meta deprecated 80+ page metrics
 # as part of the "New Pages Experience" migration.
@@ -139,6 +162,9 @@ DEFAULT_POST_METRICS = [
     "post_reactions_by_type_total",
 ]
 
+# Valid periods for page insights
+VALID_PERIODS = {"day", "week", "days_28", "lifetime"}
+
 
 # -------------------------------------------------------------------
 # Helpers
@@ -201,59 +227,94 @@ def _parse_fb_error(response_json: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_auth_error(error: Dict[str, Any], status_code: int) -> bool:
+    """Check if error is authentication related (token expired/invalid)."""
+    if status_code == 401:
+        return True
+    code = error.get("code")
+    return code == 190  # OAuth token expired/invalid
+
+
+def _is_permission_error(error: Dict[str, Any], status_code: int) -> bool:
+    """Check if error is permission related."""
+    if status_code == 403:
+        return True
+    code = error.get("code")
+    return code in [10, 200, 210]  # Permission errors
+
+
+def _is_rate_limit_error(error: Dict[str, Any], status_code: int) -> bool:
+    """Check if error is rate limit related."""
+    if status_code == 429:
+        return True
+    code = error.get("code")
+    return code in [4, 17, 32, 613]  # Rate limit codes
+
+
 def _is_invalid_metric_error(error: Dict[str, Any]) -> bool:
-    """Check if error is about invalid metric."""
+    """Check if error is about invalid/deprecated metric."""
     code = error.get("code")
     message = str(error.get("message", "")).lower()
     return code == 100 and ("invalid" in message or "metric" in message)
 
 
-def _is_permission_error(error: Dict[str, Any]) -> bool:
-    """Check if error is about missing permissions."""
-    code = error.get("code")
-    return code in [10, 200, 210]
+# -------------------------------
+# API request helper
+# -------------------------------
+
+def _request_get(
+    *,
+    url: str,
+    params: Dict[str, Any],
+    timeout: int = 30,
+) -> Tuple[int, Dict[str, Any], str]:
+    """Make GET request and return (status, json, raw_text)."""
+    try:
+        r = requests.get(url, params=params, timeout=timeout)
+        text = r.text or ""
+        try:
+            js = r.json() if text else {}
+        except Exception:
+            js = {}
+        return r.status_code, js, text
+    except requests.exceptions.Timeout:
+        return 408, {"error": {"code": "timeout", "message": "Request timeout"}}, ""
+    except requests.exceptions.RequestException as e:
+        return 500, {"error": {"code": "request_error", "message": str(e)}}, ""
 
 
 # -------------------------------
-# Token validation
+# Token debug
 # -------------------------------
 
 def _debug_token(access_token: str, log_tag: str) -> Dict[str, Any]:
     """Debug token to check permissions and validity."""
-    url = f"https://graph.facebook.com/{GRAPH_VERSION}/debug_token"
+    url = f"{GRAPH_API_BASE}/debug_token"
     params = {
         "input_token": access_token,
         "access_token": access_token,
     }
     
-    try:
-        r = requests.get(url, params=params, timeout=15)
-        
-        if r.status_code >= 400:
-            return {
-                "valid": False,
-                "error": "Token debug request failed",
-                "status_code": r.status_code,
-            }
-        
-        data = r.json().get("data", {})
-        
-        return {
-            "valid": data.get("is_valid", False),
-            "app_id": data.get("app_id"),
-            "type": data.get("type"),
-            "expires_at": data.get("expires_at"),
-            "data_access_expires_at": data.get("data_access_expires_at"),
-            "scopes": data.get("scopes", []),
-            "granular_scopes": data.get("granular_scopes", []),
-        }
-        
-    except Exception as e:
-        Log.error(f"{log_tag} Token debug error: {e}")
+    status, js, raw = _request_get(url=url, params=params, timeout=15)
+    
+    if status >= 400:
         return {
             "valid": False,
-            "error": str(e),
+            "error": "Token debug request failed",
+            "status_code": status,
         }
+    
+    data = js.get("data", {})
+    
+    return {
+        "valid": data.get("is_valid", False),
+        "app_id": data.get("app_id"),
+        "type": data.get("type"),
+        "expires_at": data.get("expires_at"),
+        "data_access_expires_at": data.get("data_access_expires_at"),
+        "scopes": data.get("scopes", []),
+        "granular_scopes": data.get("granular_scopes", []),
+    }
 
 
 # -------------------------------
@@ -261,97 +322,51 @@ def _debug_token(access_token: str, log_tag: str) -> Dict[str, Any]:
 # -------------------------------
 
 def _get_facebook_page_info(
-    *, 
-    page_id: str, 
-    access_token: str, 
-    log_tag: str
+    *,
+    page_id: str,
+    access_token: str,
+    log_tag: str,
 ) -> Dict[str, Any]:
     """
     Fetch basic Facebook page info using fields endpoint.
+    
+    Returns:
+        - id, name, username
+        - followers_count, fan_count
+        - link, picture, category
+        - about, website
     """
-    url = f"https://graph.facebook.com/{GRAPH_VERSION}/{page_id}"
-
+    url = f"{GRAPH_API_BASE}/{page_id}"
+    
     params = {
         "fields": "id,name,username,followers_count,fan_count,link,picture,category,about,website",
         "access_token": access_token,
     }
-
-    try:
-        r = requests.get(url, params=params, timeout=30)
-        
-        if r.status_code >= 400:
-            Log.info(f"{log_tag} FB page info error: {r.status_code} {r.text}")
-            error_data = r.json() if r.text else {}
-            return {
-                "success": False,
-                "status_code": r.status_code,
-                "error": _parse_fb_error(error_data),
-            }
-
-        data = r.json() or {}
-
-        return {
-            "success": True,
-            "id": data.get("id"),
-            "name": data.get("name"),
-            "username": data.get("username"),
-            "followers_count": data.get("followers_count"),
-            "fan_count": data.get("fan_count"),
-            "link": data.get("link"),
-            "picture": data.get("picture", {}).get("data", {}).get("url") if isinstance(data.get("picture"), dict) else None,
-            "category": data.get("category"),
-            "about": data.get("about"),
-            "website": data.get("website"),
-            "raw": data,
-        }
-        
-    except requests.exceptions.Timeout:
-        Log.error(f"{log_tag} FB page info timeout")
+    
+    status, js, raw = _request_get(url=url, params=params, timeout=30)
+    
+    if status >= 400:
+        Log.info(f"{log_tag} FB page info error: {status} {raw}")
         return {
             "success": False,
-            "status_code": 408,
-            "error": {"message": "Request timeout"},
+            "status_code": status,
+            "error": _parse_fb_error(js),
         }
-    except requests.exceptions.RequestException as e:
-        Log.error(f"{log_tag} FB page info request error: {e}")
-        return {
-            "success": False,
-            "status_code": 500,
-            "error": {"message": str(e)},
-        }
-
-
-# -------------------------------
-# Insights parsing
-# -------------------------------
-
-def _series_from_insights_payload(
-    payload: Dict[str, Any], 
-    metric_name: str
-) -> List[Dict[str, Any]]:
-    """Extract time series data for a specific metric from API response."""
-    data = (payload or {}).get("data") or []
     
-    item = None
-    for x in data:
-        name = x.get("name", "")
-        if name == metric_name or name.startswith(f"{metric_name}/"):
-            item = x
-            break
-    
-    if not item:
-        return []
-    
-    values = item.get("values") or []
-    out: List[Dict[str, Any]] = []
-    
-    for v in values or []:
-        out.append({
-            "end_time": v.get("end_time"),
-            "value": v.get("value"),
-        })
-
-    return out
+    return {
+        "success": True,
+        "id": js.get("id"),
+        "name": js.get("name"),
+        "username": js.get("username"),
+        "followers_count": js.get("followers_count"),
+        "fan_count": js.get("fan_count"),
+        "link": js.get("link"),
+        "picture": js.get("picture", {}).get("data", {}).get("url") if isinstance(js.get("picture"), dict) else None,
+        "category": js.get("category"),
+        "about": js.get("about"),
+        "website": js.get("website"),
+        "raw": js,
+    }
 
 
 # -------------------------------
@@ -370,8 +385,10 @@ def _fetch_page_insights(
 ) -> Dict[str, Any]:
     """
     Fetch Facebook page-level insights.
+    
+    Fetches metrics individually for better error handling.
     """
-    url = f"https://graph.facebook.com/{GRAPH_VERSION}/{page_id}/insights"
+    url = f"{GRAPH_API_BASE}/{page_id}/insights"
     
     valid_metrics: List[str] = []
     invalid_metrics: List[Dict[str, Any]] = []
@@ -388,47 +405,58 @@ def _fetch_page_insights(
             seen.add(m2)
             uniq_metrics.append(m2)
     
+    # Build date params
+    date_params = {}
+    if since and until:
+        since_dt = _parse_ymd(since)
+        until_dt = _parse_ymd(until)
+        if since_dt:
+            date_params["since"] = _to_unix_timestamp(since_dt)
+        if until_dt:
+            date_params["until"] = _to_unix_timestamp(until_dt + timedelta(days=1))
+    
     # Fetch metrics individually for better error handling
     for metric in uniq_metrics:
         params = {
             "metric": metric,
             "period": period,
             "access_token": access_token,
+            **date_params,
         }
         
-        # Add date range
-        if since and until:
-            since_dt = _parse_ymd(since)
-            until_dt = _parse_ymd(until)
-            if since_dt:
-                params["since"] = _to_unix_timestamp(since_dt)
-            if until_dt:
-                params["until"] = _to_unix_timestamp(until_dt + timedelta(days=1))
+        status, js, raw = _request_get(url=url, params=params, timeout=30)
         
-        try:
-            r = requests.get(url, params=params, timeout=30)
+        if status >= 400:
+            parsed_error = _parse_fb_error(js)
             
-            if r.status_code >= 400:
-                error_data = r.json() if r.text else {}
-                parsed_error = _parse_fb_error(error_data)
-                
-                invalid_metrics.append({
-                    "metric": metric,
-                    "status_code": r.status_code,
-                    "error": parsed_error,
-                })
-                
-                if _is_invalid_metric_error(parsed_error):
-                    deprecated_found.append(metric)
-                    Log.info(f"{log_tag} Metric '{metric}' is invalid or deprecated")
-                elif _is_permission_error(parsed_error):
-                    permission_errors.append(metric)
-                    Log.info(f"{log_tag} Metric '{metric}' requires additional permissions")
-                    
-                continue
+            invalid_metrics.append({
+                "metric": metric,
+                "status_code": status,
+                "error": parsed_error,
+            })
             
-            payload = r.json() or {}
-            series = _series_from_insights_payload(payload, metric)
+            if _is_invalid_metric_error(parsed_error):
+                deprecated_found.append(metric)
+                Log.info(f"{log_tag} Metric '{metric}' is invalid or deprecated")
+            elif _is_permission_error(parsed_error, status):
+                permission_errors.append(metric)
+                Log.info(f"{log_tag} Metric '{metric}' requires additional permissions")
+                
+            continue
+        
+        # Extract series data
+        data = js.get("data", [])
+        
+        if data:
+            series = []
+            for item in data:
+                if item.get("name") == metric:
+                    for v in item.get("values", []):
+                        series.append({
+                            "end_time": v.get("end_time"),
+                            "value": v.get("value"),
+                        })
+                    break
             
             if series:
                 all_metrics[metric] = series
@@ -439,18 +467,11 @@ def _fetch_page_insights(
                     "status_code": 200,
                     "error": {"message": "No data returned"},
                 })
-                
-        except requests.exceptions.Timeout:
+        else:
             invalid_metrics.append({
                 "metric": metric,
-                "status_code": 408,
-                "error": {"message": "Request timeout"},
-            })
-        except requests.exceptions.RequestException as e:
-            invalid_metrics.append({
-                "metric": metric,
-                "status_code": 500,
-                "error": {"message": str(e)},
+                "status_code": 200,
+                "error": {"message": "Empty response"},
             })
     
     return {
@@ -463,7 +484,254 @@ def _fetch_page_insights(
 
 
 # -------------------------------
-# Summary calculations
+# Post list fetching
+# -------------------------------
+
+def _get_page_posts(
+    *,
+    page_id: str,
+    access_token: str,
+    limit: int = 25,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    log_tag: str,
+) -> Dict[str, Any]:
+    """
+    Fetch list of posts for a page.
+    """
+    url = f"{GRAPH_API_BASE}/{page_id}/posts"
+    
+    fields = [
+        "id",
+        "message",
+        "story",
+        "created_time",
+        "updated_time",
+        "permalink_url",
+        "full_picture",
+        "type",
+        "status_type",
+        "shares",
+        "reactions.summary(true)",
+        "comments.summary(true)",
+    ]
+    
+    params = {
+        "fields": ",".join(fields),
+        "limit": min(limit, 100),
+        "access_token": access_token,
+    }
+    
+    if after:
+        params["after"] = after
+    if before:
+        params["before"] = before
+    if since:
+        since_dt = _parse_ymd(since)
+        if since_dt:
+            params["since"] = _to_unix_timestamp(since_dt)
+    if until:
+        until_dt = _parse_ymd(until)
+        if until_dt:
+            params["until"] = _to_unix_timestamp(until_dt + timedelta(days=1))
+    
+    status, js, raw = _request_get(url=url, params=params, timeout=30)
+    
+    if status >= 400:
+        Log.info(f"{log_tag} FB posts list error: {status} {raw}")
+        return {
+            "success": False,
+            "status_code": status,
+            "error": _parse_fb_error(js),
+        }
+    
+    post_list = js.get("data", [])
+    paging = js.get("paging", {})
+    
+    # Normalize posts
+    posts = []
+    for post in post_list:
+        processed = {
+            "id": post.get("id"),
+            "message": post.get("message"),
+            "story": post.get("story"),
+            "created_time": post.get("created_time"),
+            "updated_time": post.get("updated_time"),
+            "permalink_url": post.get("permalink_url"),
+            "full_picture": post.get("full_picture"),
+            "type": post.get("type"),
+            "status_type": post.get("status_type"),
+        }
+        
+        # Flatten reactions
+        if "reactions" in post and isinstance(post["reactions"], dict):
+            processed["reactions_count"] = post["reactions"].get("summary", {}).get("total_count", 0)
+        else:
+            processed["reactions_count"] = 0
+        
+        # Flatten comments
+        if "comments" in post and isinstance(post["comments"], dict):
+            processed["comments_count"] = post["comments"].get("summary", {}).get("total_count", 0)
+        else:
+            processed["comments_count"] = 0
+        
+        # Flatten shares
+        if "shares" in post and isinstance(post["shares"], dict):
+            processed["shares_count"] = post["shares"].get("count", 0)
+        else:
+            processed["shares_count"] = 0
+        
+        posts.append(processed)
+    
+    # Extract pagination
+    cursors = paging.get("cursors", {})
+    pagination = {
+        "has_next": "next" in paging,
+        "has_previous": "previous" in paging,
+        "after": cursors.get("after"),
+        "before": cursors.get("before"),
+    }
+    
+    return {
+        "success": True,
+        "posts": posts,
+        "pagination": pagination,
+    }
+
+
+# -------------------------------
+# Post insights fetching
+# -------------------------------
+
+def _fetch_post_insights(
+    *,
+    post_id: str,
+    access_token: str,
+    metrics: List[str],
+    log_tag: str,
+) -> Dict[str, Any]:
+    """
+    Fetch insights for a specific post.
+    """
+    url = f"{GRAPH_API_BASE}/{post_id}/insights"
+    
+    params = {
+        "metric": ",".join(metrics),
+        "access_token": access_token,
+    }
+    
+    status, js, raw = _request_get(url=url, params=params, timeout=30)
+    
+    if status >= 400:
+        Log.info(f"{log_tag} FB post insights error: {status} {raw}")
+        return {
+            "success": False,
+            "status_code": status,
+            "error": _parse_fb_error(js),
+        }
+    
+    data = js.get("data", [])
+    
+    # Parse metrics
+    metrics_data = {}
+    for item in data:
+        name = item.get("name")
+        values = item.get("values", [])
+        if values:
+            metrics_data[name] = values[0].get("value")
+    
+    return {
+        "success": True,
+        "metrics": metrics_data,
+    }
+
+
+# -------------------------------
+# Post details fetching
+# -------------------------------
+
+def _get_post_details(
+    *,
+    post_id: str,
+    access_token: str,
+    log_tag: str,
+) -> Dict[str, Any]:
+    """
+    Fetch detailed info for a specific post.
+    """
+    url = f"{GRAPH_API_BASE}/{post_id}"
+    
+    fields = [
+        "id",
+        "message",
+        "story",
+        "created_time",
+        "updated_time",
+        "permalink_url",
+        "full_picture",
+        "type",
+        "status_type",
+        "shares",
+        "reactions.summary(true)",
+        "comments.summary(true)",
+        "attachments{media_type,url,title,description,media}",
+    ]
+    
+    params = {
+        "fields": ",".join(fields),
+        "access_token": access_token,
+    }
+    
+    status, js, raw = _request_get(url=url, params=params, timeout=30)
+    
+    if status >= 400:
+        Log.info(f"{log_tag} FB post details error: {status} {raw}")
+        return {
+            "success": False,
+            "status_code": status,
+            "error": _parse_fb_error(js),
+        }
+    
+    # Normalize post data
+    post = {
+        "id": js.get("id"),
+        "message": js.get("message"),
+        "story": js.get("story"),
+        "created_time": js.get("created_time"),
+        "updated_time": js.get("updated_time"),
+        "permalink_url": js.get("permalink_url"),
+        "full_picture": js.get("full_picture"),
+        "type": js.get("type"),
+        "status_type": js.get("status_type"),
+    }
+    
+    # Flatten reactions
+    if "reactions" in js and isinstance(js["reactions"], dict):
+        post["reactions_count"] = js["reactions"].get("summary", {}).get("total_count", 0)
+    
+    # Flatten comments
+    if "comments" in js and isinstance(js["comments"], dict):
+        post["comments_count"] = js["comments"].get("summary", {}).get("total_count", 0)
+    
+    # Flatten shares
+    if "shares" in js and isinstance(js["shares"], dict):
+        post["shares_count"] = js["shares"].get("count", 0)
+    
+    # Process attachments
+    if "attachments" in js and "data" in js["attachments"]:
+        post["attachments"] = js["attachments"]["data"]
+    
+    return {
+        "success": True,
+        "post": post,
+        "raw": js,
+    }
+
+
+# -------------------------------
+# Calculate summaries
 # -------------------------------
 
 def _calculate_metric_summary(series: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -477,7 +745,8 @@ def _calculate_metric_summary(series: List[Dict[str, Any]]) -> Dict[str, Any]:
         if isinstance(v, (int, float)):
             values.append(v)
         elif isinstance(v, dict):
-            return {"type": "breakdown", "count": len(series)}
+            # Breakdown metric (like reactions by type)
+            return {"type": "breakdown", "count": len(series), "latest": v}
     
     if not values:
         return {"total": 0, "average": 0, "min": 0, "max": 0, "count": 0}
@@ -527,7 +796,7 @@ class FacebookPageInsightsResource(MethodView):
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[facebook_insights][page][{client_ip}]"
+        log_tag = f"[facebook_insights_resource.py][FacebookPageInsightsResource][get][{client_ip}]"
 
         user = g.get("current_user") or {}
         business_id = str(user.get("business_id") or "")
@@ -554,11 +823,10 @@ class FacebookPageInsightsResource(MethodView):
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         # Validate period
-        valid_periods = {"day", "week", "days_28", "lifetime"}
-        if period not in valid_periods:
+        if period not in VALID_PERIODS:
             return jsonify({
                 "success": False,
-                "message": f"Invalid period. Must be one of: {', '.join(valid_periods)}",
+                "message": f"Invalid period. Must be one of: {', '.join(VALID_PERIODS)}",
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         # Validate date format
@@ -584,9 +852,16 @@ class FacebookPageInsightsResource(MethodView):
                     "message": "'since' date must be before 'until' date",
                 }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        # Default to last 30 days if no dates provided
+        # Default to last 30 days
         if not since or not until:
             since, until = _get_date_range_last_n_days(30)
+
+        # Parse requested metrics
+        metrics_qs = (request.args.get("metrics") or "").strip()
+        if metrics_qs:
+            requested_metrics = [m.strip() for m in metrics_qs.split(",") if m.strip()]
+        else:
+            requested_metrics = DEFAULT_PAGE_METRICS.copy()
 
         # --------------------------------------------------
         # Load stored SocialAccount
@@ -595,7 +870,7 @@ class FacebookPageInsightsResource(MethodView):
         acct = SocialAccount.get_destination(
             business_id=business_id,
             user__id=user__id,
-            platform="facebook",
+            platform=PLATFORM_ID,
             destination_id=page_id,
         )
 
@@ -606,7 +881,7 @@ class FacebookPageInsightsResource(MethodView):
                 "message": "Facebook page not connected",
             }), HTTP_STATUS_CODES["NOT_FOUND"]
 
-        access_token = acct.get("access_token_plain")
+        access_token = acct.get("access_token_plain") or acct.get("access_token")
         if not access_token:
             return jsonify({
                 "success": False,
@@ -617,18 +892,10 @@ class FacebookPageInsightsResource(MethodView):
         # --------------------------------------------------
         # Debug token if requested
         # --------------------------------------------------
-        
+
         token_info = None
         if debug_mode:
             token_info = _debug_token(access_token, log_tag)
-
-        # Parse requested metrics or use defaults
-        metrics_qs = (request.args.get("metrics") or "").strip()
-        
-        if metrics_qs:
-            requested_metrics = [m.strip() for m in metrics_qs.split(",") if m.strip()]
-        else:
-            requested_metrics = DEFAULT_PAGE_METRICS.copy()
 
         # --------------------------------------------------
         # Fetch page info
@@ -643,25 +910,28 @@ class FacebookPageInsightsResource(MethodView):
         # Check for token errors early
         if not page_info.get("success"):
             error = page_info.get("error", {})
-            error_code = error.get("code")
+            status_code = page_info.get("status_code", 400)
             
-            if error_code == 190:
+            if _is_auth_error(error, status_code):
                 return jsonify({
                     "success": False,
                     "code": "FB_TOKEN_EXPIRED",
                     "message": "Facebook access token has expired. Please reconnect.",
+                    "error": error,
                     "debug": token_info if debug_mode else None,
                 }), HTTP_STATUS_CODES["UNAUTHORIZED"]
-            elif error_code in [10, 200, 210]:
+            
+            if _is_permission_error(error, status_code):
                 return jsonify({
                     "success": False,
                     "code": "FB_PERMISSION_DENIED",
                     "message": "Missing permissions. Token needs: pages_read_engagement, read_insights",
+                    "error": error,
                     "debug": token_info if debug_mode else None,
                 }), HTTP_STATUS_CODES["FORBIDDEN"]
 
         # --------------------------------------------------
-        # Fetch insights
+        # Fetch page insights
         # --------------------------------------------------
 
         insights = _fetch_page_insights(
@@ -680,10 +950,7 @@ class FacebookPageInsightsResource(MethodView):
             return jsonify({
                 "success": False,
                 "code": "FB_PERMISSION_DENIED",
-                "message": (
-                    f"Missing permission 'read_insights'. "
-                    f"Please reconnect Facebook with updated permissions."
-                ),
+                "message": "Missing permission 'read_insights'. Please reconnect Facebook with updated permissions.",
                 "failed_metrics": permission_errors,
                 "required_permissions": [
                     "pages_show_list",
@@ -703,11 +970,7 @@ class FacebookPageInsightsResource(MethodView):
             return jsonify({
                 "success": False,
                 "code": "FB_METRICS_INVALID",
-                "message": (
-                    f"All requested metrics are invalid. "
-                    f"Invalid metrics: {deprecated_found}. "
-                    f"Use these instead: {DEFAULT_PAGE_METRICS}"
-                ),
+                "message": f"All requested metrics are invalid. Invalid metrics: {deprecated_found}. Use these instead: {DEFAULT_PAGE_METRICS}",
                 "suggested_metrics": DEFAULT_PAGE_METRICS,
                 "page_info": {
                     "name": _pick(page_info, "name"),
@@ -723,7 +986,7 @@ class FacebookPageInsightsResource(MethodView):
 
         # Build response
         result = {
-            "platform": "facebook",
+            "platform": PLATFORM_ID,
             "graph_version": GRAPH_VERSION,
             "destination_id": page_id,
             "page_name": _pick(page_info, "name"),
@@ -751,8 +1014,7 @@ class FacebookPageInsightsResource(MethodView):
             "permission_errors": insights.get("permission_errors"),
             "metrics": insights.get("metrics"),
         }
-        
-        # Add debug info if requested
+
         if debug_mode:
             result["debug"] = {
                 "token_info": token_info,
@@ -760,6 +1022,139 @@ class FacebookPageInsightsResource(MethodView):
                 "deprecated_metrics": sorted(list(DEPRECATED_METRICS)),
                 "default_metrics": DEFAULT_PAGE_METRICS,
             }
+
+        return jsonify({
+            "success": True,
+            "data": result,
+        }), HTTP_STATUS_CODES["OK"]
+
+
+# -------------------------------------------------------------------
+# FACEBOOK POST LIST — Get all posts for a page
+# -------------------------------------------------------------------
+
+@blp_meta_impression.route("/social/facebook/post-list", methods=["GET"])
+class FacebookPostListResource(MethodView):
+    """
+    Get list of posts for a Facebook page.
+
+    Query params:
+      - destination_id (required): Facebook Page ID
+      - limit: Number of posts to return (default: 25, max: 100)
+      - after: Pagination cursor for next page
+      - before: Pagination cursor for previous page
+      - since (YYYY-MM-DD): Filter posts after this date
+      - until (YYYY-MM-DD): Filter posts before this date
+      
+    Returns:
+      - List of posts with basic metrics (reactions, comments, shares)
+      - Pagination cursors
+      
+    Required permission: pages_read_engagement
+    """
+
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = f"[facebook_insights_resource.py][FacebookPostListResource][get][{client_ip}]"
+
+        user = g.get("current_user") or {}
+        business_id = str(user.get("business_id") or "")
+        user__id = str(user.get("_id") or "")
+
+        if not business_id or not user__id:
+            return jsonify({
+                "success": False,
+                "message": "Unauthorized",
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # Parse query parameters
+        page_id = (request.args.get("destination_id") or "").strip()
+        after_cursor = (request.args.get("after") or "").strip() or None
+        before_cursor = (request.args.get("before") or "").strip() or None
+        since = (request.args.get("since") or "").strip() or None
+        until = (request.args.get("until") or "").strip() or None
+
+        try:
+            limit = min(max(int(request.args.get("limit", 25)), 1), 100)
+        except ValueError:
+            limit = 25
+
+        if not page_id:
+            return jsonify({
+                "success": False,
+                "message": "destination_id is required",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Load stored SocialAccount
+        acct = SocialAccount.get_destination(
+            business_id=business_id,
+            user__id=user__id,
+            platform=PLATFORM_ID,
+            destination_id=page_id,
+        )
+
+        if not acct:
+            return jsonify({
+                "success": False,
+                "code": "FB_NOT_CONNECTED",
+                "message": "Facebook page not connected",
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        access_token = acct.get("access_token_plain") or acct.get("access_token")
+        if not access_token:
+            return jsonify({
+                "success": False,
+                "code": "FB_TOKEN_MISSING",
+                "message": "Reconnect Facebook - no access token found",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Fetch posts
+        posts_resp = _get_page_posts(
+            page_id=page_id,
+            access_token=access_token,
+            limit=limit,
+            after=after_cursor,
+            before=before_cursor,
+            since=since,
+            until=until,
+            log_tag=log_tag,
+        )
+
+        if not posts_resp.get("success"):
+            error = posts_resp.get("error", {})
+            status_code = posts_resp.get("status_code", 400)
+            
+            if _is_auth_error(error, status_code):
+                return jsonify({
+                    "success": False,
+                    "code": "FB_TOKEN_EXPIRED",
+                    "message": "Facebook access token has expired. Please reconnect.",
+                }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+            
+            if _is_permission_error(error, status_code):
+                return jsonify({
+                    "success": False,
+                    "code": "FB_PERMISSION_DENIED",
+                    "message": "Missing permissions. Token needs: pages_read_engagement",
+                }), HTTP_STATUS_CODES["FORBIDDEN"]
+            
+            return jsonify({
+                "success": False,
+                "code": "FB_POST_LIST_ERROR",
+                "message": error.get("message") or "Failed to fetch post list",
+                "error": error,
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        result = {
+            "platform": PLATFORM_ID,
+            "graph_version": GRAPH_VERSION,
+            "destination_id": page_id,
+            "count": len(posts_resp.get("posts", [])),
+            "limit": limit,
+            "posts": posts_resp.get("posts", []),
+            "pagination": posts_resp.get("pagination", {}),
+        }
 
         return jsonify({
             "success": True,
@@ -780,7 +1175,7 @@ class FacebookPostInsightsResource(MethodView):
       - destination_id (required): Facebook Page ID
       - post_id (required): Facebook Post ID
       - metrics: comma-separated list of metrics (optional)
-      - debug: if "true", includes token debug info
+      - debug: if "true", includes debug info
       
     Working metrics (Feb 2025):
       - post_impressions: Times post was shown
@@ -788,12 +1183,14 @@ class FacebookPostInsightsResource(MethodView):
       - post_engaged_users: Users who engaged
       - post_clicks: Total clicks
       - post_reactions_by_type_total: Reactions breakdown
+      
+    Required permission: read_insights
     """
 
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[facebook_insights][post][{client_ip}]"
+        log_tag = f"[facebook_insights_resource.py][FacebookPostInsightsResource][get][{client_ip}]"
 
         user = g.get("current_user") or {}
         business_id = str(user.get("business_id") or "")
@@ -822,11 +1219,18 @@ class FacebookPostInsightsResource(MethodView):
                 "message": "post_id is required",
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
+        # Parse metrics
+        metrics_qs = (request.args.get("metrics") or "").strip()
+        if metrics_qs:
+            requested_metrics = [m.strip() for m in metrics_qs.split(",") if m.strip()]
+        else:
+            requested_metrics = DEFAULT_POST_METRICS.copy()
+
         # Load stored SocialAccount
         acct = SocialAccount.get_destination(
             business_id=business_id,
             user__id=user__id,
-            platform="facebook",
+            platform=PLATFORM_ID,
             destination_id=page_id,
         )
 
@@ -837,295 +1241,66 @@ class FacebookPostInsightsResource(MethodView):
                 "message": "Facebook page not connected",
             }), HTTP_STATUS_CODES["NOT_FOUND"]
 
-        access_token = acct.get("access_token_plain")
+        access_token = acct.get("access_token_plain") or acct.get("access_token")
         if not access_token:
             return jsonify({
                 "success": False,
                 "code": "FB_TOKEN_MISSING",
                 "message": "Reconnect Facebook - no access token found",
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        # Parse requested metrics or use defaults
-        metrics_qs = (request.args.get("metrics") or "").strip()
-        requested_metrics = (
-            [m.strip() for m in metrics_qs.split(",") if m.strip()]
-            if metrics_qs
-            else DEFAULT_POST_METRICS.copy()
-        )
 
         # Fetch post insights
-        url = f"https://graph.facebook.com/{GRAPH_VERSION}/{post_id}/insights"
-        params = {
-            "metric": ",".join(requested_metrics),
-            "access_token": access_token,
-        }
-
-        try:
-            r = requests.get(url, params=params, timeout=30)
-            
-            if r.status_code >= 400:
-                error_data = r.json() if r.text else {}
-                parsed_error = _parse_fb_error(error_data)
-                
-                return jsonify({
-                    "success": False,
-                    "code": "FB_POST_INSIGHTS_ERROR",
-                    "message": parsed_error.get("message", "Failed to fetch post insights"),
-                    "error": parsed_error,
-                }), HTTP_STATUS_CODES["BAD_REQUEST"]
-            
-            payload = r.json() or {}
-            data = payload.get("data", [])
-            
-            # Parse metrics from response
-            metrics_data = {}
-            for item in data:
-                name = item.get("name")
-                values = item.get("values", [])
-                if values:
-                    metrics_data[name] = values[0].get("value")
-            
-            result = {
-                "platform": "facebook",
-                "graph_version": GRAPH_VERSION,
-                "post_id": post_id,
-                "requested_metrics": requested_metrics,
-                "metrics": metrics_data,
-            }
-            
-            if debug_mode:
-                result["debug"] = {
-                    "available_post_metrics": sorted(list(VALID_POST_METRICS)),
-                }
-            
-            return jsonify({
-                "success": True,
-                "data": result,
-            }), HTTP_STATUS_CODES["OK"]
-            
-        except requests.exceptions.RequestException as e:
-            Log.error(f"{log_tag} Post insights error: {e}")
-            return jsonify({
-                "success": False,
-                "message": f"Request failed: {str(e)}",
-            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
-
-# -------------------------------------------------------------------
-# FACEBOOK POST LIST — Get all posts for a page
-# -------------------------------------------------------------------
-
-@blp_meta_impression.route("/social/facebook/post-list", methods=["GET"])
-class FacebookPostListResource(MethodView):
-    """
-    Get list of posts for a Facebook page.
-
-    Query params:
-      - destination_id (required): Facebook Page ID
-      - limit: Number of posts to return (default: 25, max: 100)
-      - after: Pagination cursor for next page
-      - before: Pagination cursor for previous page
-      - fields: Comma-separated fields (optional, has defaults)
-      
-    Default fields returned:
-      - id, message, created_time, updated_time
-      - permalink_url, full_picture
-      - shares, reactions.summary(true), comments.summary(true)
-    """
-
-    @token_required
-    def get(self):
-        client_ip = request.remote_addr
-        log_tag = f"[facebook_insights][post_list][{client_ip}]"
-
-        user = g.get("current_user") or {}
-        business_id = str(user.get("business_id") or "")
-        user__id = str(user.get("_id") or "")
-
-        if not business_id or not user__id:
-            return jsonify({
-                "success": False,
-                "message": "Unauthorized",
-            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
-
-        # Parse query parameters
-        page_id = (request.args.get("destination_id") or "").strip()
-        limit = request.args.get("limit", "25").strip()
-        after_cursor = (request.args.get("after") or "").strip() or None
-        before_cursor = (request.args.get("before") or "").strip() or None
-        fields_qs = (request.args.get("fields") or "").strip()
-
-        # Validate required parameters
-        if not page_id:
-            return jsonify({
-                "success": False,
-                "message": "destination_id is required",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        # Validate and cap limit
-        try:
-            limit = min(int(limit), 100)
-            if limit < 1:
-                limit = 25
-        except ValueError:
-            limit = 25
-
-        # Default fields if not specified
-        default_fields = [
-            "id",
-            "message",
-            "story",
-            "created_time",
-            "updated_time",
-            "permalink_url",
-            "full_picture",
-            "type",
-            "status_type",
-            "shares",
-            "reactions.summary(true)",
-            "comments.summary(true)",
-        ]
-        
-        if fields_qs:
-            fields = [f.strip() for f in fields_qs.split(",") if f.strip()]
-        else:
-            fields = default_fields
-
-        # --------------------------------------------------
-        # Load stored SocialAccount
-        # --------------------------------------------------
-
-        acct = SocialAccount.get_destination(
-            business_id=business_id,
-            user__id=user__id,
-            platform="facebook",
-            destination_id=page_id,
+        insights = _fetch_post_insights(
+            post_id=post_id,
+            access_token=access_token,
+            metrics=requested_metrics,
+            log_tag=log_tag,
         )
 
-        if not acct:
-            return jsonify({
-                "success": False,
-                "code": "FB_NOT_CONNECTED",
-                "message": "Facebook page not connected",
-            }), HTTP_STATUS_CODES["NOT_FOUND"]
-
-        access_token = acct.get("access_token_plain")
-        if not access_token:
-            return jsonify({
-                "success": False,
-                "code": "FB_TOKEN_MISSING",
-                "message": "Reconnect Facebook - no access token found",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        # --------------------------------------------------
-        # Fetch post list from Facebook API
-        # --------------------------------------------------
-
-        url = f"https://graph.facebook.com/{GRAPH_VERSION}/{page_id}/posts"
-        params = {
-            "fields": ",".join(fields),
-            "limit": limit,
-            "access_token": access_token,
-        }
-        
-        # Add pagination cursors if provided
-        if after_cursor:
-            params["after"] = after_cursor
-        if before_cursor:
-            params["before"] = before_cursor
-
-        try:
-            r = requests.get(url, params=params, timeout=30)
+        if not insights.get("success"):
+            error = insights.get("error", {})
+            status_code = insights.get("status_code", 400)
             
-            if r.status_code >= 400:
-                error_data = r.json() if r.text else {}
-                parsed_error = _parse_fb_error(error_data)
-                
-                error_code = parsed_error.get("code")
-                
-                if error_code == 190:
-                    return jsonify({
-                        "success": False,
-                        "code": "FB_TOKEN_EXPIRED",
-                        "message": "Facebook access token has expired. Please reconnect.",
-                    }), HTTP_STATUS_CODES["UNAUTHORIZED"]
-                elif error_code in [10, 200, 210]:
-                    return jsonify({
-                        "success": False,
-                        "code": "FB_PERMISSION_DENIED",
-                        "message": "Missing permissions. Token needs: pages_read_engagement",
-                    }), HTTP_STATUS_CODES["FORBIDDEN"]
-                
+            if _is_auth_error(error, status_code):
                 return jsonify({
                     "success": False,
-                    "code": "FB_POST_LIST_ERROR",
-                    "message": parsed_error.get("message", "Failed to fetch post list"),
-                    "error": parsed_error,
-                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+                    "code": "FB_TOKEN_EXPIRED",
+                    "message": "Facebook access token has expired. Please reconnect.",
+                }), HTTP_STATUS_CODES["UNAUTHORIZED"]
             
-            payload = r.json() or {}
-            post_list = payload.get("data", [])
-            paging = payload.get("paging", {})
+            if _is_permission_error(error, status_code):
+                return jsonify({
+                    "success": False,
+                    "code": "FB_PERMISSION_DENIED",
+                    "message": "Missing read_insights permission.",
+                    "error": error,
+                }), HTTP_STATUS_CODES["FORBIDDEN"]
             
-            # Process posts to flatten nested data
-            processed_posts = []
-            for post in post_list:
-                processed = {**post}
-                
-                # Flatten reactions summary
-                if "reactions" in processed and isinstance(processed["reactions"], dict):
-                    processed["reactions_count"] = processed["reactions"].get("summary", {}).get("total_count", 0)
-                    del processed["reactions"]
-                
-                # Flatten comments summary
-                if "comments" in processed and isinstance(processed["comments"], dict):
-                    processed["comments_count"] = processed["comments"].get("summary", {}).get("total_count", 0)
-                    del processed["comments"]
-                
-                # Flatten shares
-                if "shares" in processed and isinstance(processed["shares"], dict):
-                    processed["shares_count"] = processed["shares"].get("count", 0)
-                    del processed["shares"]
-                
-                processed_posts.append(processed)
-            
-            # Extract pagination info
-            cursors = paging.get("cursors", {})
-            pagination = {
-                "has_next": "next" in paging,
-                "has_previous": "previous" in paging,
-                "after": cursors.get("after"),
-                "before": cursors.get("before"),
-            }
-            
-            # Build response
-            result = {
-                "platform": "facebook",
-                "graph_version": GRAPH_VERSION,
-                "destination_id": page_id,
-                "count": len(processed_posts),
-                "limit": limit,
-                "posts": processed_posts,
-                "pagination": pagination,
-            }
-            
-            return jsonify({
-                "success": True,
-                "data": result,
-            }), HTTP_STATUS_CODES["OK"]
-            
-        except requests.exceptions.Timeout:
-            Log.error(f"{log_tag} Post list timeout")
             return jsonify({
                 "success": False,
-                "message": "Request timeout",
-            }), HTTP_STATUS_CODES["GATEWAY_TIMEOUT"]
-        except requests.exceptions.RequestException as e:
-            Log.error(f"{log_tag} Post list error: {e}")
-            return jsonify({
-                "success": False,
-                "message": f"Request failed: {str(e)}",
-            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+                "code": "FB_POST_INSIGHTS_ERROR",
+                "message": error.get("message") or "Failed to fetch post insights",
+                "error": error,
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        result = {
+            "platform": PLATFORM_ID,
+            "graph_version": GRAPH_VERSION,
+            "destination_id": page_id,
+            "post_id": post_id,
+            "requested_metrics": requested_metrics,
+            "metrics": insights.get("metrics"),
+        }
+
+        if debug_mode:
+            result["debug"] = {
+                "available_post_metrics": sorted(list(VALID_POST_METRICS)),
+            }
+
+        return jsonify({
+            "success": True,
+            "data": result,
+        }), HTTP_STATUS_CODES["OK"]
 
 
 # -------------------------------------------------------------------
@@ -1140,15 +1315,17 @@ class FacebookPostDetailsResource(MethodView):
     Query params:
       - destination_id (required): Facebook Page ID
       - post_id (required): Facebook Post ID
-      - fields: Comma-separated fields (optional, has defaults)
       
-    Returns full post details including attachments.
+    Returns:
+      - Full post data including message, attachments, reactions, comments, shares
+      
+    Required permission: pages_read_engagement
     """
 
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[facebook_insights][post_details][{client_ip}]"
+        log_tag = f"[facebook_insights_resource.py][FacebookPostDetailsResource][get][{client_ip}]"
 
         user = g.get("current_user") or {}
         business_id = str(user.get("business_id") or "")
@@ -1160,10 +1337,8 @@ class FacebookPostDetailsResource(MethodView):
                 "message": "Unauthorized",
             }), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
-        # Parse query parameters
         page_id = (request.args.get("destination_id") or "").strip()
         post_id = (request.args.get("post_id") or "").strip()
-        fields_qs = (request.args.get("fields") or "").strip()
 
         if not page_id:
             return jsonify({
@@ -1177,33 +1352,11 @@ class FacebookPostDetailsResource(MethodView):
                 "message": "post_id is required",
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        # Default fields
-        default_fields = [
-            "id",
-            "message",
-            "story",
-            "created_time",
-            "updated_time",
-            "permalink_url",
-            "full_picture",
-            "type",
-            "status_type",
-            "shares",
-            "reactions.summary(true)",
-            "comments.summary(true)",
-            "attachments{media_type,url,title,description,media}",
-        ]
-        
-        if fields_qs:
-            fields = [f.strip() for f in fields_qs.split(",") if f.strip()]
-        else:
-            fields = default_fields
-
         # Load stored SocialAccount
         acct = SocialAccount.get_destination(
             business_id=business_id,
             user__id=user__id,
-            platform="facebook",
+            platform=PLATFORM_ID,
             destination_id=page_id,
         )
 
@@ -1214,7 +1367,7 @@ class FacebookPostDetailsResource(MethodView):
                 "message": "Facebook page not connected",
             }), HTTP_STATUS_CODES["NOT_FOUND"]
 
-        access_token = acct.get("access_token_plain")
+        access_token = acct.get("access_token_plain") or acct.get("access_token")
         if not access_token:
             return jsonify({
                 "success": False,
@@ -1223,84 +1376,65 @@ class FacebookPostDetailsResource(MethodView):
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         # Fetch post details
-        url = f"https://graph.facebook.com/{GRAPH_VERSION}/{post_id}"
-        params = {
-            "fields": ",".join(fields),
-            "access_token": access_token,
-        }
+        post_resp = _get_post_details(
+            post_id=post_id,
+            access_token=access_token,
+            log_tag=log_tag,
+        )
 
-        try:
-            r = requests.get(url, params=params, timeout=30)
+        if not post_resp.get("success"):
+            error = post_resp.get("error", {})
+            status_code = post_resp.get("status_code", 400)
             
-            if r.status_code >= 400:
-                error_data = r.json() if r.text else {}
-                parsed_error = _parse_fb_error(error_data)
-                
+            if _is_auth_error(error, status_code):
                 return jsonify({
                     "success": False,
-                    "code": "FB_POST_DETAILS_ERROR",
-                    "message": parsed_error.get("message", "Failed to fetch post details"),
-                    "error": parsed_error,
-                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+                    "code": "FB_TOKEN_EXPIRED",
+                    "message": "Facebook access token has expired. Please reconnect.",
+                }), HTTP_STATUS_CODES["UNAUTHORIZED"]
             
-            post_data = r.json() or {}
-            
-            # Flatten nested data
-            if "reactions" in post_data and isinstance(post_data["reactions"], dict):
-                post_data["reactions_count"] = post_data["reactions"].get("summary", {}).get("total_count", 0)
-                del post_data["reactions"]
-            
-            if "comments" in post_data and isinstance(post_data["comments"], dict):
-                post_data["comments_count"] = post_data["comments"].get("summary", {}).get("total_count", 0)
-                del post_data["comments"]
-            
-            if "shares" in post_data and isinstance(post_data["shares"], dict):
-                post_data["shares_count"] = post_data["shares"].get("count", 0)
-                del post_data["shares"]
-            
-            # Process attachments
-            if "attachments" in post_data and "data" in post_data["attachments"]:
-                post_data["attachments"] = post_data["attachments"]["data"]
-            
-            result = {
-                "platform": "facebook",
-                "graph_version": GRAPH_VERSION,
-                "post": post_data,
-            }
-            
-            return jsonify({
-                "success": True,
-                "data": result,
-            }), HTTP_STATUS_CODES["OK"]
-            
-        except requests.exceptions.RequestException as e:
-            Log.error(f"{log_tag} Post details error: {e}")
             return jsonify({
                 "success": False,
-                "message": f"Request failed: {str(e)}",
-            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+                "code": "FB_POST_DETAILS_ERROR",
+                "message": error.get("message") or "Failed to fetch post details",
+                "error": error,
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        result = {
+            "platform": PLATFORM_ID,
+            "graph_version": GRAPH_VERSION,
+            "post": post_resp.get("post"),
+        }
+
+        return jsonify({
+            "success": True,
+            "data": result,
+        }), HTTP_STATUS_CODES["OK"]
 
 
 # -------------------------------------------------------------------
-# FACEBOOK DISCOVER METRICS — Test which metrics work
+# FACEBOOK DISCOVER METRICS — Diagnostic endpoint
 # -------------------------------------------------------------------
 
 @blp_meta_impression.route("/social/facebook/discover-metrics", methods=["GET"])
 class FacebookDiscoverMetricsResource(MethodView):
     """
-    Test endpoint to discover which Facebook metrics work with current token.
+    Diagnostic endpoint to test Facebook API access.
     
     Query params:
       - destination_id (required): Facebook Page ID
       
-    This will test all known metrics and return which ones work.
-    Useful for debugging permission issues.
+    Tests:
+      - Page info access
+      - Page insights (working vs deprecated metrics)
+      - Post list access
+      - Token permissions
     """
 
     @token_required
     def get(self):
         client_ip = request.remote_addr
-        log_tag = f"[facebook_insights][discover][{client_ip}]"
+        log_tag = f"[facebook_insights_resource.py][FacebookDiscoverMetricsResource][get][{client_ip}]"
 
         user = g.get("current_user") or {}
         business_id = str(user.get("business_id") or "")
@@ -1324,7 +1458,7 @@ class FacebookDiscoverMetricsResource(MethodView):
         acct = SocialAccount.get_destination(
             business_id=business_id,
             user__id=user__id,
-            platform="facebook",
+            platform=PLATFORM_ID,
             destination_id=page_id,
         )
 
@@ -1335,7 +1469,7 @@ class FacebookDiscoverMetricsResource(MethodView):
                 "message": "Facebook page not connected",
             }), HTTP_STATUS_CODES["NOT_FOUND"]
 
-        access_token = acct.get("access_token_plain")
+        access_token = acct.get("access_token_plain") or acct.get("access_token")
         if not access_token:
             return jsonify({
                 "success": False,
@@ -1343,17 +1477,31 @@ class FacebookDiscoverMetricsResource(MethodView):
                 "message": "Reconnect Facebook - no access token found",
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
 
-        # Debug token first
+        # Test 1: Debug token
         token_info = _debug_token(access_token, log_tag)
         
-        # Get page info
+        token_probe = {
+            "valid": token_info.get("valid", False),
+            "scopes": token_info.get("scopes", []),
+            "has_read_insights": "read_insights" in token_info.get("scopes", []),
+            "has_pages_read_engagement": "pages_read_engagement" in token_info.get("scopes", []),
+        }
+
+        # Test 2: Page info
         page_info = _get_facebook_page_info(
             page_id=page_id,
             access_token=access_token,
             log_tag=log_tag,
         )
 
-        # Test metrics (including deprecated ones to confirm status)
+        page_probe = {
+            "success": page_info.get("success", False),
+            "name": page_info.get("name") if page_info.get("success") else None,
+            "followers_count": page_info.get("followers_count") if page_info.get("success") else None,
+            "error": page_info.get("error") if not page_info.get("success") else None,
+        }
+
+        # Test 3: Test metrics (working vs deprecated)
         test_metrics = [
             # Should work
             "page_post_engagements",
@@ -1366,74 +1514,115 @@ class FacebookDiscoverMetricsResource(MethodView):
             "page_engaged_users",
         ]
         
-        url = f"https://graph.facebook.com/{GRAPH_VERSION}/{page_id}/insights"
         since, until = _get_date_range_last_n_days(7)
-        since_ts = _to_unix_timestamp(_parse_ymd(since))
-        until_ts = _to_unix_timestamp(_parse_ymd(until) + timedelta(days=1))
         
         working_metrics = []
         failed_metrics = []
         
         for metric in test_metrics:
-            params = {
-                "metric": metric,
-                "period": "day",
-                "since": since_ts,
-                "until": until_ts,
-                "access_token": access_token,
-            }
+            insights = _fetch_page_insights(
+                page_id=page_id,
+                access_token=access_token,
+                metrics=[metric],
+                period="day",
+                since=since,
+                until=until,
+                log_tag=log_tag,
+            )
             
-            try:
-                r = requests.get(url, params=params, timeout=15)
-                
-                if r.status_code < 400:
-                    payload = r.json() or {}
-                    data = payload.get("data", [])
-                    if data:
-                        working_metrics.append({
-                            "metric": metric,
-                            "has_data": True,
-                            "sample_count": len(data[0].get("values", [])) if data else 0,
-                        })
-                    else:
-                        working_metrics.append({
-                            "metric": metric,
-                            "has_data": False,
-                            "note": "Metric valid but no data returned",
-                        })
-                else:
-                    error_data = r.json() if r.text else {}
-                    parsed_error = _parse_fb_error(error_data)
-                    failed_metrics.append({
-                        "metric": metric,
-                        "status_code": r.status_code,
-                        "error": parsed_error.get("message"),
-                        "error_code": parsed_error.get("code"),
-                    })
-                    
-            except Exception as e:
+            if insights.get("valid_metrics"):
+                working_metrics.append({
+                    "metric": metric,
+                    "has_data": bool(insights.get("metrics", {}).get(metric)),
+                })
+            else:
+                invalid = insights.get("invalid_metrics", [{}])[0]
                 failed_metrics.append({
                     "metric": metric,
-                    "error": str(e),
+                    "error": invalid.get("error", {}).get("message") if invalid else "Unknown",
+                    "deprecated": metric in DEPRECATED_METRICS,
                 })
+
+        # Test 4: Posts list
+        posts_resp = _get_page_posts(
+            page_id=page_id,
+            access_token=access_token,
+            limit=5,
+            log_tag=log_tag,
+        )
+
+        posts_probe = {
+            "success": posts_resp.get("success", False),
+            "count": len(posts_resp.get("posts", [])) if posts_resp.get("success") else 0,
+            "sample_post_id": posts_resp.get("posts", [{}])[0].get("id") if posts_resp.get("success") and posts_resp.get("posts") else None,
+            "error": posts_resp.get("error") if not posts_resp.get("success") else None,
+        }
+
+        # Determine access level
+        has_basic = page_probe.get("success", False)
+        has_posts = posts_probe.get("success", False)
+        has_insights = len(working_metrics) > 0
+
+        scopes_detected = []
+        if has_basic:
+            scopes_detected.append("pages_show_list")
+        if has_posts:
+            scopes_detected.append("pages_read_engagement")
+        if has_insights:
+            scopes_detected.append("read_insights")
+
+        access_level = "none"
+        if has_basic:
+            access_level = "basic"
+        if has_basic and has_posts:
+            access_level = "standard"
+        if has_basic and has_posts and has_insights:
+            access_level = "full"
 
         return jsonify({
             "success": True,
             "data": {
+                "platform": PLATFORM_ID,
+                "graph_version": GRAPH_VERSION,
                 "destination_id": page_id,
-                "page_name": _pick(page_info, "name"),
-                "followers_count": _pick(page_info, "followers_count"),
-                "token_info": {
-                    "valid": token_info.get("valid"),
-                    "scopes": token_info.get("scopes", []),
-                    "has_insights_permission": "read_insights" in token_info.get("scopes", []),
+                
+                "probes": {
+                    "token": token_probe,
+                    "page_info": page_probe,
+                    "posts_list": posts_probe,
+                    "working_metrics": working_metrics,
+                    "failed_metrics": failed_metrics,
                 },
-                "working_metrics": working_metrics,
-                "failed_metrics": failed_metrics,
+                
+                "access_level": access_level,
+                "scopes_detected": scopes_detected,
+                
                 "recommendation": (
-                    "All core metrics working!" if len(working_metrics) >= 4 
-                    else "Reconnect Facebook with 'read_insights' permission"
+                    "Full analytics access available!" if access_level == "full"
+                    else "Standard access. Add read_insights permission for page analytics."
+                    if access_level == "standard"
+                    else "Basic access only. Add pages_read_engagement and read_insights permissions."
+                    if access_level == "basic"
+                    else "No access. Check token validity and permissions."
                 ),
+                
+                "notes": [
+                    "Many page metrics were deprecated Nov 2025 (New Pages Experience).",
+                    "Use followers_count from page fields instead of page_fans metric.",
+                    "Working metrics: page_post_engagements, page_posts_impressions, page_daily_follows_unique, page_video_views.",
+                    "Rate limits apply: ~200 calls per hour per page.",
+                ],
+                
+                "required_permissions": {
+                    "basic": ["pages_show_list"],
+                    "standard": ["pages_show_list", "pages_read_engagement"],
+                    "full": ["pages_show_list", "pages_read_engagement", "read_insights"],
+                },
+                
+                "available_page_metrics": sorted(list(VALID_PAGE_METRICS)),
+                "available_post_metrics": sorted(list(VALID_POST_METRICS)),
+                "deprecated_metrics": sorted(list(DEPRECATED_METRICS)),
+                "default_page_metrics": DEFAULT_PAGE_METRICS,
+                "default_post_metrics": DEFAULT_POST_METRICS,
             },
         }), HTTP_STATUS_CODES["OK"]
-        
