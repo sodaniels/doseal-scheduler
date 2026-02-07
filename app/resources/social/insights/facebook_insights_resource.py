@@ -1,4 +1,4 @@
-# app/resources/social/facebook_insights.py
+# app/resources/social/facebook_insights_resource.py
 
 from __future__ import annotations
 

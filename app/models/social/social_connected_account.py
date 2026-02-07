@@ -1,4 +1,5 @@
-# app/models/social_connected_account.py
+# app/models/social/social_connected_account.py
+
 from datetime import datetime
 from bson.objectid import ObjectId
 from ..base_model import BaseModel

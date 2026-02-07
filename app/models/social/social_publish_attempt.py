@@ -1,4 +1,4 @@
-# app/models/social_publish_attempt.py
+# app/models/social/social_publish_attempt.py
 from datetime import datetime
 from bson.objectid import ObjectId
 from ..base_model import BaseModel

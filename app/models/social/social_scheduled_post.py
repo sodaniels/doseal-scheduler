@@ -1,4 +1,4 @@
-# app/models/social_scheduled_post.py
+# app/models/social/social_scheduled_post.py
 from datetime import datetime
 from bson.objectid import ObjectId
 from ..base_model import BaseModel
