@@ -153,32 +153,6 @@ class InitiatePayment(MethodView):
                     message="Package is not available"
                 )
             
-            # Check if it's a free package
-            if package.get("price", 0) == 0:
-                # Free package - create subscription directly
-                success, subscription_id, error = SubscriptionService.create_subscription(
-                    business_id=business_id,
-                    user_id=user_id,
-                    user__id=user__id,
-                    package_id=package_id,
-                    payment_method=None,
-                    payment_reference=None
-                )
-                
-                if success:
-                    return prepared_response(
-                        status=True,
-                        status_code="CREATED",
-                        message="Subscription activated (Free plan)",
-                        data={"subscription_id": subscription_id}
-                    )
-                else:
-                    return prepared_response(
-                        status=False,
-                        status_code="INTERNAL_SERVER_ERROR",
-                        message=error or "Failed to create subscription"
-                    )
-                    
             
             amount = float(package.get("price", 0))
             if amount <= 0:
