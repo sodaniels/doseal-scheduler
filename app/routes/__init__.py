@@ -64,6 +64,7 @@ from ..resources import (
     blp_subscriber_transaction,
     blp_billpay,
     #socials
+    blp_subscription,
     blp_meta_oauth,
     blp_fb_webhook,
     blp_scheduled_posts,
@@ -88,6 +89,7 @@ from ..resources import (
     blp_pinterest_insights,
     blp_business_suspension,
     blp_notifications,
+    
 )
 
 
@@ -139,6 +141,7 @@ def register_social_routes(app, api):
         blp_social_dashboard,
         blp_business_suspension,
         blp_notifications,
+        blp_subscription
     ]
 
     for blueprint in blueprints:
