@@ -313,15 +313,81 @@ class Subscription(BaseModel):
             return False
 
     @classmethod
+    def payment_reference_exists(cls, payment_reference: str) -> bool:
+        if not payment_reference:
+            return False
+        col = db.get_collection(cls.collection_name)
+        return col.find_one(
+            {"payment_reference": payment_reference},
+            {"_id": 1}
+        ) is not None
+    
+    @classmethod
     def create_indexes(cls) -> bool:
         log_tag = f"[subscription_model.py][Subscription][create_indexes]"
+
         try:
             col = db.get_collection(cls.collection_name)
-            col.create_index([("business_id", 1), ("hashed_status", 1)])
-            col.create_index([("business_id", 1), ("created_at", -1)])
-            col.create_index([("end_date", 1)])
-            col.create_index([("next_payment_date", 1)])
+
+            # --------------------------------------------------
+            # 1) Core access lookup (your most common query):
+            #    get current subscription for business (trial/active)
+            # --------------------------------------------------
+            col.create_index(
+                [("business_id", 1), ("hashed_status", 1), ("created_at", -1)],
+                name="idx_business_status_created",
+            )
+
+            # --------------------------------------------------
+            # 2) Fast listing / history for a business
+            # --------------------------------------------------
+            col.create_index(
+                [("business_id", 1), ("created_at", -1)],
+                name="idx_business_created",
+            )
+
+            # --------------------------------------------------
+            # 3) Renewal / billing tasks
+            # --------------------------------------------------
+            col.create_index(
+                [("next_payment_date", 1)],
+                name="idx_next_payment_date",
+            )
+
+            col.create_index(
+                [("end_date", 1)],
+                name="idx_end_date",
+            )
+
+            # Optional but useful for cron jobs:
+            # "find all active subs expiring soon for a business"
+            col.create_index(
+                [("hashed_status", 1), ("end_date", 1)],
+                name="idx_status_end_date",
+            )
+
+            # --------------------------------------------------
+            # 4) Plan / package analytics (optional but cheap)
+            # --------------------------------------------------
+            col.create_index(
+                [("business_id", 1), ("package_id", 1), ("created_at", -1)],
+                name="idx_business_package_created",
+            )
+
+            # --------------------------------------------------
+            # 5) 🔐 Best uniqueness rule for payment_reference
+            #    (prevents duplicates within the same business)
+            # --------------------------------------------------
+            col.create_index(
+                [("business_id", 1), ("payment_reference", 1)],
+                unique=True,
+                sparse=True,  # allows docs without payment_reference
+                name="uniq_business_payment_reference",
+            )
+
+            Log.info(f"{log_tag} Indexes created successfully")
             return True
+
         except Exception as e:
-            Log.error(f"{log_tag} Error creating indexes: {str(e)}")
+            Log.error(f"{log_tag} Error creating indexes: {str(e)}", exc_info=True)
             return False

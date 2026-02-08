@@ -122,6 +122,7 @@ class HubtelWebhook(MethodView):
                 # Payment successful
                 Log.info(f"{log_tag} Payment successful - Transaction ID: {parsed['transaction_id']}")
                 
+                
                 # Update payment status
                 Payment.update_status(
                     payment_id,
@@ -146,6 +147,7 @@ class HubtelWebhook(MethodView):
                 user_id = payment.get('user_id')
                 user__id = payment.get('user__id')
                 billing_period = metadata.get('billing_period', 'monthly')
+                referernce = parsed.get("client_reference")
                 
                 
                 if not old_package_id:
@@ -156,7 +158,7 @@ class HubtelWebhook(MethodView):
                         user__id=user__id,
                         package_id=package_id,
                         payment_method=PAYMENT_METHODS["HUBTEL"],
-                        payment_reference=parsed['transaction_id'],
+                        payment_reference=referernce,
                         payment_done=True
                     )
                     

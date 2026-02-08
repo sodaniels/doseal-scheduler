@@ -5,11 +5,13 @@ from bson import ObjectId
 from typing import Optional, Tuple
 
 from ...models.admin.package_model import Package
+from ...models.admin.payment import Payment
 from ...models.admin.subscription_model import Subscription
 from ...utils.logger import Log
 from ...extensions.db import db
 from ...utils.plan.plan_change import PlanChangeService
 from ...utils.crypt import hash_data, encrypt_data
+from ...utils.json_response import prepared_response
 
 
 class SubscriptionService:
@@ -444,6 +446,17 @@ class SubscriptionService:
             # If auto_renew not provided, reuse old value
             if auto_renew is None:
                 auto_renew = bool(old.get("auto_renew", True))
+                
+            #check if paymebt actually exists
+            check_payment = Payment.get_by_reference(payment_reference)
+            if not check_payment:
+                Log.info(f"{log_tag} No payment with this reference was found.")
+                return False, None, "No payment with this reference was found."
+            
+            # check if reference exists
+            if payment_reference and Subscription.payment_reference_exists(payment_reference):
+                Log.info(f"{log_tag} This payment reference has already been used.")
+                return False, None, "This payment reference has already been used."
 
             # ✅ create NEW term (do not edit old)
             sub = Subscription(
