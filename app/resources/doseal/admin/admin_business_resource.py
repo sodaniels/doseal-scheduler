@@ -1,9 +1,9 @@
-import bcrypt
-import jwt
-import os
-import time
-import secrets
 
+# app/resources/admin/admin_business_resource.py
+
+from __future__ import annotations
+
+import bcrypt, jwt, os, time, secrets, json
 from functools import wraps
 from redis import Redis
 from functools import wraps
@@ -35,9 +35,12 @@ from ....utils.logger import Log # import logging
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
 from ....utils.json_response import prepared_response
+from ....utils.calculation_engine import hash_transaction
 from ....utils.redis import (
     set_redis_with_expiry, set_redis
 )
+from ....utils.generators import generate_otp
+
 from ....constants.service_code import (
     HTTP_STATUS_CODES, SYSTEM_USERS, BUSINESS_FIELDS
 )
@@ -46,6 +49,7 @@ from ....services.email_service import (
     send_user_registration_email,
     send_new_contact_sale_email,
     send_password_changed_email,
+    send_otp_email
 )
 
 from ....utils.generators import (
@@ -512,7 +516,7 @@ class RegisterBusinessResource(MethodView):
 #-------------------------------------------------------
 # LOGIN
 #-------------------------------------------------------
-@blp_business_auth.route("/auth/login", methods=["POST"])
+@blp_business_auth.route("/auth/login/execute", methods=["POST"])
 class LoginBusinessResource(MethodView):
     @login_ip_limiter("login")
     @login_user_limiter("login")
@@ -651,6 +655,195 @@ class LoginBusinessResource(MethodView):
             client_ip=client_ip, 
             log_tag=log_tag, 
         )
+  
+#-------------------------------------------------------
+# LOGIN
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/login/initiate", methods=["POST"])
+class LoginBusinessInitiateResource(MethodView):
+    @login_ip_limiter("login")
+    @login_user_limiter("login")
+    @blp_business_auth.arguments(LoginSchema, location="form")
+    @blp_business_auth.response(200, LoginSchema)
+    @blp_business_auth.doc(
+        summary="Login to an existing business account",
+        description="This endpoint allows a business to log in using their email and password. A valid email and password are required. On successful login, an access token is returned for subsequent authorized requests.",
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": LoginSchema,  # Assuming you have a LoginSchema to validate the input data
+                    "example": {
+                        "email": "johndoe@example.com",
+                        "password": "SecurePass123"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "Login successful, returns an access token",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "access_token": "your_access_token_here",
+                            "token_type": "Bearer",
+                            "expires_in": 86400  # The token expiration time in seconds (1 day)
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Invalid login data",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid email or password"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized request",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid authentication credentials"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def post(self, user_data):
+        client_ip = request.remote_addr
+        log_tag = '[admin_business_resource.py][LoginBusinessInitiateResource][post]'
+        Log.info(f"{log_tag} [{client_ip}][{user_data['email']}] initiating loging request")
+        
+        client_ip = request.remote_addr
+    
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized request."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        
+        email = user_data.get("email")
+    
+        # Check if the user exists based on email
+        user = User.get_user_by_email(email)
+        if user is None:
+           Log.info(f"{log_tag} [{client_ip}][{email}]: login email does not exist")
+           return prepared_response(
+                False,
+                "UNAUTHORIZED",
+                "Invalid email or password",
+            )
+
+        # Check if the user's credentials are not correct
+        if not User.verify_password(email, user_data["password"]):
+            Log.info(f"{log_tag} [{client_ip}][{email}]: email and password combination failed")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Invalid email or password",
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+            
+            
+        Log.info(f"{log_tag} [{client_ip}][{email}]: login info matched")
+        
+        client_id = decrypt_data(user["client_id"])
+        
+        business = Business.get_business_by_client_id(client_id)
+        if not business: 
+            abort(401, message="Your access has been revoked. Contact your administrator")
+            
+        
+        try:
+            test_email = os.getenv("EMAIL_FOR_TESTING")
+            
+            app_name = os.getenv("APP_NAME", "Schedulefy")
+            
+            redisKey = f'login_otp_token_{email}'
+            
+            pin = None
+            
+            # needed for automated testing
+            if (email == test_email):
+                testing_otp = os.getenv("AUTOMATED_TEST_OTP", "200300")
+                pin = testing_otp
+            else:
+                pin = generate_otp()
+            
+            fullname = decrypt_data(business.get("first_name")) + " " +decrypt_data(business.get("last_name"))
+            
+            message = f'Your {app_name} security code is {pin} and expires in 5 minutes. If you did not initiate this, DO NOT APPROVE IT.'
+            
+            set_redis_with_expiry(redisKey, 300, pin)
+            
+            try:
+                result = send_otp_email(
+                    email=email,
+                    otp=pin,
+                    message=message,
+                    fullname=fullname,
+                    expiry_minutes=5,
+                )
+                Log.info(f"Login Email sent result={result}")
+            except Exception as e:
+                Log.error(f"Login Email sending failed: {e}")
+                raise
+            
+            return jsonify({
+                "success": True,
+                "status_code": HTTP_STATUS_CODES["OK"],
+                "message": "OTP has been sent to email",
+                "message_to_show": "We sent an OTP to your email address. Please provide this to proceed.",
+            }), HTTP_STATUS_CODES["OK"]
+        except Exception as e:
+            Log.error(f"{log_tag} Error occurred: {str(e)}")
+            
+        
+        
+        
+        
+        
+        # # when user was not found
+        # if user is None:
+        #     Log.info(f"{log_tag}[{client_ip}] user not found.") 
+        #     return prepared_response(False, "NOT_FOUND", f"User not found.")
+        
+        # # proceed to create token when user payload was created
+        # return create_token_response_admin(
+        #     user=user,
+        #     account_type=decrypted_data,
+        #     client_ip=client_ip, 
+        #     log_tag=log_tag, 
+        # )
   
 #-------------------------------------------------------
 # CHANGE PASSWORD

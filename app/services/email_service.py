@@ -867,6 +867,58 @@ def send_daily_post_summary_email(
         raise
 
 
+# ---------------------------------------------
+# EMAIL OTP FOR LOGIN VERIFICATION
+# ---------------------------------------------
+def send_otp_email(
+    email: str,
+    otp: str,
+    message: Optional[str] = None,
+    fullname: Optional[str] = None,
+    expiry_minutes: int = 5,
+) -> Dict[str, Any]:
+    """
+    Sends an OTP verification code to the user.
+    Used for login verification, 2FA, or sensitive actions.
+    """
+
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    subject = f"{otp} is your {cfg.from_name} verification code"
+
+    # Default message if none provided
+    default_message = "Use the code below to complete your sign-in. This code is valid for a limited time."
+    
+    text = (
+        f"Hi {fullname or 'there'},\n\n"
+        f"{message or default_message}\n\n"
+        f"Your verification code is: {otp}\n\n"
+        f"This code expires in {expiry_minutes} minutes.\n\n"
+        f"If you didn't request this code, you can safely ignore this email.\n\n"
+        f"— {cfg.from_name}\n"
+    )
+
+    try:
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/otp_email.html",
+            context={
+                "app_name": cfg.from_name,
+                "email": email,
+                "fullname": fullname,
+                "otp": otp,
+                "message": message,
+                "expiry_minutes": expiry_minutes,
+            },
+            text_fallback=text,
+            tags=["security", "otp", "verification"],
+            meta={"email_type": "otp"},
+        )
+    except Exception as exc:
+        Log.error(f"send_otp_email failed: {exc}")
+        raise
 
 
 
