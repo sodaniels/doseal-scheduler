@@ -12,7 +12,6 @@ class NotificationService:
     def is_enabled(
         *,
         business_id: str,
-        user__id: str,
         channel: str,          # "email" | "in_app"
         item_key: str,         # e.g. "scheduled_send_failed"
         default: bool = False,
@@ -21,7 +20,7 @@ class NotificationService:
         Returns the current toggle.
         Creates defaults if missing.
         """
-        doc = NotificationSettings.get_or_create_defaults(business_id=business_id, user__id=user__id)
+        doc = NotificationSettings.get_or_create_defaults(business_id=business_id)
         channels = doc.get("channels") or {}
         ch = channels.get(channel) or {}
         val = ch.get(item_key)

@@ -444,9 +444,427 @@ def send_password_changed_email(
         raise
 
 
+# ---------------------------------------------
+# EMAIL TO USER WHEN SCHEDULED POST IS PUBLISHED
+# ---------------------------------------------
+def send_post_published_email(
+    email: str,
+    fullname: Optional[str] = None,
+    post_text: Optional[str] = None,
+    platforms: Optional[List[str]] = None,      # e.g. ["facebook", "instagram"]
+    account_names: Optional[List[str]] = None,  # e.g. ["My Business Page", "@mybrand"]
+    scheduled_time: Optional[str] = None,       # e.g. "Feb 7, 2026 at 2:30 PM"
+    published_time: Optional[str] = None,       # e.g. "Feb 7, 2026 at 2:30 PM"
+    media_url: Optional[str] = None,            # thumbnail/preview URL
+    media_type: Optional[str] = None,           # "image", "video", "carousel", "reel", "story"
+    media_count: Optional[int] = None,          # for carousel
+    post_url: Optional[str] = None,             # link to view the post
+    post_ids: Optional[List[str]] = None,       # platform post IDs
+    dashboard_url: Optional[str] = None,        # link to dashboard
+) -> Dict[str, Any]:
+    """
+    Sends a notification when a user's scheduled post has been published.
+    This confirms the post went live on the specified platforms.
+    """
+
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    # Build subject line
+    platform_count = len(platforms) if platforms else 0
+    if platform_count == 1:
+        subject = f"✓ Your post is now live on {platforms[0].capitalize()}"
+    elif platform_count > 1:
+        subject = f"✓ Your post is now live on {platform_count} platforms"
+    else:
+        subject = f"✓ Your scheduled post is now live"
+
+    # Build plain text fallback
+    platforms_str = ", ".join([p.capitalize() for p in (platforms or [])]) or "your connected accounts"
+    accounts_str = ", ".join(account_names) if account_names else ""
+    
+    text_lines = [
+        f"Hi {fullname or 'there'},",
+        "",
+        f"Great news! Your scheduled post has been successfully published to {platforms_str}.",
+        "",
+    ]
+    
+    if post_text:
+        preview = post_text[:200] + "..." if len(post_text) > 200 else post_text
+        text_lines.extend([
+            "Post preview:",
+            f'"{preview}"',
+            "",
+        ])
+    
+    text_lines.extend([
+        f"Scheduled for: {scheduled_time or '—'}",
+        f"Published at: {published_time or 'Just now'}",
+    ])
+    
+    if accounts_str:
+        text_lines.append(f"Accounts: {accounts_str}")
+    
+    text_lines.extend([
+        "",
+        f"View your post: {post_url or dashboard_url or 'Check your dashboard'}",
+        "",
+        "Tip: Check back in a few hours to see how your post is performing!",
+        "",
+        f"— {cfg.from_name}",
+    ])
+
+    text = "\n".join(text_lines)
+
+    try:
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/post_published.html",
+            context={
+                "app_name": cfg.from_name,
+                "email": email,
+                "fullname": fullname,
+                "post_text": post_text,
+                "platforms": platforms or [],
+                "account_names": account_names,
+                "scheduled_time": scheduled_time,
+                "published_time": published_time,
+                "media_url": media_url,
+                "media_type": media_type,
+                "media_count": media_count,
+                "post_url": post_url,
+                "post_ids": post_ids,
+                "dashboard_url": dashboard_url or os.getenv("APP_DASHBOARD_URL"),
+            },
+            text_fallback=text,
+            tags=["social", "post-published", "notification"],
+            meta={
+                "email_type": "post_published",
+                "platforms": platforms,
+                "post_ids": post_ids,
+            },
+        )
+    except Exception as exc:
+        Log.error(f"[email_service.py][send_post_published_email] send_post_published_email failed: {exc}")
+        raise
 
 
+# ---------------------------------------------
+# EMAIL TO USER WHEN SCHEDULED POST FAILS
+# ---------------------------------------------
+def send_post_failed_email(
+    email: str,
+    fullname: Optional[str] = None,
+    post_text: Optional[str] = None,
+    platforms: Optional[List[str]] = None,
+    account_names: Optional[List[str]] = None,
+    scheduled_time: Optional[str] = None,
+    failed_time: Optional[str] = None,
+    error_message: Optional[str] = None,
+    error_code: Optional[str] = None,
+    failed_platforms: Optional[List[str]] = None,  # platforms that failed
+    successful_platforms: Optional[List[str]] = None,  # platforms that succeeded (partial failure)
+    retry_url: Optional[str] = None,
+    dashboard_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Sends a notification when a user's scheduled post fails to publish.
+    Includes error details and retry options.
+    """
 
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    # Determine if partial or complete failure
+    is_partial = bool(successful_platforms and len(successful_platforms) > 0)
+    
+    if is_partial:
+        subject = f"⚠️ Your post partially published - action needed"
+    else:
+        subject = f"❌ Your scheduled post failed to publish"
+
+    # Build plain text fallback
+    failed_str = ", ".join([p.capitalize() for p in (failed_platforms or platforms or [])]) or "some platforms"
+    
+    text_lines = [
+        f"Hi {fullname or 'there'},",
+        "",
+    ]
+    
+    if is_partial:
+        success_str = ", ".join([p.capitalize() for p in successful_platforms])
+        text_lines.extend([
+            f"Your scheduled post was published to {success_str}, but failed on {failed_str}.",
+            "",
+        ])
+    else:
+        text_lines.extend([
+            f"Unfortunately, your scheduled post failed to publish to {failed_str}.",
+            "",
+        ])
+    
+    if post_text:
+        preview = post_text[:150] + "..." if len(post_text) > 150 else post_text
+        text_lines.extend([
+            "Post preview:",
+            f'"{preview}"',
+            "",
+        ])
+    
+    text_lines.extend([
+        f"Scheduled for: {scheduled_time or '—'}",
+        f"Failed at: {failed_time or 'Just now'}",
+    ])
+    
+    if error_message:
+        text_lines.extend([
+            "",
+            f"Error: {error_message}",
+        ])
+    
+    if error_code:
+        text_lines.append(f"Error code: {error_code}")
+    
+    text_lines.extend([
+        "",
+        "What to do:",
+        "1. Check that your social accounts are still connected",
+        "2. Verify your post meets platform requirements",
+        "3. Try posting again or contact support if the issue persists",
+        "",
+        f"Retry or edit your post: {retry_url or dashboard_url or 'Check your dashboard'}",
+        "",
+        f"— {cfg.from_name}",
+    ])
+
+    text = "\n".join(text_lines)
+
+    try:
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/post_failed.html",
+            context={
+                "app_name": cfg.from_name,
+                "email": email,
+                "fullname": fullname,
+                "post_text": post_text,
+                "platforms": platforms or [],
+                "account_names": account_names,
+                "scheduled_time": scheduled_time,
+                "failed_time": failed_time,
+                "error_message": error_message,
+                "error_code": error_code,
+                "failed_platforms": failed_platforms or platforms or [],
+                "successful_platforms": successful_platforms or [],
+                "is_partial_failure": is_partial,
+                "retry_url": retry_url,
+                "dashboard_url": dashboard_url or os.getenv("APP_DASHBOARD_URL"),
+                "settings_url": os.getenv("APP_SETTINGS_URL"),
+                "support_email": os.getenv("SUPPORT_EMAIL"),
+                "sender_domain": os.getenv("SENDER_DOMAIN", "doseal.com"),
+            },
+            text_fallback=text,
+            tags=["social", "post-failed", "notification", "alert"],
+            meta={
+                "email_type": "post_failed",
+                "platforms": platforms,
+                "failed_platforms": failed_platforms,
+                "error_code": error_code,
+            },
+        )
+    except Exception as exc:
+        Log.error(f"send_post_failed_email failed: {exc}")
+        raise
+
+
+# ---------------------------------------------
+# EMAIL TO USER FOR UPCOMING SCHEDULED POST REMINDER
+# ---------------------------------------------
+def send_post_reminder_email(
+    email: str,
+    fullname: Optional[str] = None,
+    post_text: Optional[str] = None,
+    platforms: Optional[List[str]] = None,
+    account_names: Optional[List[str]] = None,
+    scheduled_time: Optional[str] = None,
+    time_until: Optional[str] = None,           # e.g. "1 hour", "30 minutes"
+    media_url: Optional[str] = None,
+    media_type: Optional[str] = None,
+    edit_url: Optional[str] = None,
+    cancel_url: Optional[str] = None,
+    dashboard_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Sends a reminder before a scheduled post goes live.
+    Gives user a chance to review, edit, or cancel.
+    """
+
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    subject = f"⏰ Reminder: Your post goes live in {time_until or 'soon'}"
+
+    platforms_str = ", ".join([p.capitalize() for p in (platforms or [])]) or "your connected accounts"
+    
+    text_lines = [
+        f"Hi {fullname or 'there'},",
+        "",
+        f"Just a heads up! Your scheduled post will be published to {platforms_str} in {time_until or 'soon'}.",
+        "",
+    ]
+    
+    if post_text:
+        preview = post_text[:200] + "..." if len(post_text) > 200 else post_text
+        text_lines.extend([
+            "Post preview:",
+            f'"{preview}"',
+            "",
+        ])
+    
+    text_lines.extend([
+        f"Scheduled for: {scheduled_time or '—'}",
+        "",
+        "Need to make changes?",
+        f"Edit post: {edit_url or dashboard_url or 'Check your dashboard'}",
+        f"Cancel post: {cancel_url or dashboard_url or 'Check your dashboard'}",
+        "",
+        f"— {cfg.from_name}",
+    ])
+
+    text = "\n".join(text_lines)
+
+    try:
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/post_reminder.html",
+            context={
+                "app_name": cfg.from_name,
+                "email": email,
+                "fullname": fullname,
+                "post_text": post_text,
+                "platforms": platforms or [],
+                "account_names": account_names,
+                "scheduled_time": scheduled_time,
+                "time_until": time_until,
+                "media_url": media_url,
+                "media_type": media_type,
+                "edit_url": edit_url,
+                "cancel_url": cancel_url,
+                "dashboard_url": dashboard_url or os.getenv("APP_DASHBOARD_URL"),
+                "settings_url": os.getenv("APP_SETTINGS_URL"),
+                "support_email": os.getenv("SUPPORT_EMAIL"),
+                "sender_domain": os.getenv("SENDER_DOMAIN", "doseal.com"),
+            },
+            text_fallback=text,
+            tags=["social", "post-reminder", "notification"],
+            meta={
+                "email_type": "post_reminder",
+                "platforms": platforms,
+            },
+        )
+    except Exception as exc:
+        Log.error(f"send_post_reminder_email failed: {exc}")
+        raise
+
+
+# ---------------------------------------------
+# BATCH NOTIFICATION: DAILY POST SUMMARY
+# ---------------------------------------------
+def send_daily_post_summary_email(
+    email: str,
+    fullname: Optional[str] = None,
+    date: Optional[str] = None,                 # e.g. "February 7, 2026"
+    posts_published: int = 0,
+    posts_scheduled: int = 0,
+    posts_failed: int = 0,
+    top_performing_post: Optional[Dict[str, Any]] = None,  # {text, platform, impressions, engagements}
+    total_impressions: int = 0,
+    total_engagements: int = 0,
+    dashboard_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Sends a daily summary of post activity.
+    Includes published, scheduled, failed counts and top performer.
+    """
+
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    subject = f"📊 Your daily post summary for {date or 'today'}"
+
+    text_lines = [
+        f"Hi {fullname or 'there'},",
+        "",
+        f"Here's your social media summary for {date or 'today'}:",
+        "",
+        f"📤 Posts published: {posts_published}",
+        f"📅 Posts scheduled: {posts_scheduled}",
+    ]
+    
+    if posts_failed > 0:
+        text_lines.append(f"❌ Posts failed: {posts_failed}")
+    
+    text_lines.extend([
+        "",
+        f"👀 Total impressions: {total_impressions:,}",
+        f"💬 Total engagements: {total_engagements:,}",
+    ])
+    
+    if top_performing_post:
+        text_lines.extend([
+            "",
+            "🏆 Top performing post:",
+            f'"{top_performing_post.get("text", "")[:100]}..."',
+            f"Platform: {top_performing_post.get('platform', '—').capitalize()}",
+            f"Impressions: {top_performing_post.get('impressions', 0):,}",
+            f"Engagements: {top_performing_post.get('engagements', 0):,}",
+        ])
+    
+    text_lines.extend([
+        "",
+        f"View full analytics: {dashboard_url or 'Check your dashboard'}",
+        "",
+        f"— {cfg.from_name}",
+    ])
+
+    text = "\n".join(text_lines)
+
+    try:
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/daily_post_summary.html",
+            context={
+                "app_name": cfg.from_name,
+                "email": email,
+                "fullname": fullname,
+                "date": date,
+                "posts_published": posts_published,
+                "posts_scheduled": posts_scheduled,
+                "posts_failed": posts_failed,
+                "top_performing_post": top_performing_post,
+                "total_impressions": total_impressions,
+                "total_engagements": total_engagements,
+                "dashboard_url": dashboard_url or os.getenv("APP_DASHBOARD_URL"),
+                "settings_url": os.getenv("APP_SETTINGS_URL"),
+                "support_email": os.getenv("SUPPORT_EMAIL"),
+                "sender_domain": os.getenv("SENDER_DOMAIN", "doseal.com"),
+            },
+            text_fallback=text,
+            tags=["social", "daily-summary", "analytics"],
+            meta={
+                "email_type": "daily_post_summary",
+                "date": date,
+                "posts_published": posts_published,
+            },
+        )
+    except Exception as exc:
+        Log.error(f"send_daily_post_summary_email failed: {exc}")
+        raise
 
 
 

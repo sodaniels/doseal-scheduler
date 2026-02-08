@@ -35,10 +35,10 @@ class NotificationSettings(BaseModel):
         return True
 
     @classmethod
-    def get_or_create_defaults(cls, *, business_id: str, user__id: str) -> Dict[str, Any]:
+    def get_or_create_defaults(cls, *, business_id: str) -> Dict[str, Any]:
         col = db_ext.get_collection(cls.collection_name)
 
-        q = {"business_id": ObjectId(str(business_id)), "user__id": ObjectId(str(user__id))}
+        q = {"business_id": ObjectId(str(business_id))}
         doc = col.find_one(q)
         if doc:
             doc["_id"] = str(doc["_id"])
@@ -51,7 +51,6 @@ class NotificationSettings(BaseModel):
         now = cls._utc_now()
         new_doc = {
             "business_id": ObjectId(str(business_id)),
-            "user__id": ObjectId(str(user__id)),
             "channels": build_default_settings(),
             "created_at": now,
             "updated_at": now,
@@ -85,7 +84,7 @@ class NotificationSettings(BaseModel):
         col = db_ext.get_collection(cls.collection_name)
 
         # ensure doc exists first
-        _ = cls.get_or_create_defaults(business_id=business_id, user__id=user__id)
+        _ = cls.get_or_create_defaults(business_id=business_id)
 
         updates: Dict[str, Any] = {}
         channels = (patch or {}).get("channels") or {}
@@ -103,7 +102,7 @@ class NotificationSettings(BaseModel):
 
         if not updates:
             # nothing to change; return current doc
-            return cls.get_or_create_defaults(business_id=business_id, user__id=user__id)
+            return cls.get_or_create_defaults(business_id=business_id)
 
         updates["updated_at"] = cls._utc_now()
 
@@ -116,7 +115,7 @@ class NotificationSettings(BaseModel):
 
         if not doc:
             Log.info(f"{log_tag} update failed unexpectedly. business_id={business_id} user__id={user__id}")
-            return cls.get_or_create_defaults(business_id=business_id, user__id=user__id)
+            return cls.get_or_create_defaults(business_id=business_id)
 
         doc["_id"] = str(doc["_id"])
         doc["business_id"] = str(doc["business_id"])

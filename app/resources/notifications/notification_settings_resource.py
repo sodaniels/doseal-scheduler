@@ -53,7 +53,7 @@ class NotificationSettingsGetResource(MethodView):
             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
         try:
-            doc = NotificationSettings.get_or_create_defaults(business_id=business_id, user__id=user__id)
+            doc = NotificationSettings.get_or_create_defaults(business_id=business_id)
             return jsonify({"success": True, "data": doc}), HTTP_STATUS_CODES["OK"]
         except Exception as e:
             Log.error(f"{log_tag} error: {e}")

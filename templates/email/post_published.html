@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width" />
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <title>Your Scheduled Post is Live | {{ app_name }}</title>
+
+  <style>
+    /* Basic resets */
+    body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+    img { -ms-interpolation-mode:bicubic; border:0; height:auto; line-height:100%; outline:none; text-decoration:none; }
+    table { border-collapse:collapse !important; }
+    body { margin:0 !important; padding:0 !important; width:100% !important; height:100% !important; background:#f6f6f6; }
+
+    /* Container */
+    .wrapper { width:100%; background:#f6f6f6; padding:24px 12px; }
+    .container { max-width:600px; margin:0 auto; background:#ffffff; border:1px solid #e9e9e9; border-radius:10px; overflow:hidden; }
+    .header { padding:20px 24px; background:#ffffff; }
+    .content { padding:24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:#111827; font-size:14px; line-height:1.7; }
+    .footer { padding:18px 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:#6b7280; font-size:12px; line-height:1.6; background:#ffffff; border-top:1px solid #f1f1f1; }
+
+    h1 { margin:0 0 10px; font-size:20px; line-height:1.3; }
+    p { margin:0 0 14px; }
+    .muted { color:#6b7280; font-size:13px; }
+    .btn-wrap { padding:10px 0 18px; }
+    .btn {
+      display:inline-block;
+      background:#2563eb;
+      color:#ffffff !important;
+      text-decoration:none;
+      font-weight:700;
+      border-radius:8px;
+      padding:12px 18px;
+      margin-right:8px;
+      margin-bottom:8px;
+    }
+    .btn-secondary {
+      background:#6b7280;
+    }
+    .btn-success {
+      background:#059669;
+    }
+
+    /* Post preview */
+    .post-preview {
+      background:#f9fafb;
+      border:1px solid #e5e7eb;
+      border-radius:8px;
+      padding:16px;
+      margin:16px 0;
+    }
+    .post-text {
+      font-size:14px;
+      color:#374151;
+      line-height:1.6;
+      margin:0 0 12px;
+      white-space:pre-wrap;
+      word-wrap:break-word;
+    }
+    .post-image {
+      max-width:100%;
+      border-radius:6px;
+      margin-top:12px;
+    }
+
+    /* Platform badges */
+    .platforms { margin:12px 0 16px; }
+    .platform-badge {
+      display:inline-block;
+      padding:6px 12px;
+      border-radius:20px;
+      font-size:12px;
+      font-weight:600;
+      margin-right:6px;
+      margin-bottom:6px;
+      color:#ffffff;
+    }
+    .platform-facebook { background:#1877f2; }
+    .platform-instagram { background:#e4405f; }
+    .platform-twitter, .platform-x { background:#000000; }
+    .platform-linkedin { background:#0a66c2; }
+    .platform-tiktok { background:#000000; }
+    .platform-pinterest { background:#bd081c; }
+
+    /* Status indicator */
+    .status-success {
+      display:inline-block;
+      background:#d1fae5;
+      color:#065f46;
+      padding:4px 10px;
+      border-radius:12px;
+      font-size:12px;
+      font-weight:600;
+    }
+
+    /* Details table */
+    .details-table {
+      width:100%;
+      margin:16px 0;
+      font-size:13px;
+    }
+    .details-table td {
+      padding:8px 0;
+      border-bottom:1px solid #f3f4f6;
+      vertical-align:top;
+    }
+    .details-table .label {
+      color:#6b7280;
+      width:120px;
+    }
+    .details-table .value {
+      color:#111827;
+      font-weight:500;
+    }
+
+    /* Mobile */
+    @media (max-width: 640px) {
+      .wrapper { padding:14px 10px; }
+      .content { padding:18px; }
+      .header { padding:16px 18px; }
+      .footer { padding:16px 18px; }
+      .btn { display:block; text-align:center; margin-right:0; }
+      .platform-badge { margin-bottom:8px; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrapper">
+    <div class="container">
+
+      <!-- Header -->
+      <div class="header">
+        <table role="presentation" width="100%">
+          <tr>
+            <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#111827;">
+              <strong>{{ app_name }}</strong>
+            </td>
+            <td align="right" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#6b7280; font-size:12px;">
+              <span class="status-success">✓ Published</span>
+            </td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Content -->
+      <div class="content">
+        <h1>🎉 Your scheduled post is now live!</h1>
+
+        <p>
+          Great news{{ ", " + fullname if fullname else "" }}! Your scheduled post has been successfully published to 
+          {% if platforms|length == 1 %}
+            {{ platforms[0]|capitalize }}.
+          {% else %}
+            {{ platforms|length }} platforms.
+          {% endif %}
+        </p>
+
+        <!-- Platforms published to -->
+        <div class="platforms">
+          {% for platform in platforms %}
+            <span class="platform-badge platform-{{ platform|lower }}">
+              {% if platform|lower == 'facebook' %}📘 Facebook
+              {% elif platform|lower == 'instagram' %}📸 Instagram
+              {% elif platform|lower == 'twitter' or platform|lower == 'x' %}𝕏 X (Twitter)
+              {% elif platform|lower == 'linkedin' %}💼 LinkedIn
+              {% elif platform|lower == 'tiktok' %}🎵 TikTok
+              {% elif platform|lower == 'pinterest' %}📌 Pinterest
+              {% else %}{{ platform|capitalize }}
+              {% endif %}
+            </span>
+          {% endfor %}
+        </div>
+
+        <!-- Post preview -->
+        <div class="post-preview">
+          <p class="post-text">{{ post_text|truncate(280, True, '...') if post_text else 'No caption' }}</p>
+          
+          {% if media_url %}
+            <img src="{{ media_url }}" alt="Post media" class="post-image" />
+          {% endif %}
+          
+          {% if media_type %}
+            <p class="muted" style="margin:8px 0 0; font-size:11px;">
+              {% if media_type == 'image' %}📷 Image
+              {% elif media_type == 'video' %}🎬 Video
+              {% elif media_type == 'carousel' %}🖼️ Carousel ({{ media_count|default(1) }} items)
+              {% elif media_type == 'reel' %}🎞️ Reel
+              {% elif media_type == 'story' %}📱 Story
+              {% else %}{{ media_type|capitalize }}
+              {% endif %}
+            </p>
+          {% endif %}
+        </div>
+
+        <!-- Post details -->
+        <table class="details-table" role="presentation">
+          <tr>
+            <td class="label">Scheduled for</td>
+            <td class="value">{{ scheduled_time|default('—') }}</td>
+          </tr>
+          <tr>
+            <td class="label">Published at</td>
+            <td class="value">{{ published_time|default('Just now') }}</td>
+          </tr>
+          {% if account_names %}
+          <tr>
+            <td class="label">Accounts</td>
+            <td class="value">{{ account_names|join(', ') }}</td>
+          </tr>
+          {% endif %}
+          {% if post_ids %}
+          <tr>
+            <td class="label">Post IDs</td>
+            <td class="value" style="font-family: ui-monospace, monospace; font-size:11px; word-break:break-all;">
+              {{ post_ids|join(', ') }}
+            </td>
+          </tr>
+          {% endif %}
+        </table>
+
+        <!-- Action buttons -->
+        <div class="btn-wrap">
+          {% if post_url %}
+            <a class="btn btn-success" href="{{ post_url }}" target="_blank" rel="noopener noreferrer">
+              View Post
+            </a>
+          {% endif %}
+          
+          {% if dashboard_url %}
+            <a class="btn btn-secondary" href="{{ dashboard_url }}" target="_blank" rel="noopener noreferrer">
+              Go to Dashboard
+            </a>
+          {% endif %}
+        </div>
+
+        <p class="muted">
+          💡 <strong>Tip:</strong> Check back in a few hours to see how your post is performing. 
+          Early engagement often predicts long-term reach!
+        </p>
+
+        <p style="margin-top:18px;">
+          Keep creating great content! 🚀<br/>
+          — {{ app_name }}
+        </p>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <p style="margin:0 0 10px;">
+          Want to manage your notification preferences? 
+          <a href="{{ settings_url|default('#') }}" style="color:#2563eb; text-decoration:underline;">
+            Update settings
+          </a>
+        </p>
+
+        <p style="margin:0 0 10px;">
+          Need help? Contact support at
+          <a href="mailto:{{ support_email|default('support@' ~ (sender_domain|default('schedulefy.org'))) }}"
+             style="color:#2563eb; text-decoration:underline;">
+            {{ support_email|default('support@' ~ (sender_domain|default('schedulefy.org'))) }}
+          </a>
+        </p>
+
+        <p style="margin:0; color:#9ca3af; font-size:11px;">
+          This notification was sent to <strong>{{ email }}</strong> because you have a scheduled post on {{ app_name }}.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

@@ -10,6 +10,7 @@ import math
 #models
 from ...models.social.scheduled_post import ScheduledPost
 from ...models.social.social_account import SocialAccount
+from ...models.business_model import Business
 
 #services
 from ...services.social.adapters.facebook_adapter import FacebookAdapter
@@ -25,8 +26,6 @@ from ...services.notifications.notification_service import NotificationService
 
 #helpers
 from ...utils.logger import Log
-
-
 from .appctx import run_in_app_context
 
 
@@ -1600,19 +1599,6 @@ def _publish_scheduled_post(post_id: str, business_id: str):
             if r.get("status") == "success":
                 any_success = True
                 
-                #Send email after success
-                if NotificationService.is_enabled(
-                        business_id=business_id,
-                        user__id=post.get("user__id"),
-                        channel="email",
-                        item_key="scheduled_send_succeeded",
-                        default=False,
-                    ):
-                        # optionally send success email
-                        pass
-                
-                
-                
             else:
                 any_failed = True
                 Log.info(f"{log_tag} destination failed: {r}")
@@ -1657,7 +1643,40 @@ def _publish_scheduled_post(post_id: str, business_id: str):
         provider_results=results,
         error=overall_error,
     )
+    
+    # ✅✅✅ ENQUEUE EMAIL JOBS HERE (AFTER FINAL STATUS UPDATE)
+    try:
+        # IMPORTANT: use the same enqueue helper your app uses everywhere.
+        from ...extensions.queue import enqueue
 
+        # Decide which email job to run
+        if overall_status in (
+            ScheduledPost.STATUS_PUBLISHED,
+            getattr(ScheduledPost, "STATUS_PARTIAL", "partial"),
+        ):
+            email_job_path = "app.services.notifications.email_jobs.send_post_published_email_job"
+
+        elif overall_status == ScheduledPost.STATUS_FAILED:
+            email_job_path = "app.services.notifications.email_jobs.send_post_failed_email_job"
+        else:
+            email_job_path = None
+
+        if email_job_path:
+            job = enqueue(
+                email_job_path,
+                business_id,
+                post_id,
+                queue_name="publish",
+                job_timeout=180,
+                result_ttl=500,
+                failure_ttl=86400,
+            )
+            Log.info(f"{log_tag} enqueued email job={getattr(job, 'id', None)} path={email_job_path}")
+        else:
+            Log.info(f"{log_tag} no email job for status={overall_status}")
+
+    except Exception as e:
+        Log.info(f"{log_tag} enqueue email job failed (ignored): {e}")
 
 def publish_scheduled_post(post_id: str, business_id: str):
     return run_in_app_context(_publish_scheduled_post, post_id, business_id)
