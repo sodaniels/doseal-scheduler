@@ -285,7 +285,28 @@ class Payment(BaseModel):
         return payment
     
     # ---------------- QUERIES ---------------- #
-    
+    @classmethod
+    def get_all(cls, business_id):
+        """
+        Retrieve all records for a business by business_id after checking permission.
+        """
+        # Permission check
+        if not cls.check_permission("read"):
+            raise PermissionError(f"User does not have permission to read {cls.__name__}.")
+
+        col = db.get_collection(cls.collection_name)
+        docs = col.find({"business_id": ObjectId(business_id)})
+
+        # Return normalized dicts
+        results = []
+        for d in docs:
+            # normalize objectid and encrypted fields if you have a normalise method
+            record = cls._normalise_payment_doc(d) if hasattr(cls, "_normalise_payment_doc") else d
+            results.append(record)
+
+        return results
+
+
     @classmethod
     def get_by_id(cls, payment_id, business_id=None):
         """

@@ -146,7 +146,7 @@ class BaseModel:
             raise PermissionError(f"User does not have permission to read {cls.__name__}.")
             
         collection = db.get_collection(cls.collection_name)  # Use the custom collection name
-        records = collection.find({"business_id": business_id})
+        records = collection.find({"business_id": ObjectId(business_id)})
         return [cls(**record) for record in records]
 
     @classmethod

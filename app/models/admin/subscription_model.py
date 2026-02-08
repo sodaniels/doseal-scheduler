@@ -203,6 +203,26 @@ class Subscription(BaseModel):
         return subscription
 
     # ---------------- QUERIES ---------------- #
+    @classmethod
+    def get_all(cls, business_id):
+        """
+        Retrieve all records for a business by business_id after checking permission.
+        """
+        # Permission check
+        if not cls.check_permission("read"):
+            raise PermissionError(f"User does not have permission to read {cls.__name__}.")
+
+        col = db.get_collection(cls.collection_name)
+        docs = col.find({"business_id": ObjectId(business_id)})
+
+        # Return normalized dicts
+        results = []
+        for d in docs:
+            # normalize objectid and encrypted fields if you have a normalise method
+            record = cls._normalise_subscription_doc(d) if hasattr(cls, "_normalise_subscription_doc") else d
+            results.append(record)
+
+        return results
 
     @classmethod
     def insert_one(cls, doc: Dict[str, Any]) -> str:

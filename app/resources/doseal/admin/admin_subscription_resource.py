@@ -1,11 +1,17 @@
 # app/resources/admin/subscription_resource.py
 
+import json
+import ast
+
 from flask import g, request, jsonify
 from flask.views import MethodView
 from flask_smorest import Blueprint
 
 from .admin_business_resource import token_required
 from ....models.admin.subscription_model import Subscription
+from ....models.business_model import Business
+from ....models.admin.package_model import Package
+from ....models.admin.payment import Payment
 from ....services.pos.subscription_service import SubscriptionService
 from ....schemas.admin.package_schema import (
     SubscriptionSchema, CancelSubscriptionSchema
@@ -13,6 +19,7 @@ from ....schemas.admin.package_schema import (
 
 from ....utils.helpers import make_log_tag
 from ....utils.json_response import prepared_response
+from ....utils.crypt import decrypt_data
 from ....utils.logger import Log
 from ....constants.service_code import (
     HTTP_STATUS_CODES, SYSTEM_USERS
@@ -217,6 +224,89 @@ class RenewSubscription(MethodView):
             return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to renew subscription", errors=[str(e)])
 
 
+@blp_subscription.route("/subscriptions/plan-information", methods=["GET"])
+class GetCurrentSubscription(MethodView):
+    """Get current active subscription."""
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        user_info = g.get("current_user", {})
+
+        account_type = user_info.get("account_type")
+        auth_business_id = str(user_info.get("business_id"))
+        user_id = user_info.get("_id")
+        
+        payload = dict()
+        package = dict()
+        payment = dict()
+        business = dict()
+        amount_detail = dict()
+        account_name = None
+        billing_history = []
+
+        log_tag = make_log_tag(
+            "admin_subscription_resource.py",
+            "GetCurrentSubscription",
+            "get",
+            client_ip,
+            user_id,
+            account_type,
+            auth_business_id,
+            auth_business_id
+        )
+
+        try:
+            subscription = Subscription.get_current_access_by_business(auth_business_id)
+            if not subscription:
+                Log.info(f"{log_tag} Failed to retrieve subscription.")
+                return prepared_response(False, "NOT_FOUND", "No active subscription found")
+            
+            package_id = subscription.get("package_id")
+            
+            try:
+                package = Package.get_by_id(package_id)
+                if package:
+                    payload["features"] = package.get("features")
+                    payload["max_social_accounts"] = package.get("max_social_accounts")
+                    payload["selected_plan"] = package.get("name")
+            except Exception as e:
+                Log.info(f"{log_tag} Error retreiving package: {str(e)}")
+            
+            try:
+                payment = Payment.get_by_reference(subscription.get("payment_reference"))
+                if payment:
+                    amount_detail = ast.literal_eval(payment.get("amount_detail"))
+                    payload["max_users"] = int(package.get("max_users"))  + int(amount_detail["addon_users"])
+                    payload["amount_detail"] = amount_detail
+            except Exception as e:
+                Log.info(f"{log_tag} Error retreiving payment: {str(e)}")
+                
+            
+            try:
+                business = Business.get_business_by_id(auth_business_id)
+                if business:
+                    account_name = business.get("business_name")
+                    payload["account_name"] = account_name
+            except Exception as e:
+                Log.info(f"{log_tag} Error retreiving business: {str(e)}")
+                
+            try:
+                billing_history = Payment.get_all(auth_business_id)
+                if len(billing_history) > 0:
+                    payload["billing_history"] = billing_history
+            except Exception as e:
+                Log.info(f"{log_tag} Error retreiving business: {str(e)}")
+            
+            
+            if not payload:
+                Log.info(f"{log_tag} No data was found.")
+                return prepared_response(False, "NOT_FOUND", "No data was found.")
+
+            return prepared_response(True, "OK", "Data retrieved successfully", data=payload)
+
+        except Exception as e:
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to retrieve subscription.", errors=[str(e)])
 
 
 
