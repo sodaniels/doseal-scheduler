@@ -1,7 +1,8 @@
 # app/services/notifications/email_jobs.py
-import os
+
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
