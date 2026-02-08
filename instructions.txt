@@ -28,6 +28,10 @@ venv/bin/rqscheduler
 ngrok http 9090 --url=inscribable-manipulatedly-davon.ngrok-free.dev
 
 
+# SWAGGER
+https://inscribable-manipulatedly-davon.ngrok-free.dev/api/openapi.json
+
+
 curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/facebook/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk3ZmQxN2I3Y2NiOGZkNzdlN2U4MzljIiwiZXhwIjoxNzcwMjAwNDYyLCJhY2NvdW50X3R5cGUiOiJzeXN0ZW1fb3duZXIiLCJ0eXBlIjpudWxsLCJwZXJtaXNzaW9ucyI6e319.t9B_mBzKXjCyr8Ftma8l4WHw-ud7YW3ZShyIxM7lI4o"
 

@@ -6,6 +6,7 @@
 __pycache__/
 *.py[cod]
 .vscode
+instructions.txt
 *$py.class
 mtoapitest.egg-info/
 #Don't push docker file since the servers has different port
