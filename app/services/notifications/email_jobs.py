@@ -1,5 +1,5 @@
 # app/services/notifications/email_jobs.py
-
+import os
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -153,7 +153,7 @@ def _send_post_published_email_job_impl(business_id: str, post_id: str):
         media_url=media_url,
         media_type=media_type,
         post_url=None,
-        dashboard_url="https://app.doseal.com/social/posts",
+        dashboard_url=os.getenv("FRONTEND_DASHBOARD_URL"),
     )
 
     Log.info(f"{log_tag} email sent")
@@ -247,7 +247,7 @@ def _send_post_failed_email_job_impl(business_id: str, post_id: str):
         failed_items=summary["failed_items"],
         media_url=media_url,
         media_type=media_type,
-        dashboard_url="https://app.doseal.com/social/posts",
+        dashboard_url=os.getenv("FRONTEND_DASHBOARD_URL"),
     )
 
     Log.info(f"{log_tag} email sent")

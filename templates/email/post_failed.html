@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width" />
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <title>Post Failed to Publish | {{ app_name }}</title>
+
+  <style>
+    /* Basic resets */
+    body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+    img { -ms-interpolation-mode:bicubic; border:0; height:auto; line-height:100%; outline:none; text-decoration:none; }
+    table { border-collapse:collapse !important; }
+    body { margin:0 !important; padding:0 !important; width:100% !important; height:100% !important; background:#f6f6f6; }
+
+    /* Container */
+    .wrapper { width:100%; background:#f6f6f6; padding:24px 12px; }
+    .container { max-width:600px; margin:0 auto; background:#ffffff; border:1px solid #e9e9e9; border-radius:10px; overflow:hidden; }
+    .header { padding:20px 24px; background:#ffffff; }
+    .content { padding:24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:#111827; font-size:14px; line-height:1.7; }
+    .footer { padding:18px 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:#6b7280; font-size:12px; line-height:1.6; background:#ffffff; border-top:1px solid #f1f1f1; }
+
+    h1 { margin:0 0 10px; font-size:20px; line-height:1.3; }
+    p { margin:0 0 14px; }
+    .muted { color:#6b7280; font-size:13px; }
+    .btn-wrap { padding:10px 0 18px; }
+    .btn {
+      display:inline-block;
+      background:#2563eb;
+      color:#ffffff !important;
+      text-decoration:none;
+      font-weight:700;
+      border-radius:8px;
+      padding:12px 18px;
+      margin-right:8px;
+      margin-bottom:8px;
+    }
+    .btn-secondary {
+      background:#6b7280;
+    }
+    .btn-danger {
+      background:#dc2626;
+    }
+    .btn-warning {
+      background:#d97706;
+    }
+
+    /* Alert box */
+    .alert-box {
+      background:#fef2f2;
+      border:1px solid #fecaca;
+      border-left:4px solid #dc2626;
+      border-radius:8px;
+      padding:16px;
+      margin:16px 0;
+    }
+    .alert-box.warning {
+      background:#fffbeb;
+      border-color:#fde68a;
+      border-left-color:#d97706;
+    }
+    .alert-box.partial {
+      background:#fefce8;
+      border-color:#fef08a;
+      border-left-color:#eab308;
+    }
+    .alert-title {
+      font-weight:700;
+      font-size:14px;
+      color:#991b1b;
+      margin:0 0 8px;
+      display:flex;
+      align-items:center;
+    }
+    .alert-box.warning .alert-title,
+    .alert-box.partial .alert-title {
+      color:#92400e;
+    }
+    .alert-message {
+      font-size:13px;
+      color:#7f1d1d;
+      margin:0;
+      line-height:1.5;
+    }
+    .alert-box.warning .alert-message,
+    .alert-box.partial .alert-message {
+      color:#78350f;
+    }
+
+    /* Post preview */
+    .post-preview {
+      background:#f9fafb;
+      border:1px solid #e5e7eb;
+      border-radius:8px;
+      padding:16px;
+      margin:16px 0;
+    }
+    .post-text {
+      font-size:14px;
+      color:#374151;
+      line-height:1.6;
+      margin:0 0 12px;
+      white-space:pre-wrap;
+      word-wrap:break-word;
+    }
+
+    /* Platform badges */
+    .platforms { margin:12px 0 16px; }
+    .platform-badge {
+      display:inline-block;
+      padding:6px 12px;
+      border-radius:20px;
+      font-size:12px;
+      font-weight:600;
+      margin-right:6px;
+      margin-bottom:6px;
+      color:#ffffff;
+    }
+    .platform-facebook { background:#1877f2; }
+    .platform-instagram { background:#e4405f; }
+    .platform-twitter, .platform-x { background:#000000; }
+    .platform-linkedin { background:#0a66c2; }
+    .platform-tiktok { background:#000000; }
+    .platform-pinterest { background:#bd081c; }
+    
+    /* Failed/success state badges */
+    .platform-badge.failed {
+      background:#fee2e2;
+      color:#991b1b;
+      border:1px solid #fecaca;
+    }
+    .platform-badge.success {
+      background:#d1fae5;
+      color:#065f46;
+      border:1px solid #a7f3d0;
+    }
+
+    /* Status indicators */
+    .status-failed {
+      display:inline-block;
+      background:#fee2e2;
+      color:#991b1b;
+      padding:4px 10px;
+      border-radius:12px;
+      font-size:12px;
+      font-weight:600;
+    }
+    .status-partial {
+      display:inline-block;
+      background:#fef3c7;
+      color:#92400e;
+      padding:4px 10px;
+      border-radius:12px;
+      font-size:12px;
+      font-weight:600;
+    }
+
+    /* Details table */
+    .details-table {
+      width:100%;
+      margin:16px 0;
+      font-size:13px;
+    }
+    .details-table td {
+      padding:8px 0;
+      border-bottom:1px solid #f3f4f6;
+      vertical-align:top;
+    }
+    .details-table .label {
+      color:#6b7280;
+      width:120px;
+    }
+    .details-table .value {
+      color:#111827;
+      font-weight:500;
+    }
+
+    /* Error details */
+    .error-box {
+      background:#fef2f2;
+      border:1px solid #fecaca;
+      border-radius:6px;
+      padding:12px;
+      margin:12px 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size:12px;
+      color:#991b1b;
+    }
+    .error-code {
+      font-size:11px;
+      color:#6b7280;
+      margin-top:6px;
+    }
+
+    /* Checklist */
+    .checklist {
+      background:#f9fafb;
+      border:1px solid #e5e7eb;
+      border-radius:8px;
+      padding:16px;
+      margin:16px 0;
+    }
+    .checklist-title {
+      font-weight:700;
+      font-size:14px;
+      color:#111827;
+      margin:0 0 12px;
+    }
+    .checklist-item {
+      display:flex;
+      align-items:flex-start;
+      margin-bottom:10px;
+      font-size:13px;
+      color:#374151;
+    }
+    .checklist-item:last-child {
+      margin-bottom:0;
+    }
+    .checklist-icon {
+      margin-right:10px;
+      font-size:14px;
+      line-height:1.4;
+    }
+
+    /* Mobile */
+    @media (max-width: 640px) {
+      .wrapper { padding:14px 10px; }
+      .content { padding:18px; }
+      .header { padding:16px 18px; }
+      .footer { padding:16px 18px; }
+      .btn { display:block; text-align:center; margin-right:0; }
+      .platform-badge { margin-bottom:8px; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrapper">
+    <div class="container">
+
+      <!-- Header -->
+      <div class="header">
+        <table role="presentation" width="100%">
+          <tr>
+            <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#111827;">
+              <strong>{{ app_name }}</strong>
+            </td>
+            <td align="right" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+              {% if is_partial_failure %}
+                <span class="status-partial">⚠️ Partial</span>
+              {% else %}
+                <span class="status-failed">✕ Failed</span>
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Content -->
+      <div class="content">
+        
+        {% if is_partial_failure %}
+          <h1>⚠️ Your post partially published</h1>
+          <p>
+            Hey{{ ", " + fullname if fullname else "" }}. Your scheduled post was published to some platforms, 
+            but failed on others. Here's what happened:
+          </p>
+        {% else %}
+          <h1>❌ Your scheduled post failed to publish</h1>
+          <p>
+            Sorry{{ ", " + fullname if fullname else "" }}. We weren't able to publish your scheduled post. 
+            Don't worry — your content is safe and you can try again.
+          </p>
+        {% endif %}
+
+        <!-- Alert box with error -->
+        <div class="alert-box {% if is_partial_failure %}partial{% endif %}">
+          <p class="alert-title">
+            {% if is_partial_failure %}
+              ⚠️ Publishing Issue
+            {% else %}
+              ❌ Error Details
+            {% endif %}
+          </p>
+          <p class="alert-message">
+            {{ error_message|default('An unexpected error occurred while publishing your post. Please try again or contact support if the issue persists.') }}
+          </p>
+          {% if error_code %}
+            <p class="error-code">Error code: {{ error_code }}</p>
+          {% endif %}
+        </div>
+
+        <!-- Platform status (for partial failures) -->
+        {% if is_partial_failure and (successful_platforms or failed_platforms) %}
+          <div style="margin:20px 0;">
+            {% if successful_platforms and successful_platforms|length > 0 %}
+              <p style="margin:0 0 8px; font-size:13px; color:#065f46; font-weight:600;">
+                ✓ Published successfully:
+              </p>
+              <div class="platforms" style="margin-bottom:16px;">
+                {% for platform in successful_platforms %}
+                  <span class="platform-badge success">
+                    {% if platform|lower == 'facebook' %}📘 Facebook
+                    {% elif platform|lower == 'instagram' %}📸 Instagram
+                    {% elif platform|lower == 'twitter' or platform|lower == 'x' %}𝕏 X
+                    {% elif platform|lower == 'linkedin' %}💼 LinkedIn
+                    {% elif platform|lower == 'tiktok' %}🎵 TikTok
+                    {% elif platform|lower == 'pinterest' %}📌 Pinterest
+                    {% else %}{{ platform|capitalize }}
+                    {% endif %}
+                  </span>
+                {% endfor %}
+              </div>
+            {% endif %}
+            
+            {% if failed_platforms and failed_platforms|length > 0 %}
+              <p style="margin:0 0 8px; font-size:13px; color:#991b1b; font-weight:600;">
+                ✕ Failed to publish:
+              </p>
+              <div class="platforms">
+                {% for platform in failed_platforms %}
+                  <span class="platform-badge failed">
+                    {% if platform|lower == 'facebook' %}📘 Facebook
+                    {% elif platform|lower == 'instagram' %}📸 Instagram
+                    {% elif platform|lower == 'twitter' or platform|lower == 'x' %}𝕏 X
+                    {% elif platform|lower == 'linkedin' %}💼 LinkedIn
+                    {% elif platform|lower == 'tiktok' %}🎵 TikTok
+                    {% elif platform|lower == 'pinterest' %}📌 Pinterest
+                    {% else %}{{ platform|capitalize }}
+                    {% endif %}
+                  </span>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </div>
+        {% else %}
+          <!-- All failed - show target platforms -->
+          {% if platforms and platforms|length > 0 %}
+            <p style="margin:16px 0 8px; font-size:13px; color:#6b7280;">
+              Target platforms:
+            </p>
+            <div class="platforms">
+              {% for platform in platforms %}
+                <span class="platform-badge failed">
+                  {% if platform|lower == 'facebook' %}📘 Facebook
+                  {% elif platform|lower == 'instagram' %}📸 Instagram
+                  {% elif platform|lower == 'twitter' or platform|lower == 'x' %}𝕏 X
+                  {% elif platform|lower == 'linkedin' %}💼 LinkedIn
+                  {% elif platform|lower == 'tiktok' %}🎵 TikTok
+                  {% elif platform|lower == 'pinterest' %}📌 Pinterest
+                  {% else %}{{ platform|capitalize }}
+                  {% endif %}
+                </span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endif %}
+
+        <!-- Post preview -->
+        {% if post_text %}
+          <div class="post-preview">
+            <p style="margin:0 0 8px; font-size:11px; color:#6b7280; text-transform:uppercase; letter-spacing:0.5px;">
+              Your post content
+            </p>
+            <p class="post-text">{{ post_text|truncate(300, True, '...') }}</p>
+          </div>
+        {% endif %}
+
+        <!-- Post details -->
+        <table class="details-table" role="presentation">
+          <tr>
+            <td class="label">Scheduled for</td>
+            <td class="value">{{ scheduled_time|default('—') }}</td>
+          </tr>
+          <tr>
+            <td class="label">Failed at</td>
+            <td class="value">{{ failed_time|default('Just now') }}</td>
+          </tr>
+          {% if account_names %}
+          <tr>
+            <td class="label">Accounts</td>
+            <td class="value">{{ account_names|join(', ') }}</td>
+          </tr>
+          {% endif %}
+        </table>
+
+        <!-- Troubleshooting checklist -->
+        <div class="checklist">
+          <p class="checklist-title">🔧 Troubleshooting steps</p>
+          
+          <div class="checklist-item">
+            <span class="checklist-icon">1️⃣</span>
+            <span><strong>Check account connection</strong> — Make sure your social account is still connected and hasn't expired.</span>
+          </div>
+          
+          <div class="checklist-item">
+            <span class="checklist-icon">2️⃣</span>
+            <span><strong>Review content</strong> — Ensure your post meets platform requirements (character limits, media formats, etc.).</span>
+          </div>
+          
+          <div class="checklist-item">
+            <span class="checklist-icon">3️⃣</span>
+            <span><strong>Check permissions</strong> — Verify you have permission to post to the selected pages/accounts.</span>
+          </div>
+          
+          <div class="checklist-item">
+            <span class="checklist-icon">4️⃣</span>
+            <span><strong>Try again</strong> — Sometimes a simple retry resolves temporary issues.</span>
+          </div>
+        </div>
+
+        <!-- Common error explanations -->
+        {% if error_code %}
+          <div style="margin:16px 0; padding:12px; background:#f9fafb; border-radius:6px; font-size:12px;">
+            <p style="margin:0 0 8px; font-weight:600; color:#374151;">
+              💡 What does this error mean?
+            </p>
+            <p style="margin:0; color:#6b7280; line-height:1.5;">
+              {% if error_code == 'FB_TOKEN_EXPIRED' or error_code == 'IG_TOKEN_EXPIRED' %}
+                Your Facebook/Instagram access has expired. Please reconnect your account in Settings → Social Accounts.
+              {% elif error_code == 'TW_TOKEN_EXPIRED' or error_code == 'X_TOKEN_EXPIRED' %}
+                Your X (Twitter) access has expired. Please reconnect your account in Settings → Social Accounts.
+              {% elif error_code == 'LI_TOKEN_EXPIRED' %}
+                Your LinkedIn access has expired. Please reconnect your account in Settings → Social Accounts.
+              {% elif error_code == 'TT_TOKEN_EXPIRED' %}
+                Your TikTok access has expired. Please reconnect your account in Settings → Social Accounts.
+              {% elif error_code == 'PIN_TOKEN_EXPIRED' %}
+                Your Pinterest access has expired. Please reconnect your account in Settings → Social Accounts.
+              {% elif error_code == 'MEDIA_TOO_LARGE' %}
+                The media file exceeds the platform's size limit. Try compressing or resizing your image/video.
+              {% elif error_code == 'MEDIA_FORMAT_UNSUPPORTED' %}
+                The media format isn't supported. Try converting to JPG/PNG for images or MP4 for videos.
+              {% elif error_code == 'TEXT_TOO_LONG' %}
+                Your caption exceeds the platform's character limit. Try shortening your message.
+              {% elif error_code == 'RATE_LIMIT' %}
+                Too many posts in a short time. Wait a few minutes and try again.
+              {% elif error_code == 'PERMISSION_DENIED' %}
+                You don't have permission to post to this account. Check your role and permissions.
+              {% elif error_code == 'ACCOUNT_SUSPENDED' %}
+                The social account may be suspended or restricted. Check the platform directly.
+              {% elif error_code == 'DUPLICATE_CONTENT' %}
+                This content was flagged as duplicate. Try modifying your post slightly.
+              {% else %}
+                This error occurred during publishing. If it persists, please contact our support team.
+              {% endif %}
+            </p>
+          </div>
+        {% endif %}
+
+        <!-- Action buttons -->
+        <div class="btn-wrap">
+          {% if retry_url %}
+            <a class="btn btn-warning" href="{{ retry_url }}" target="_blank" rel="noopener noreferrer">
+              🔄 Retry Post
+            </a>
+          {% endif %}
+          
+          {% if dashboard_url %}
+            <a class="btn btn-secondary" href="{{ dashboard_url }}" target="_blank" rel="noopener noreferrer">
+              View All Posts
+            </a>
+          {% endif %}
+        </div>
+
+        <p class="muted">
+          Need help? Our support team is here for you. Just reply to this email or visit our help center.
+        </p>
+
+        <p style="margin-top:18px;">
+          We'll get this sorted! 💪<br/>
+          — {{ app_name }}
+        </p>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <p style="margin:0 0 10px;">
+          Want to manage your notification preferences? 
+          <a href="{{ settings_url|default('#') }}" style="color:#2563eb; text-decoration:underline;">
+            Update settings
+          </a>
+        </p>
+
+        <p style="margin:0 0 10px;">
+          Need help? Contact support at
+          <a href="mailto:{{ support_email|default('support@' ~ (sender_domain|default('example.com'))) }}"
+             style="color:#2563eb; text-decoration:underline;">
+            {{ support_email|default('support@' ~ (sender_domain|default('example.com'))) }}
+          </a>
+        </p>
+
+        <p style="margin:0; color:#9ca3af; font-size:11px;">
+          This notification was sent to <strong>{{ email }}</strong> because your scheduled post on {{ app_name }} encountered an issue.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>
