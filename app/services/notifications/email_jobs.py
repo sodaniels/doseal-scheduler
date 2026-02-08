@@ -1,18 +1,24 @@
-#app/services/notifications/email_jobs.py
+# app/services/notifications/email_jobs.py
+
+from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
-from ...models.social.scheduled_post import ScheduledPost
-from ...models.business_model import Business
 from ...utils.logger import Log
 
 from .notification_service import NotificationService
 from ..email_service import (
     send_post_published_email,
-    send_post_failed_email
+    send_post_failed_email,
 )
 
+from ..social.appctx import run_in_app_context 
+
+
+# ---------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------
 def _safe_iso(dt: Any) -> str:
     if hasattr(dt, "isoformat"):
         return dt.isoformat()
@@ -59,19 +65,22 @@ def _summarize_failures(provider_results: List[Dict[str, Any]]) -> Dict[str, Any
     }
 
 
-def send_post_published_email_job(
-    business_id: str,
-    post_id: str,
-):
+# ---------------------------------------------------------
+# Internal job bodies (must run in app context)
+# ---------------------------------------------------------
+def _send_post_published_email_job_impl(business_id: str, post_id: str):
     """
-    Background job:
+    Internal implementation:
       - loads ScheduledPost
       - loads Business email/name
       - checks NotificationSettings
       - sends published email
     """
+    # ✅ DB models are imported inside app context
+    from ...models.social.scheduled_post import ScheduledPost
+    from ...models.business_model import Business
 
-    log_tag = f"[email_jobs.py][send_post_published_email_job][{business_id}][{post_id}]"
+    log_tag = f"[email_jobs.py][_send_post_published_email_job_impl][{business_id}][{post_id}]"
     Log.info(f"{log_tag} start")
 
     post = ScheduledPost.get_by_id(post_id, business_id)
@@ -113,7 +122,7 @@ def send_post_published_email_job(
         Log.info(f"{log_tag} no business email on record")
         return
 
-    business_name =  biz.get("business_name") or "Unknown Business"
+    business_name = biz.get("business_name") or "Unknown Business"
 
     # ----------------------------------------
     # Build email payload
@@ -122,8 +131,9 @@ def send_post_published_email_job(
     text = (content.get("text") or "").strip()
 
     scheduled_dt = post.get("scheduled_at_utc")
-    scheduled_time = scheduled_dt.isoformat() if hasattr(scheduled_dt, "isoformat") else str(scheduled_dt)
+    scheduled_time = _safe_iso(scheduled_dt)
 
+    # If you store published_at in DB, use it. Else now().
     published_time = datetime.now(timezone.utc).isoformat()
 
     platforms = sorted({d.get("platform") for d in post.get("destinations") or [] if d.get("platform")})
@@ -149,20 +159,20 @@ def send_post_published_email_job(
     Log.info(f"{log_tag} email sent")
 
 
-def send_post_failed_email_job(
-    business_id: str,
-    post_id: str,
-):
+def _send_post_failed_email_job_impl(business_id: str, post_id: str):
     """
-    Background job:
+    Internal implementation:
       - loads ScheduledPost
       - loads Business email/name
       - checks NotificationSettings
       - sends FAILED email
 
-    Triggers when overall status == failed (optionally also partial if you want).
+    Triggers when overall status == failed.
     """
-    log_tag = f"[email_jobs.py][send_post_failed_email_job][{business_id}][{post_id}]"
+    from ...models.social.scheduled_post import ScheduledPost
+    from ...models.business_model import Business
+
+    log_tag = f"[email_jobs.py][_send_post_failed_email_job_impl][{business_id}][{post_id}]"
     Log.info(f"{log_tag} start")
 
     post = ScheduledPost.get_by_id(post_id, business_id)
@@ -182,7 +192,7 @@ def send_post_failed_email_job(
         business_id=business_id,
         channel="email",
         item_key="scheduled_send_failed",
-        default=True,   # you can set False if you want it off by default
+        default=True,   # keep your default behaviour
     ):
         Log.info(f"{log_tag} email disabled by settings")
         return
@@ -221,12 +231,8 @@ def send_post_failed_email_job(
     provider_results = post.get("provider_results") or []
     summary = _summarize_failures(provider_results)
 
-    # overall_error is what you set in _publish_scheduled_post
     overall_error = (post.get("error") or "").strip() or summary["first_error"]
 
-    # ----------------------------------------
-    # Send email
-    # ----------------------------------------
     send_post_failed_email(
         email=email,
         fullname=business_name,
@@ -238,7 +244,7 @@ def send_post_failed_email_job(
         scheduled_time=scheduled_time,
         failed_time=failed_time,
         error_message=overall_error,
-        failed_items=summary["failed_items"],  # keep short in template
+        failed_items=summary["failed_items"],
         media_url=media_url,
         media_type=media_type,
         dashboard_url="https://app.doseal.com/social/posts",
@@ -247,19 +253,22 @@ def send_post_failed_email_job(
     Log.info(f"{log_tag} email sent")
 
 
+# ---------------------------------------------------------
+# RQ entrypoints (what you enqueue)
+# ---------------------------------------------------------
+def send_post_published_email_job(business_id: str, post_id: str):
+    """
+    ✅ RQ entrypoint: SAFE for worker. Ensures app context so Mongo is initialized.
+    Enqueue path stays:
+      app.services.notifications.email_jobs.send_post_published_email_job
+    """
+    return run_in_app_context(_send_post_published_email_job_impl, business_id, post_id)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def send_post_failed_email_job(business_id: str, post_id: str):
+    """
+    ✅ RQ entrypoint: SAFE for worker. Ensures app context so Mongo is initialized.
+    Enqueue path stays:
+      app.services.notifications.email_jobs.send_post_failed_email_job
+    """
+    return run_in_app_context(_send_post_failed_email_job_impl, business_id, post_id)
