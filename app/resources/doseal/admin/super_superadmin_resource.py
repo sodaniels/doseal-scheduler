@@ -63,7 +63,7 @@ from ....schemas.super_superadmin_schema import (
     AgentsQuerySchema, ExpensesSchema, DownloadsSchema, SelectMoreSchema,
     SubscriberQuerySchema, SubscribersSchema, SearchSubscriberQuerySchema
 )
-from ....schemas.login_schema import LoginSchema
+from ....schemas.login_schema import LoginInitiateSchema as LoginSchema
 from ....schemas.admin.setup_schema import BusinessIdAndUserIdQuerySchema
 # models
 from ....models.admin.super_superadmin_model import (

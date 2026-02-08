@@ -20,7 +20,10 @@ from datetime import datetime, timedelta
 from ....models.business_model import Business
 from ....schemas.business_schema import BusinessSchema
 from ....schemas.business_schema import OAuthCredentialsSchema
-from ....schemas.login_schema import LoginSchema
+from ....schemas.login_schema import (
+    LoginInitiateSchema,
+    LoginExecuteSchema
+)
 from ....schemas.social.change_password_schema import ChangePasswordSchema
 from ....schemas.social.email_verification_schema import BusinessEmailVerificationSchema
 
@@ -37,7 +40,7 @@ from ....utils.crypt import encrypt_data, decrypt_data, hash_data
 from ....utils.json_response import prepared_response
 from ....utils.calculation_engine import hash_transaction
 from ....utils.redis import (
-    set_redis_with_expiry, set_redis
+    set_redis_with_expiry, set_redis, get_redis, remove_redis
 )
 from ....utils.generators import generate_otp
 
@@ -513,158 +516,16 @@ class RegisterBusinessResource(MethodView):
                 "error": str(e)
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-#-------------------------------------------------------
-# LOGIN
-#-------------------------------------------------------
-@blp_business_auth.route("/auth/login/execute", methods=["POST"])
-class LoginBusinessResource(MethodView):
-    @login_ip_limiter("login")
-    @login_user_limiter("login")
-    @blp_business_auth.arguments(LoginSchema, location="form")
-    @blp_business_auth.response(200, LoginSchema)
-    @blp_business_auth.doc(
-        summary="Login to an existing business account",
-        description="This endpoint allows a business to log in using their email and password. A valid email and password are required. On successful login, an access token is returned for subsequent authorized requests.",
-        requestBody={
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": LoginSchema,  # Assuming you have a LoginSchema to validate the input data
-                    "example": {
-                        "email": "johndoe@example.com",
-                        "password": "SecurePass123"
-                    }
-                }
-            }
-        },
-        responses={
-            200: {
-                "description": "Login successful, returns an access token",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "access_token": "your_access_token_here",
-                            "token_type": "Bearer",
-                            "expires_in": 86400  # The token expiration time in seconds (1 day)
-                        }
-                    }
-                }
-            },
-            400: {
-                "description": "Invalid login data",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 400,
-                            "message": "Invalid email or password"
-                        }
-                    }
-                }
-            },
-            401: {
-                "description": "Unauthorized request",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 401,
-                            "message": "Invalid authentication credentials"
-                        }
-                    }
-                }
-            },
-            500: {
-                "description": "Internal Server Error",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 500,
-                            "message": "An unexpected error occurred",
-                            "error": "Detailed error message here"
-                        }
-                    }
-                }
-            }
-        }
-    )
-    def post(self, user_data):
-        client_ip = request.remote_addr
-        log_tag = '[admin_business_resource.py][LoginBusinessResource][post]'
-        Log.info(f"{log_tag} [{client_ip}][{user_data['email']}] initiating loging request")
-        
-        client_ip = request.remote_addr
-    
-        # Check if x-app-ky header is present and valid
-        app_key = request.headers.get('x-app-key')
-        server_app_key = os.getenv("X_APP_KEY")
-        
-        if app_key != server_app_key:
-            Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
-            response = {
-                "success": False,
-                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
-                "message": "Unauthorized request."
-            }
-            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
-    
-        # Check if the user exists based on email
-        user = User.get_user_by_email(user_data["email"])
-        if user is None:
-           Log.info(f"{log_tag} [{client_ip}][{user_data['email']}]: login email does not exist")
-           return prepared_response(
-                False,
-                "UNAUTHORIZED",
-                "Invalid email or password",
-            )
 
-        # Check if the user's credentials are not correct
-        if not User.verify_password(user_data["email"], user_data["password"]):
-            Log.info(f"{log_tag} [{client_ip}][{user_data['email']}]: email and password combination failed")
-            return jsonify({
-                "success": False,
-                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
-                "message": "Invalid email or password",
-            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
-            
-            
-        Log.info(f"{log_tag} [{client_ip}][{user_data['email']}]: login info matched")
-        
-        client_id = decrypt_data(user["client_id"])
-        
-        business = Business.get_business_by_client_id(client_id)
-        if not business: 
-            abort(401, message="Your access has been revoked. Contact your administrator")
-            
-        # Log.info(f"business: {business}")
-        
-        account_type = business.get("account_type")
-        
-        decrypted_data = decrypt_data(account_type)
-
-        # when user was not found
-        if user is None:
-            Log.info(f"{log_tag}[{client_ip}] user not found.") 
-            return prepared_response(False, "NOT_FOUND", f"User not found.")
-        
-        # proceed to create token when user payload was created
-        return create_token_response_admin(
-            user=user,
-            account_type=decrypted_data,
-            client_ip=client_ip, 
-            log_tag=log_tag, 
-        )
-  
-#-------------------------------------------------------
-# LOGIN
+# #-------------------------------------------------------
+# LOGIN INITIATE
 #-------------------------------------------------------
 @blp_business_auth.route("/auth/login/initiate", methods=["POST"])
 class LoginBusinessInitiateResource(MethodView):
     @login_ip_limiter("login")
     @login_user_limiter("login")
-    @blp_business_auth.arguments(LoginSchema, location="form")
-    @blp_business_auth.response(200, LoginSchema)
+    @blp_business_auth.arguments(LoginInitiateSchema, location="form")
+    @blp_business_auth.response(200, LoginInitiateSchema)
     @blp_business_auth.doc(
         summary="Login to an existing business account",
         description="This endpoint allows a business to log in using their email and password. A valid email and password are required. On successful login, an access token is returned for subsequent authorized requests.",
@@ -672,7 +533,7 @@ class LoginBusinessInitiateResource(MethodView):
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": LoginSchema,  # Assuming you have a LoginSchema to validate the input data
+                    "schema": LoginInitiateSchema,  # Assuming you have a LoginSchema to validate the input data
                     "example": {
                         "email": "johndoe@example.com",
                         "password": "SecurePass123"
@@ -822,7 +683,7 @@ class LoginBusinessInitiateResource(MethodView):
                 "success": True,
                 "status_code": HTTP_STATUS_CODES["OK"],
                 "message": "OTP has been sent to email",
-                "message_to_show": "We sent an OTP to your email address. Please provide this to proceed.",
+                "message_to_show": "We sent an OTP to your email address. Please provide it to proceed.",
             }), HTTP_STATUS_CODES["OK"]
         except Exception as e:
             Log.error(f"{log_tag} Error occurred: {str(e)}")
@@ -845,6 +706,168 @@ class LoginBusinessInitiateResource(MethodView):
         #     log_tag=log_tag, 
         # )
   
+  
+#-------------------------------------------------------
+# LOGIN EXECUTE
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/login/execute", methods=["POST"])
+class LoginBusinessExecuteResource(MethodView):
+    @login_ip_limiter("login")
+    @login_user_limiter("login")
+    @blp_business_auth.arguments(LoginExecuteSchema, location="form")
+    @blp_business_auth.response(200, LoginExecuteSchema)
+    @blp_business_auth.doc(
+        summary="Login to an existing business account",
+        description="This endpoint allows a business to log in using their email and password. A valid email and password are required. On successful login, an access token is returned for subsequent authorized requests.",
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": LoginExecuteSchema,  # Assuming you have a LoginSchema to validate the input data
+                    "example": {
+                        "email": "johndoe@example.com",
+                        "password": "SecurePass123"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "Login successful, returns an access token",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "access_token": "your_access_token_here",
+                            "token_type": "Bearer",
+                            "expires_in": 86400  # The token expiration time in seconds (1 day)
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Invalid login data",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid email or password"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized request",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid authentication credentials"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def post(self, user_data):
+        client_ip = request.remote_addr
+        log_tag = '[admin_business_resource.py][LoginBusinessExecuteResource][post]'
+        Log.info(f"{log_tag} [{client_ip}][{user_data['email']}] initiating loging request")
+        
+        client_ip = request.remote_addr
+    
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized request."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        
+        email = user_data.get("email")
+    
+        # Check if the user exists based on email
+        user = User.get_user_by_email(email)
+        if user is None:
+           Log.info(f"{log_tag} [{client_ip}][{email}]: login email does not exist")
+           return prepared_response(
+                False,
+                "UNAUTHORIZED",
+                "Invalid email or password",
+            )
+        
+        client_id = decrypt_data(user["client_id"])
+        
+        try:
+            
+            business = Business.get_business_by_client_id(client_id)
+            if not business: 
+                abort(401, message="Your access has been revoked. Contact your administrator")
+                
+            account_type = business.get("account_type")
+            
+            decrypted_data = decrypt_data(account_type)
+
+            # when user was not found
+            if user is None:
+                Log.info(f"{log_tag}[{client_ip}] user not found.") 
+                return prepared_response(False, "NOT_FOUND", f"User not found.")
+            
+            
+            otp = user_data.get("otp")
+            
+            redisKey = f'login_otp_token_{email}'
+            
+            token_byte_string = get_redis(redisKey)
+            
+            if not token_byte_string:
+                Log.info(f"{log_tag} The OTP has expired")
+                return prepared_response(False, "UNAUTHORIZED", f"The OTP has expired")
+            
+            # Decode the byte string and convert to integer
+            token = token_byte_string.decode('utf-8')
+            
+            # Check if OTP is valid else send an invalid OTP response
+            if str(otp) != str(token):
+                Log.info(f"{log_tag}[otp: {otp}][token: {token}] verification failed" )
+                return prepared_response(False, "UNAUTHORIZED", f"The OTP is not valid")
+            
+            # remove otp from redis
+            remove_redis(redisKey)
+            Log.info(f"{log_tag} verification otp applied")
+            
+            # proceed to create token when user payload was created
+            return create_token_response_admin(
+                user=user,
+                account_type=decrypted_data,
+                client_ip=client_ip, 
+                log_tag=log_tag, 
+            )
+        except Exception as e:
+            Log.error(f"{log_tag} An error occurred: {str(e)}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An error occurred: {str(e)}")
+  
+
+
 #-------------------------------------------------------
 # CHANGE PASSWORD
 #------------------------------------------------------- 
