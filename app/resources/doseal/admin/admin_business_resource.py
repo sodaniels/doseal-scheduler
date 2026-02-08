@@ -22,7 +22,9 @@ from ....schemas.business_schema import BusinessSchema
 from ....schemas.business_schema import OAuthCredentialsSchema
 from ....schemas.login_schema import (
     LoginInitiateSchema,
-    LoginExecuteSchema
+    LoginExecuteSchema,
+    LoginExecuteResponseSchema,
+    LoginInitiateResponseSchema
 )
 from ....schemas.social.change_password_schema import ChangePasswordSchema
 from ....schemas.social.email_verification_schema import BusinessEmailVerificationSchema
@@ -517,7 +519,7 @@ class RegisterBusinessResource(MethodView):
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
-# #-------------------------------------------------------
+#-------------------------------------------------------
 # LOGIN INITIATE
 #-------------------------------------------------------
 @blp_business_auth.route("/auth/login/initiate", methods=["POST"])
@@ -525,15 +527,36 @@ class LoginBusinessInitiateResource(MethodView):
     @login_ip_limiter("login")
     @login_user_limiter("login")
     @blp_business_auth.arguments(LoginInitiateSchema, location="form")
-    @blp_business_auth.response(200, LoginInitiateSchema)
+    @blp_business_auth.response(200, LoginInitiateResponseSchema)
     @blp_business_auth.doc(
-        summary="Login to an existing business account",
-        description="This endpoint allows a business to log in using their email and password. A valid email and password are required. On successful login, an access token is returned for subsequent authorized requests.",
+        summary="Login (Step 1): Initiate OTP",
+        description=(
+            "Step 1 of login.\n\n"
+            "Validates email + password, then sends a 6-digit OTP to the user's email.\n"
+            "OTP expires in 5 minutes.\n\n"
+            "Step 2: Call `/auth/login/execute` with email + otp."
+        ),
+        parameters=[
+            {
+                "in": "header",
+                "name": "x-app-key",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application key required to access this endpoint.",
+            },
+            {
+                "in": "header",
+                "name": "x-app-secret",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application secret required to access this endpoint.",
+            }
+        ],
         requestBody={
             "required": True,
             "content": {
-                "application/json": {
-                    "schema": LoginInitiateSchema,  # Assuming you have a LoginSchema to validate the input data
+                "application/x-www-form-urlencoded": {
+                    "schema": LoginInitiateSchema,
                     "example": {
                         "email": "johndoe@example.com",
                         "password": "SecurePass123"
@@ -543,56 +566,57 @@ class LoginBusinessInitiateResource(MethodView):
         },
         responses={
             200: {
-                "description": "Login successful, returns an access token",
+                "description": "OTP sent to email",
                 "content": {
                     "application/json": {
                         "example": {
-                            "access_token": "your_access_token_here",
-                            "token_type": "Bearer",
-                            "expires_in": 86400  # The token expiration time in seconds (1 day)
+                            "success": True,
+                            "status_code": 200,
+                            "message": "OTP has been sent to email",
+                            "message_to_show": "We sent an OTP to your email address. Please provide it to proceed."
                         }
                     }
-                }
-            },
-            400: {
-                "description": "Invalid login data",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 400,
-                            "message": "Invalid email or password"
-                        }
-                    }
-                }
+                },
             },
             401: {
-                "description": "Unauthorized request",
+                "description": "Unauthorized (invalid app key OR invalid email/password OR revoked access)",
                 "content": {
                     "application/json": {
                         "example": {
                             "success": False,
                             "status_code": 401,
-                            "message": "Invalid authentication credentials"
+                            "message": "Invalid email or password"
                         }
                     }
-                }
+                },
+            },
+            429: {
+                "description": "Rate limited (too many attempts)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 429,
+                            "message": "Too many requests. Please try again later."
+                        }
+                    }
+                },
             },
             500: {
-                "description": "Internal Server Error",
+                "description": "Internal server error",
                 "content": {
                     "application/json": {
                         "example": {
                             "success": False,
                             "status_code": 500,
-                            "message": "An unexpected error occurred",
-                            "error": "Detailed error message here"
+                            "message": "Internal error"
                         }
                     }
-                }
-            }
-        }
+                },
+            },
+        },
     )
+    
     def post(self, user_data):
         client_ip = request.remote_addr
         log_tag = '[admin_business_resource.py][LoginBusinessInitiateResource][post]'
@@ -715,73 +739,96 @@ class LoginBusinessExecuteResource(MethodView):
     @login_ip_limiter("login")
     @login_user_limiter("login")
     @blp_business_auth.arguments(LoginExecuteSchema, location="form")
-    @blp_business_auth.response(200, LoginExecuteSchema)
+    @blp_business_auth.response(200, LoginExecuteResponseSchema)
     @blp_business_auth.doc(
-        summary="Login to an existing business account",
-        description="This endpoint allows a business to log in using their email and password. A valid email and password are required. On successful login, an access token is returned for subsequent authorized requests.",
+        summary="Login (Step 2): Verify OTP and Issue Token",
+        description=(
+            "Step 2 of login.\n\n"
+            "Verifies the OTP sent in Step 1 and returns an access token.\n"
+            "OTP expires in 5 minutes.\n\n"
+            "Requires `x-app-key` header."
+        ),
+        parameters=[
+            {
+                "in": "header",
+                "name": "x-app-key",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application key required to access this endpoint.",
+            },
+            {
+                "in": "header",
+                "name": "x-app-secret",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application secret required to access this endpoint.",
+            }
+        ],
         requestBody={
             "required": True,
             "content": {
-                "application/json": {
-                    "schema": LoginExecuteSchema,  # Assuming you have a LoginSchema to validate the input data
+                "application/x-www-form-urlencoded": {
+                    "schema": LoginExecuteSchema,
                     "example": {
                         "email": "johndoe@example.com",
-                        "password": "SecurePass123"
+                        "otp": "200300"
                     }
                 }
             }
         },
         responses={
             200: {
-                "description": "Login successful, returns an access token",
+                "description": "OTP verified, access token issued",
                 "content": {
                     "application/json": {
                         "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Login successful",
                             "access_token": "your_access_token_here",
                             "token_type": "Bearer",
-                            "expires_in": 86400  # The token expiration time in seconds (1 day)
+                            "expires_in": 86400
                         }
                     }
-                }
-            },
-            400: {
-                "description": "Invalid login data",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 400,
-                            "message": "Invalid email or password"
-                        }
-                    }
-                }
+                },
             },
             401: {
-                "description": "Unauthorized request",
+                "description": "Unauthorized (invalid app key OR invalid/expired OTP OR revoked access)",
                 "content": {
                     "application/json": {
                         "example": {
                             "success": False,
                             "status_code": 401,
-                            "message": "Invalid authentication credentials"
+                            "message": "The OTP has expired"
                         }
                     }
-                }
+                },
+            },
+            429: {
+                "description": "Rate limited (too many attempts)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 429,
+                            "message": "Too many requests. Please try again later."
+                        }
+                    }
+                },
             },
             500: {
-                "description": "Internal Server Error",
+                "description": "Internal server error",
                 "content": {
                     "application/json": {
                         "example": {
                             "success": False,
                             "status_code": 500,
-                            "message": "An unexpected error occurred",
-                            "error": "Detailed error message here"
+                            "message": "Internal error"
                         }
                     }
-                }
-            }
-        }
+                },
+            },
+        },
     )
     def post(self, user_data):
         client_ip = request.remote_addr
