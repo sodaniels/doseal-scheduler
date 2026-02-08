@@ -1,12 +1,14 @@
-# services/subscription_service.py
+# app/services/pos/subscription_service.py
 
 from datetime import datetime, timedelta
 from bson import ObjectId
+from typing import Optional, Tuple
+
 from ...models.admin.package_model import Package
 from ...models.admin.subscription_model import Subscription
 from ...utils.logger import Log
-from ...utils.plan.plan_change import PlanChangeService
 from ...extensions.db import db
+from ...utils.plan.plan_change import PlanChangeService
 from ...utils.crypt import hash_data, encrypt_data
 
 
@@ -14,73 +16,420 @@ class SubscriptionService:
     """
     Central subscription lifecycle service.
 
-    Supports:
-    - Create new subscription (free or paid)
-    - Renew existing subscription if same package + same billing_period
-    - Change plan (deactivate old, create new)
-    - Validate billing_period matches Package.billing_period
-    - Optional "enforce downgrade" hook after plan change
+    RULES:
+      - Cancel DOES NOT mutate history
+      - Renew ALWAYS creates new subscription term
+      - Only ONE Active/Trial subscription per business
+      - Upgrades apply immediately
+      - Downgrades scheduled
+      - Scheduled subs activate when start_date reached
     """
-    
+
+    # ---------------------------------------------------------
+    # INTERNAL HELPERS
+    # ---------------------------------------------------------
+
     @staticmethod
-    def create_subscription( business_id, user_id, user__id, package_id,  payment_method=None, 
-                            payment_reference=None, auto_renew=True, processing_callback=True, 
-                            payment_done=False, billing_period=None):
-        """
-        Create a new subscription for a business.
-        
-        Args:
-            business_id: Business ObjectId or string
-            user_id: User string ID
-            user__id: User ObjectId
-            package_id: Package ObjectId or string
-            payment_method: Optional payment method
-            payment_reference: Optional payment transaction reference
-            
-        Returns:
-            Tuple (success: bool, subscription_id: str or None, error: str or None)
-        """
-        log_tag = f"[SubscriptionService][create_subscription][{business_id}][{package_id}]"
-        
+    def _compute_end_date(start: datetime, billing_period: str):
+        bp = (billing_period or "").lower()
+
+        if bp == "monthly":
+            return start + timedelta(days=30)
+        if bp == "quarterly":
+            return start + timedelta(days=90)
+        if bp == "yearly":
+            return start + timedelta(days=365)
+        if bp == "lifetime":
+            return None
+
+        return start + timedelta(days=30)
+
+    # ---------------------------------------------------------
+    # CREATE SUBSCRIPTION
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def create_subscription(
+        business_id,
+        user_id,
+        user__id,
+        package_id,
+        payment_method=None,
+        payment_reference=None,
+        auto_renew=True,
+        payment_done=False,
+        processing_callback=False
+    ):
+        log_tag = f"[SubscriptionService][create_subscription][{business_id}]"
+
         try:
-            # Get package details
-            package = Package.get_by_id(package_id)
-            
-            if not package:
-                Log.error(f"{log_tag} Package not found")
+            pkg = Package.get_by_id(package_id)
+            if not pkg:
                 return False, None, "Package not found"
-            
-            if package.get("status") != "Active":
-                Log.error(f"{log_tag} Package is not active")
-                return False, None, "Package is not available"
-            
-            # Check for existing active subscription
-            existing_sub = Subscription.get_active_by_business(business_id)
-            
-            if existing_sub:
-                Log.warning(f"{log_tag} Business already has active subscription")
-                return False, None, "Business already has an active subscription"
-            
-            # Calculate dates
-            start_date = datetime.utcnow()
-            trial_days = package.get("trial_days", 0)
-            trial_end_date = None
-            
-            # Trial end date
+
+            if pkg.get("status") != "Active":
+                return False, None, "Package is not active"
+
+            # Ensure no active subscription exists
+            existing = Subscription.get_current_access_by_business(business_id)
+            if existing:
+                return False, None, "Business already has active subscription"
+
+            start = datetime.utcnow()
+
+            billing_period = pkg.get("billing_period") or "monthly"
+            trial_days = int(pkg.get("trial_days") or 0)
+
+            trial_end = None
             if payment_done:
                 status = Subscription.STATUS_ACTIVE
+            elif trial_days > 0:
+                trial_end = start + timedelta(days=trial_days)
+                status = Subscription.STATUS_TRIAL
             else:
-                if trial_days > 0:
-                    trial_end_date = start_date + timedelta(days=trial_days)
-                    status = Subscription.STATUS_TRIAL
-                else:
-                    status = Subscription.STATUS_ACTIVE
-            
-            Log.info(f"{log_tag} status: {status}")
-            
-            
-            # Subscription end date based on billing period
-            billing_period = package.get("billing_period")
+                status = Subscription.STATUS_ACTIVE
+
+            end_date = SubscriptionService._compute_end_date(start, billing_period)
+
+            next_payment_date = trial_end or end_date
+
+            Subscription.mark_all_access_subscriptions_inactive(business_id)
+
+            sub = Subscription(
+                business_id=business_id,
+                package_id=package_id,
+                user_id=user_id,
+                user__id=user__id,
+                billing_period=billing_period,
+                price_paid=pkg.get("price", 0),
+                currency=pkg.get("currency", "USD"),
+                start_date=start,
+                end_date=end_date,
+                trial_end_date=trial_end,
+                status=status,
+                auto_renew=auto_renew,
+                payment_method=payment_method,
+                payment_reference=payment_reference,
+                last_payment_date=start if payment_reference else None,
+                next_payment_date=next_payment_date,
+                term_number=1,
+            )
+
+            sub_id = Subscription.insert_one(sub.to_dict())
+
+            return True, sub_id, None
+
+        except Exception as e:
+            Log.error(f"{log_tag} error: {e}", exc_info=True)
+            return False, None, str(e)
+
+    # ---------------------------------------------------------
+    # CANCEL
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def cancel_subscription(*, business_id: str, subscription_id: str, reason: str | None = None):
+        log_tag = f"[subscription_service.py][cancel_subscription][{business_id}][{subscription_id}]"
+        try:
+            if not business_id or not subscription_id:
+                return False, "Missing business_id or subscription_id"
+
+            col = db.get_collection(Subscription.collection_name)
+
+            biz_oid = ObjectId(str(business_id))
+            sub_oid = ObjectId(str(subscription_id))
+
+            now = datetime.utcnow()
+
+            update_doc = {
+                "status": encrypt_data(Subscription.STATUS_CANCELLED),
+                "hashed_status": hash_data(Subscription.STATUS_CANCELLED),
+                "cancelled_at": now,
+                "updated_at": now,
+            }
+            if reason:
+                update_doc["cancellation_reason"] = encrypt_data(reason)
+
+            res = col.update_one(
+                {"_id": sub_oid, "business_id": biz_oid},
+                {"$set": update_doc},
+            )
+
+            if res.matched_count == 0:
+                return False, "Subscription not found"
+
+            if res.modified_count == 0:
+                # already cancelled or same values
+                return True, None
+
+            Log.info(f"{log_tag} cancelled")
+            return True, None
+
+        except Exception as e:
+            Log.error(f"{log_tag} error: {e}", exc_info=True)
+            return False, str(e)
+
+    # ---------------------------------------------------------
+    # RENEW → CREATE NEW TERM
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def renew_subscription(
+        business_id: str,
+        user_id: str,
+        user__id: str,
+        payment_reference=None,
+        payment_method=None,
+    ):
+        log_tag = f"[SubscriptionService][renew_subscription][{business_id}]"
+
+        try:
+            latest = Subscription.get_latest_by_business(business_id)
+            if not latest:
+                return False, "No subscription found"
+
+            pkg = Package.get_by_id(latest["package_id"])
+            if not pkg:
+                return False, "Package not found"
+
+            prev_id = latest["_id"]
+            prev_term = int(latest.get("term_number") or 1)
+
+            Subscription.mark_all_access_subscriptions_inactive(business_id)
+
+            start = datetime.utcnow()
+            billing_period = latest["billing_period"]
+
+            end_date = SubscriptionService._compute_end_date(start, billing_period)
+
+            sub = Subscription(
+                business_id=business_id,
+                package_id=latest["package_id"],
+                user_id=user_id,
+                user__id=user__id,
+                billing_period=billing_period,
+                price_paid=pkg.get("price", 0),
+                currency=pkg.get("currency", "USD"),
+                start_date=start,
+                end_date=end_date,
+                status=Subscription.STATUS_ACTIVE,
+                auto_renew=True,
+                payment_method=payment_method,
+                payment_reference=payment_reference,
+                last_payment_date=start,
+                next_payment_date=end_date,
+                previous_subscription_id=prev_id,
+                term_number=prev_term + 1,
+            )
+
+            new_id = Subscription.insert_one(sub.to_dict())
+
+            Log.info(f"{log_tag} renewed → new={new_id}")
+
+            return True, None
+
+        except Exception as e:
+            Log.error(f"{log_tag} error: {e}", exc_info=True)
+            return False, str(e)
+
+    # ---------------------------------------------------------
+    # APPLY FROM PAYMENT (upgrade / downgrade / renew)
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def apply_or_renew_from_payment(
+        business_id,
+        user_id,
+        user__id,
+        package_id,
+        billing_period,
+        payment_method=None,
+        payment_reference=None,
+        auto_renew=True,
+    ):
+        log_tag = "[SubscriptionService][apply_or_renew_from_payment]"
+
+        new_pkg = Package.get_by_id(package_id)
+        if not new_pkg:
+            return False, None, "Package not found"
+
+        active = Subscription.get_current_access_by_business(business_id)
+
+        # ------------------------------------------------
+        # No subscription → create
+        # ------------------------------------------------
+        if not active:
+            return SubscriptionService.create_subscription(
+                business_id,
+                user_id,
+                user__id,
+                package_id,
+                payment_method,
+                payment_reference,
+                auto_renew,
+                payment_done=True,
+            )
+
+        active_pkg = Package.get_by_id(active["package_id"])
+
+        # ------------------------------------------------
+        # Same plan → renew
+        # ------------------------------------------------
+        if (
+            str(active["package_id"]) == str(package_id)
+            and active["billing_period"] == billing_period
+        ):
+            ok, err = SubscriptionService.renew_subscription(
+                business_id,
+                user_id,
+                user__id,
+                payment_reference,
+                payment_method,
+            )
+            return ok, None, err
+
+        # ------------------------------------------------
+        # Downgrade → schedule
+        # ------------------------------------------------
+        if PlanChangeService.is_downgrade(active_pkg, new_pkg):
+
+            start_date = active["end_date"]
+
+            end_date = SubscriptionService._compute_end_date(
+                start_date,
+                billing_period,
+            )
+
+            sub = Subscription(
+                business_id=business_id,
+                package_id=package_id,
+                user_id=user_id,
+                user__id=user__id,
+                billing_period=billing_period,
+                price_paid=new_pkg.get("price", 0),
+                currency=new_pkg.get("currency", "USD"),
+                start_date=start_date,
+                end_date=end_date,
+                status=Subscription.STATUS_SCHEDULED,
+                auto_renew=auto_renew,
+                payment_method=payment_method,
+                payment_reference=payment_reference,
+                term_number=int(active.get("term_number") or 1) + 1,
+                previous_subscription_id=active["_id"],
+            )
+
+            sid = Subscription.insert_one(sub.to_dict())
+            return True, sid, None
+
+        # ------------------------------------------------
+        # Upgrade → immediate
+        # ------------------------------------------------
+        Subscription.mark_all_access_subscriptions_inactive(business_id)
+
+        return SubscriptionService.create_subscription(
+            business_id,
+            user_id,
+            user__id,
+            package_id,
+            payment_method,
+            payment_reference,
+            auto_renew,
+            payment_done=True,
+        )
+
+    # ---------------------------------------------------------
+    # CRON: ACTIVATE SCHEDULED
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def activate_due_scheduled_subscriptions():
+        now = datetime.utcnow()
+
+        col = db.get_collection(Subscription.collection_name)
+
+        due = col.find({
+            "hashed_status": hash_data(Subscription.STATUS_SCHEDULED),
+            "start_date": {"$lte": now},
+        })
+
+        for sub in due:
+            business_id = sub["business_id"]
+
+            # expire old actives
+            col.update_many(
+                {
+                    "business_id": business_id,
+                    "hashed_status": {
+                        "$in": [
+                            hash_data(Subscription.STATUS_ACTIVE),
+                            hash_data(Subscription.STATUS_TRIAL),
+                        ]
+                    },
+                },
+                {
+                    "$set": {
+                        "status": encrypt_data(Subscription.STATUS_EXPIRED),
+                        "hashed_status": hash_data(Subscription.STATUS_EXPIRED),
+                        "updated_at": now,
+                    }
+                },
+            )
+
+            # activate scheduled
+            col.update_one(
+                {"_id": sub["_id"]},
+                {
+                    "$set": {
+                        "status": encrypt_data(Subscription.STATUS_ACTIVE),
+                        "hashed_status": hash_data(Subscription.STATUS_ACTIVE),
+                        "updated_at": now,
+                    }
+                },
+            )
+
+            Log.info(f"[SubscriptionService] Activated scheduled subscription {sub['_id']}")
+
+            pkg = Package.get_by_id(str(sub["package_id"]))
+            PlanChangeService.enforce_all_limits(str(business_id), pkg)
+
+
+    @staticmethod
+    def renew_subscription_by_id(
+        *,
+        business_id: str,
+        user_id: str,
+        user__id: str,
+        old_subscription_id: str,
+        payment_reference: str | None = None,
+        payment_method: str | None = None,
+        auto_renew: bool | None = None,
+    ):
+        log_tag = f"[SubscriptionService][renew_subscription_by_id][{business_id}][{old_subscription_id}]"
+
+        try:
+            old = Subscription.get_by_id(old_subscription_id, business_id)
+            if not old:
+                return False, None, "Subscription not found"
+
+            # ✅ derive package & billing period from the old subscription
+            package_id = old.get("package_id")
+            billing_period = (old.get("billing_period") or "").lower().strip()
+
+            if not package_id or not billing_period:
+                return False, None, "Subscription is missing package/billing period"
+
+            pkg = Package.get_by_id(package_id)
+            if not pkg:
+                return False, None, "Package not found"
+
+            # Optional: block renew if package inactive
+            if (pkg.get("status") or "") != "Active":
+                return False, None, "This package is no longer available"
+
+            now = datetime.utcnow()
+
+            # ✅ decide start/end
+            start_date = now
             if billing_period == "monthly":
                 end_date = start_date + timedelta(days=30)
             elif billing_period == "quarterly":
@@ -88,765 +437,44 @@ class SubscriptionService:
             elif billing_period == "yearly":
                 end_date = start_date + timedelta(days=365)
             elif billing_period == "lifetime":
-                end_date = None  # No end date for lifetime
+                end_date = None
             else:
-                end_date = start_date + timedelta(days=30)  # Default to monthly
-            
-            # Next payment date
-            next_payment_date = trial_end_date if trial_end_date else end_date
-            
-            # Create subscription
-            subscription = Subscription(
+                end_date = start_date + timedelta(days=30)
+
+            # If auto_renew not provided, reuse old value
+            if auto_renew is None:
+                auto_renew = bool(old.get("auto_renew", True))
+
+            # ✅ create NEW term (do not edit old)
+            sub = Subscription(
                 business_id=business_id,
                 package_id=package_id,
                 user_id=user_id,
                 user__id=user__id,
                 billing_period=billing_period,
-                price_paid=package.get("price", 0),
-                currency=package.get("currency", "USD"),
-                start_date=start_date,
-                end_date=end_date,
-                trial_end_date=trial_end_date,
-                status=status,
-                auto_renew=auto_renew,
-                payment_method=payment_method,
-                payment_reference=payment_reference,
-                last_payment_date=datetime.utcnow() if payment_reference else None,
-                next_payment_date=next_payment_date
-            )
-            
-            subscription_id = subscription.save(processing_callback)
-            
-            if subscription_id:
-                Log.info(f"{log_tag} Subscription created successfully: {subscription_id}")
-                return True, str(subscription_id), None
-            else:
-                Log.error(f"{log_tag} Failed to save subscription")
-                return False, None, "Failed to create subscription"
-                
-        except Exception as e:
-            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
-            return False, None, str(e)
-    
-    @staticmethod
-    def check_subscription_limits(business_id, limit_type):
-        """
-        Check if business has reached subscription limits.
-        
-        Args:
-            business_id: Business ObjectId or string
-            limit_type: Type of limit to check (users, outlets, products, etc.)
-            
-        Returns:
-            Tuple (within_limits: bool, current_count: int, limit: int or None)
-        """
-        log_tag = f"[SubscriptionService][check_subscription_limits][{business_id}][{limit_type}]"
-        
-        try:
-            # Get active subscription
-            subscription = Subscription.get_active_by_business(business_id)
-            
-            if not subscription:
-                Log.warning(f"{log_tag} No active subscription found")
-                return False, 0, 0
-            
-            # Get package details
-            package = Package.get_by_id(subscription["package_id"])
-            
-            if not package:
-                Log.error(f"{log_tag} Package not found")
-                return False, 0, 0
-            
-            # Get limit from package
-            limit_field_map = {
-                "users": "max_users",
-                "outlets": "max_outlets",
-                "products": "max_products",
-                "transactions": "max_transactions_per_month",
-                "storage": "storage_limit_gb"
-            }
-            
-            limit_field = limit_field_map.get(limit_type)
-            if not limit_field:
-                Log.error(f"{log_tag} Invalid limit type: {limit_type}")
-                return True, 0, None  # Allow if unknown limit type
-            
-            limit = package.get(limit_field)
-            
-            # If no limit set (None), allow unlimited
-            if limit is None:
-                return True, 0, None
-            
-            # Get current count (this would need to query respective collections)
-            # For now, returning placeholder
-            current_count = 0  # TODO: Implement actual counting
-            
-            within_limits = current_count < limit
-            
-            Log.info(f"{log_tag} Limit check: {current_count}/{limit} - Within limits: {within_limits}")
-            return within_limits, current_count, limit
-            
-        except Exception as e:
-            Log.error(f"{log_tag} Error: {str(e)}")
-            return True, 0, None  # Allow on error (fail open)
-    
-    @staticmethod
-    def check_feature_access(business_id, feature_name):
-        """
-        Check if business has access to a specific feature.
-        
-        Args:
-            business_id: Business ObjectId or string
-            feature_name: Feature to check (e.g., "api_access", "multi_outlet")
-            
-        Returns:
-            Bool - True if feature is available
-        """
-        log_tag = f"[SubscriptionService][check_feature_access][{business_id}][{feature_name}]"
-        
-        try:
-            # Get active subscription
-            subscription = Subscription.get_active_by_business(business_id)
-            
-            if not subscription:
-                Log.warning(f"{log_tag} No active subscription - denying feature access")
-                return False
-            
-            # Get package details
-            package = Package.get_by_id(subscription["package_id"])
-            
-            if not package:
-                Log.error(f"{log_tag} Package not found")
-                return False
-            
-            # Check feature flag
-            features = package.get("features", {})
-            has_access = features.get(feature_name, False)
-            
-            Log.info(f"{log_tag} Feature access: {has_access}")
-            return has_access
-            
-        except Exception as e:
-            Log.error(f"{log_tag} Error: {str(e)}")
-            return False  # Deny on error (fail closed)
-    
-    @staticmethod
-    def renew_subscription(subscription_id, business_id, payment_reference=None):
-        """
-        Renew an existing subscription.
-        
-        Args:
-            subscription_id: Subscription ObjectId or string
-            business_id: Business ObjectId or string
-            payment_reference: Optional payment transaction reference
-            
-        Returns:
-            Tuple (success: bool, error: str or None)
-        """
-        log_tag = f"[SubscriptionService][renew_subscription][{subscription_id}]"
-        
-        try:
-            subscription_id = ObjectId(subscription_id) if not isinstance(subscription_id, ObjectId) else subscription_id
-            business_id = ObjectId(business_id) if not isinstance(business_id, ObjectId) else business_id
-            
-            # Get subscription
-            subscription = Subscription.get_by_id(subscription_id, business_id)
-            
-            if not subscription:
-                return False, "Subscription not found"
-            
-            # Get package for billing period
-            package = Package.get_by_id(subscription["package_id"])
-            
-            if not package:
-                return False, "Package not found"
-            
-            # Calculate new end date
-            current_end = subscription.get("end_date") or datetime.utcnow()
-            billing_period = subscription.get("billing_period")
-            
-            if billing_period == "monthly":
-                new_end_date = current_end + timedelta(days=30)
-            elif billing_period == "quarterly":
-                new_end_date = current_end + timedelta(days=90)
-            elif billing_period == "yearly":
-                new_end_date = current_end + timedelta(days=365)
-            else:
-                new_end_date = current_end + timedelta(days=30)
-            
-            # Update subscription
-            collection = db.get_collection(Subscription.collection_name)
-            
-            update_doc = {
-                "end_date": new_end_date,
-                "next_payment_date": new_end_date,
-                "last_payment_date": datetime.utcnow(),
-                "updated_at": datetime.utcnow()
-            }
-            
-            if payment_reference:
-                update_doc["payment_reference"] = payment_reference
-                update_doc["hashed_status"] = hash_data(Subscription.STATUS_ACTIVE)
-                update_doc["status"] = encrypt_data(Subscription.STATUS_ACTIVE)
-            
-            result = collection.update_one(
-                {"_id": subscription_id, "business_id": business_id},
-                {"$set": update_doc}
-            )
-            
-            if result.modified_count > 0:
-                Log.info(f"{log_tag} Subscription renewed until {new_end_date}")
-                return True, None
-            else:
-                Log.error(f"{log_tag} Failed to renew subscription")
-                return False, "Failed to update subscription"
-                
-        except Exception as e:
-            Log.error(f"{log_tag} Error: {str(e)}")
-            return False, str(e)
-
-    
-    # -------------------------
-    # PUBLIC: apply or renew (used by payment callback)
-    # -------------------------
-    # @staticmethod
-    # def apply_or_renew_from_payment(
-    #     business_id: str,
-    #     user_id: str,
-    #     user__id: str,
-    #     package_id: str,
-    #     billing_period: str,
-    #     payment_method: str | None = None,
-    #     payment_reference: str | None = None,
-    #     payment_id: str | None = None,
-    #     processing_callback=True,
-    #     auto_renew=True,
-    #     source: str = "payment_callback",
-    # ):
-    #     """
-    #     Called after payment success (callback) OR for free plan activation.
-
-    #     Rules:
-    #     - Validate billing_period matches the Package.billing_period (since you store it in package doc)
-    #     - If active subscription exists:
-    #         * same package + same billing_period => renew existing subscription
-    #         * else => deactivate old and create new subscription
-    #     - If no active subscription => create new subscription
-
-    #     Returns: (success: bool, subscription_id: str|None, error: str|None)
-    #     """
-    #     log_tag = "[SubscriptionService][apply_or_renew_from_payment]"
-
-    #     # -------------------------
-    #     # Validate IDs & package
-    #     # -------------------------
-    #     try:
-    #         business_oid = ObjectId(str(business_id))
-    #         package_oid = ObjectId(str(package_id))
-    #     except Exception as e:
-    #         return False, None, f"Invalid business_id/package_id: {e}"
-
-    #     pkg = Package.get_by_id(str(package_oid))
-    #     if not pkg:
-    #         return False, None, "Package not found"
-
-    #     # ✅ Validate billing_period matches Package.billing_period (your requirement)
-    #     pkg_period = (pkg.get("billing_period") or "").strip().lower()
-    #     req_period = (billing_period or "").strip().lower()
-
-    #     if not pkg_period:
-    #         return False, None, "Package billing_period missing"
-
-    #     if req_period != pkg_period:
-    #         return False, None, f"billing_period mismatch: requested={req_period}, package={pkg_period}"
-
-    #     # -------------------------
-    #     # Get active subscription
-    #     # -------------------------
-    #     try:
-    #         active_sub = Subscription.get_active_by_business(str(business_oid))
-    #     except Exception as e:
-    #         Log.error(f"{log_tag} failed to load active subscription: {e}")
-    #         active_sub = None
-
-    #     if active_sub:
-    #         active_sub_id = str(active_sub.get("_id"))
-    #         active_package_id = str(active_sub.get("package_id"))
-    #         active_period = (active_sub.get("billing_period") or "").strip().lower()
-
-    #         # ✅ SAME package + SAME billing_period => renew
-    #         if active_package_id == str(package_oid) and active_period == req_period:
-    #             Log.info(f"{log_tag} Renewing existing subscription {active_sub_id}")
-
-    #             ok, err = SubscriptionService.renew_subscription(
-    #                 subscription_id=active_sub_id,
-    #                 business_id=str(business_oid),
-    #                 payment_reference=payment_reference,
-    #             )
-    #             if not ok:
-    #                 Log.error(f"{log_tag} renew failed: {err}")
-    #                 return False, None, err or "Failed to renew subscription"
-
-    #             return True, active_sub_id, None
-
-    #         # ✅ Different package or period => change plan (deactivate old, create new)
-    #         Log.info(
-    #             f"{log_tag} Changing plan from sub={active_sub_id} "
-    #             f"(pkg={active_package_id}, period={active_period}) "
-    #             f"to pkg={package_id}, period={req_period}"
-    #         )
-
-    #         new_sub_id = SubscriptionService._apply_new_subscription(
-    #             business_id=str(business_oid),
-    #             user_id=user_id,
-    #             user__id=user__id,
-    #             package_id=str(package_oid),
-    #             billing_period=req_period,
-    #             payment_method=payment_method,
-    #             payment_reference=payment_reference,
-    #             payment_id=payment_id,
-    #             processing_callback=processing_callback,
-    #             auto_renew=auto_renew,
-    #             source=source,
-    #         )
-
-    #         if not new_sub_id:
-    #             Log.error(f"{log_tag} Failed to apply new subscription")
-    #             return False, None, "Failed to apply new subscription"
-
-    #         return True, new_sub_id, None
-
-    #     # ✅ No active subscription => create new
-    #     Log.info(f"{log_tag} No active subscription - creating new one")
-
-    #     new_sub_id = SubscriptionService._apply_new_subscription(
-    #         business_id=str(business_oid),
-    #         user_id=user_id,
-    #         user__id=user__id,
-    #         package_id=str(package_oid),
-    #         billing_period=req_period,
-    #         payment_method=payment_method,
-    #         payment_reference=payment_reference,
-    #         payment_id=payment_id,
-    #         processing_callback=processing_callback,
-    #         auto_renew=auto_renew,
-    #         source=source,
-    #     )
-
-    #     if not new_sub_id:
-    #         Log.error(f"{log_tag} Failed to create subscription")
-    #         return False, None, "Failed to create subscription"
-
-    #     return True, new_sub_id, None
-
-    @staticmethod
-    def apply_or_renew_from_payment(
-        business_id: str,
-        user_id: str,
-        user__id: str,
-        package_id: str,
-        billing_period: str,
-        payment_method: str | None = None,
-        payment_reference: str | None = None,
-        payment_id: str | None = None,
-        processing_callback=True,
-        auto_renew=True,
-        source: str = "payment_callback",
-    ):
-        """
-        Entry point after payment success.
-        Handles:
-        - renewal
-        - upgrade (immediate)
-        - downgrade (scheduled)
-        """
-
-        log_tag = "[SubscriptionService][apply_or_renew_from_payment]"
-
-        business_oid = ObjectId(str(business_id))
-        package_oid = ObjectId(str(package_id))
-
-        new_pkg = Package.get_by_id(str(package_oid))
-        if not new_pkg:
-            return False, None, "Package not found"
-
-        # Validate billing period
-        if billing_period != new_pkg.get("billing_period"):
-            return False, None, "Billing period mismatch"
-
-        active_sub = Subscription.get_active_by_business(str(business_oid))
-
-        # ─────────────────────────────────────────────
-        # 1) No active subscription → create immediately
-        # ─────────────────────────────────────────────
-        if not active_sub:
-            sub_id = SubscriptionService._create_subscription(
-                business_id,
-                user_id,
-                user__id,
-                new_pkg,
-                billing_period,
-                start_date=datetime.utcnow(),
-                payment_method=payment_method,
-                payment_reference=payment_reference,
-                auto_renew=auto_renew,
-                processing_callback=processing_callback,
-            )
-            return True, sub_id, None
-
-        active_pkg = Package.get_by_id(str(active_sub["package_id"]))
-
-        # ─────────────────────────────────────────────
-        # 2) Same plan + same period → renew
-        # ─────────────────────────────────────────────
-        if (
-            str(active_sub["package_id"]) == str(package_oid)
-            and active_sub["billing_period"] == billing_period
-        ):
-            ok, err = SubscriptionService.renew_subscription(
-                active_sub["_id"], business_id, payment_reference
-            )
-            return ok, str(active_sub["_id"]), err
-
-        # ─────────────────────────────────────────────
-        # 3) Downgrade → schedule
-        # ─────────────────────────────────────────────
-        if PlanComparator.is_downgrade(active_pkg, new_pkg):
-            Log.info(f"{log_tag} Downgrade detected → scheduling")
-
-            sub_id = SubscriptionService._schedule_subscription(
-                business_id,
-                user_id,
-                user__id,
-                new_pkg,
-                billing_period,
-                start_date=active_sub["end_date"],
-                payment_method=payment_method,
-                payment_reference=payment_reference,
-                auto_renew=auto_renew,
-                processing_callback=processing_callback,
-            )
-
-            return True, sub_id, None
-
-        # ─────────────────────────────────────────────
-        # 4) Upgrade → apply immediately
-        # ─────────────────────────────────────────────
-        Log.info(f"{log_tag} Upgrade detected → applying immediately")
-
-        Subscription.deactivate_all(business_id)
-
-        sub_id = SubscriptionService._create_subscription(
-            business_id,
-            user_id,
-            user__id,
-            new_pkg,
-            billing_period,
-            start_date=datetime.utcnow(),
-            payment_method=payment_method,
-            payment_reference=payment_reference,
-            auto_renew=auto_renew,
-            processing_callback=processing_callback,
-        )
-
-        return True, sub_id, None
-
-    @staticmethod
-    def _schedule_subscription(
-        business_id,
-        user_id,
-        user__id,
-        pkg,
-        billing_period,
-        start_date,
-        payment_method=None,
-        payment_reference=None,
-        auto_renew=True,
-        processing_callback=True,
-    ):
-        now = datetime.utcnow()
-
-        if billing_period == "monthly":
-            end_date = start_date + timedelta(days=30)
-        elif billing_period == "quarterly":
-            end_date = start_date + timedelta(days=90)
-        elif billing_period == "yearly":
-            end_date = start_date + timedelta(days=365)
-        else:
-            end_date = start_date + timedelta(days=30)
-
-        sub = Subscription(
-            business_id=business_id,
-            user_id=user_id,
-            user__id=user__id,
-            package_id=str(pkg["_id"]),
-            billing_period=billing_period,
-            price_paid=pkg.get("price", 0),
-            currency=pkg.get("currency", "USD"),
-            start_date=start_date,
-            end_date=end_date,
-            next_payment_date=end_date,
-            status=Subscription.STATUS_SCHEDULED,  # 👈 KEY
-            auto_renew=auto_renew,
-            payment_method=payment_method,
-            payment_reference=payment_reference,
-            created_at=now,
-            updated_at=now,
-        )
-
-        return str(sub.save(processing_callback))
-
-    @staticmethod
-    def _create_subscription(
-        business_id,
-        user_id,
-        user__id,
-        pkg,
-        billing_period,
-        start_date,
-        payment_method=None,
-        payment_reference=None,
-        auto_renew=True,
-        processing_callback=True,
-    ):
-        now = datetime.utcnow()
-
-        if billing_period == "monthly":
-            end_date = start_date + timedelta(days=30)
-        elif billing_period == "quarterly":
-            end_date = start_date + timedelta(days=90)
-        elif billing_period == "yearly":
-            end_date = start_date + timedelta(days=365)
-        else:
-            end_date = start_date + timedelta(days=30)
-
-        sub = Subscription(
-            business_id=business_id,
-            user_id=user_id,
-            user__id=user__id,
-            package_id=str(pkg["_id"]),
-            billing_period=billing_period,
-            price_paid=pkg.get("price", 0),
-            currency=pkg.get("currency", "USD"),
-            start_date=start_date,
-            end_date=end_date,
-            next_payment_date=end_date,
-            status=Subscription.STATUS_ACTIVE,
-            auto_renew=auto_renew,
-            payment_method=payment_method,
-            payment_reference=payment_reference,
-            created_at=now,
-            updated_at=now,
-        )
-
-        return str(sub.save(processing_callback))
-
-    # -------------------------
-    # PRIVATE: apply new subscription (deactivate old + create new)
-    # -------------------------
-    @staticmethod
-    def _apply_new_subscription(
-        business_id: str,
-        user_id: str,
-        user__id: str,
-        package_id: str,
-        billing_period: str,
-        payment_method: str | None = None,
-        payment_reference: str | None = None,
-        payment_id: str | None = None,
-        processing_callback=True,
-        auto_renew=True,
-        source: str = "payment_callback",
-    ) -> str | None:
-        """
-        Deactivate any current active subscription and create a new one.
-        Returns: subscription_id (str) or None
-        """
-        log_tag = "[SubscriptionService][_apply_new_subscription]"
-
-        try:
-            business_oid = ObjectId(str(business_id))
-            package_oid = ObjectId(str(package_id))
-        except Exception as e:
-            Log.error(f"{log_tag} invalid ids: {e}")
-            return None
-
-        pkg = Package.get_by_id(str(package_oid))
-        if not pkg:
-            Log.error(f"{log_tag} package not found: {package_id}")
-            return None
-
-        now = datetime.utcnow()
-        sub_col = db.get_collection(Subscription.collection_name)
-
-        # 1) Deactivate old active subs
-        try:
-            sub_col.update_many(
-                {"business_id": business_oid, "status": Subscription.STATUS_ACTIVE},
-                {"$set": {"status": Subscription.STATUS_INACTIVE, "ended_at": now, "updated_at": now}},
-            )
-        except Exception as e:
-            Log.error(f"{log_tag} failed to deactivate old subs: {e}")
-
-        # 2) Compute end date from billing period (monthly/quarterly/yearly)
-        start_date = now
-        bp = (billing_period or "").strip().lower()
-
-        if bp == "monthly":
-            end_date = now + timedelta(days=30)
-        elif bp == "quarterly":
-            end_date = now + timedelta(days=90)
-        elif bp == "yearly":
-            end_date = now + timedelta(days=365)
-        else:
-            # fallback
-            end_date = now + timedelta(days=30)
-
-        next_payment_date = end_date
-
-        # 3) Create subscription
-        try:
-            sub = Subscription(
-                business_id=str(business_oid),
-                package_id=str(package_oid),
-                user_id=user_id,
-                user__id=user__id,
-                billing_period=bp,
                 price_paid=pkg.get("price", 0),
                 currency=pkg.get("currency", "USD"),
                 start_date=start_date,
                 end_date=end_date,
-                status=Subscription.STATUS_ACTIVE,
+                status=Subscription.STATUS_ACTIVE,  # or Trial if you want trials again
                 auto_renew=auto_renew,
                 payment_method=payment_method,
                 payment_reference=payment_reference,
                 last_payment_date=now if payment_reference else None,
-                next_payment_date=next_payment_date,
-                source=source,
+                next_payment_date=end_date,
             )
 
-            # IMPORTANT: your model uses save(processing_callback)
-            sub_id = sub.save(processing_callback)
+            new_id = sub.save(True)
 
-            if not sub_id:
-                Log.error(f"{log_tag} failed to save subscription")
-                return None
+            if not new_id:
+                return False, None, "Failed to create renewed subscription"
 
-            sub_id = str(sub_id)
-            Log.info(f"{log_tag} Subscription created successfully: {sub_id}")
+            Log.info(f"{log_tag} renewed new_subscription_id={new_id}")
+            return True, str(new_id), None
 
         except Exception as e:
-            Log.error(f"{log_tag} error saving subscription: {e}", exc_info=True)
-            return None
-
-        # 4) OPTIONAL: enforce downgrade limits now (outlets first, then others)
-        # If you have PlanChangeService, enable this:
-        # try:
-        #     from ...utils.plan.plan_change import PlanChangeService
-        #     PlanChangeService.enforce_all(business_id=str(business_oid), package_doc=pkg)
-        # except Exception as e:
-        #     Log.error(f"{log_tag} enforce limits failed: {e}")
-
-        return sub_id
-
-    # -------------------------
-    # PUBLIC: renew subscription (extend end_date)
-    # -------------------------
-    @staticmethod
-    def renew_subscription(subscription_id, business_id, payment_reference=None):
-        """
-        Renew an existing subscription.
-
-        Returns: (success: bool, error: str|None)
-        """
-        log_tag = f"[SubscriptionService][renew_subscription][{subscription_id}]"
-
-        try:
-            subscription_id = ObjectId(subscription_id) if not isinstance(subscription_id, ObjectId) else subscription_id
-            business_id = ObjectId(business_id) if not isinstance(business_id, ObjectId) else business_id
-
-            # Get subscription
-            subscription = Subscription.get_by_id(subscription_id, business_id)
-            if not subscription:
-                return False, "Subscription not found"
-
-            # Get package for billing period validation or reference
-            package = Package.get_by_id(subscription["package_id"])
-            if not package:
-                return False, "Package not found"
-
-            # Use subscription billing_period
-            billing_period = (subscription.get("billing_period") or "").strip().lower()
-            current_end = subscription.get("end_date") or datetime.utcnow()
-
-            if billing_period == "monthly":
-                new_end_date = current_end + timedelta(days=30)
-            elif billing_period == "quarterly":
-                new_end_date = current_end + timedelta(days=90)
-            elif billing_period == "yearly":
-                new_end_date = current_end + timedelta(days=365)
-            else:
-                new_end_date = current_end + timedelta(days=30)
-
-            update_doc = {
-                "end_date": new_end_date,
-                "next_payment_date": new_end_date,
-                "last_payment_date": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
-            }
-
-            if payment_reference:
-                update_doc["payment_reference"] = payment_reference
-                # ensure status active
-                update_doc["status"] = Subscription.STATUS_ACTIVE
-
-            collection = db.get_collection(Subscription.collection_name)
-            result = collection.update_one(
-                {"_id": subscription_id, "business_id": business_id},
-                {"$set": update_doc},
-            )
-
-            if result.modified_count > 0:
-                Log.info(f"{log_tag} Subscription renewed until {new_end_date}")
-                return True, None
-
-            Log.error(f"{log_tag} Failed to renew subscription (no modification)")
-            return False, "Failed to update subscription"
-
-        except Exception as e:
-            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
-            return False, str(e)
-
-    @staticmethod
-    def activate_due_scheduled_subscriptions():
-        now = datetime.utcnow()
-        col = db.get_collection(Subscription.collection_name)
-
-        due = col.find({
-            "status": Subscription.STATUS_SCHEDULED,
-            "start_date": {"$lte": now},
-        })
-
-        for sub in due:
-            business_id = sub["business_id"]
-
-            # expire old active
-            col.update_many(
-                {"business_id": business_id, "status": Subscription.STATUS_ACTIVE},
-                {"$set": {"status": Subscription.STATUS_EXPIRED}},
-            )
-
-            # activate scheduled
-            col.update_one(
-                {"_id": sub["_id"]},
-                {"$set": {"status": Subscription.STATUS_ACTIVE}},
-            )
-
-            Log.info(f"[SubscriptionService] Activated scheduled subscription {sub['_id']}")
-
-            # 🔒 enforce limits NOW
-            pkg = Package.get_by_id(str(sub["package_id"]))
-            PlanChangeService.enforce_all_limits(str(business_id), pkg)
+            Log.error(f"{log_tag} error: {e}", exc_info=True)
+            return False, None, str(e)
 
 
 

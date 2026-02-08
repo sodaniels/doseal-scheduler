@@ -154,11 +154,9 @@ class HubtelWebhook(MethodView):
                         business_id=business_id,
                         user_id=user_id,
                         user__id=user__id,
-                        billing_period=billing_period,
                         package_id=package_id,
                         payment_method=PAYMENT_METHODS["HUBTEL"],
                         payment_reference=parsed['transaction_id'],
-                        processing_callback=True,
                         payment_done=True
                     )
                     
@@ -343,7 +341,7 @@ class AsoribaWebhook(MethodView):
 
             parsed = parse_asoriba_callback_from_query()
             client_reference = parsed["reference"]
-
+            
             if not client_reference:
                 Log.error(f"{log_tag} Missing order_id/reference in callback")
                 return {"code": 400, "message": "Missing reference/order_id"}, 400
@@ -384,7 +382,7 @@ class AsoribaWebhook(MethodView):
                 "callback_response": callback_payload,
                 "processing_callback": True,
             }
-
+            
             # Amount verification (log only; don't fail hard unless you want to)
             cb_amount = callback_payload.get("amount")
             if cb_amount is not None:
@@ -401,6 +399,7 @@ class AsoribaWebhook(MethodView):
                 
             # Get frontend return URL from environment
             frontend_return_url = os.getenv("PAYMENT_FRONT_END_RETURN_URL", "")
+            
 
             # ---- Status handling ----
             if parsed["is_success"]:
