@@ -453,13 +453,15 @@ class FacebookBoostPostResource(MethodView):
                 errors = result.get("errors", [])
                 error_messages = [e.get("error", str(e)) for e in errors]
                 
-                Log.info(f"{log_tag} Boost failed: {errors}")
+                sweet_error_object = errors[0].get("details")
                 
+                Log.info(f"{log_tag} Boost failed: {errors}")
                 return jsonify({
                     "success": False,
-                    "message": "Failed to boost post",
-                    "errors": errors,
-                    "error_summary": "; ".join(error_messages),
+                    "status_code": HTTP_STATUS_CODES["BAD_REQUEST"],
+                    "message": sweet_error_object.get("error_user_msg"),
+                    "message_to_show": sweet_error_object.get("error_user_msg"),
+                    "error": errors,
                 }), HTTP_STATUS_CODES["BAD_REQUEST"]
             
             # =========================================
