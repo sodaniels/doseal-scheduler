@@ -330,13 +330,10 @@ class CreateScheduledPostResource(MethodView):
         user__id = str(user.get("_id") or "")
         if not business_id or not user__id:
             return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
-
+        
         # ---------------------------------------------------
         # ✅ BUSINESS SUSPENSION (single source of truth)
         # ---------------------------------------------------
-        # Choose behavior:
-        # - False => block creation entirely if suspended (recommended)
-        # - True  => allow save but DO NOT enqueue if suspended
         ALLOW_SCHEDULE_WHEN_SUSPENDED = env_bool(
             "ALLOW_SCHEDULE_WHEN_SUSPENDED",
             default=False,
@@ -346,7 +343,6 @@ class CreateScheduledPostResource(MethodView):
         try:
             susp = _get_business_suspension(business_id) or {"is_suspended": False}
         except Exception as e:
-            # safest: do NOT block on lookup failure
             Log.info(f"{log_tag} suspension lookup failed (ignored): {e}")
             susp = {"is_suspended": False}
 
@@ -382,6 +378,47 @@ class CreateScheduledPostResource(MethodView):
                 "message": "Validation failed",
                 "errors": err.messages,
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+         # ---------------------------------------------------
+        # ✅ 2) USE SCHEMA NORMALIZED OUTPUTS
+        # ---------------------------------------------------
+        # ✅ This is already a datetime object from the schema!
+        scheduled_at_utc = payload["_scheduled_at_utc"]
+        
+        # ✅ DEBUG: Check scheduled time vs current time
+        now_utc = datetime.now(timezone.utc)
+        
+        # Ensure scheduled_at_utc is timezone-aware
+        if scheduled_at_utc.tzinfo is None:
+            scheduled_at_utc = scheduled_at_utc.replace(tzinfo=timezone.utc)
+        
+        diff_seconds = (scheduled_at_utc - now_utc).total_seconds()
+        
+        Log.info(f"{log_tag} Current time (UTC): {now_utc.isoformat()}")
+        Log.info(f"{log_tag} Scheduled time (UTC): {scheduled_at_utc.isoformat()}")
+        Log.info(f"{log_tag} Time difference: {diff_seconds:.0f} seconds ({diff_seconds/60:.1f} minutes)")
+
+        # ✅ VALIDATE: Ensure scheduled time is in the future
+        MIN_SCHEDULE_DELAY_SECONDS = 60  # At least 1 minute in the future
+        
+        if diff_seconds < MIN_SCHEDULE_DELAY_SECONDS:
+            error_message = {
+                "success": False,
+                "message": f"Scheduled time must be at least {MIN_SCHEDULE_DELAY_SECONDS} seconds in the future",
+                "errors": {
+                    "scheduled_at": [
+                        f"Time is {abs(diff_seconds):.0f} seconds {'in the past' if diff_seconds < 0 else 'too soon'}. "
+                        f"Please schedule at least {MIN_SCHEDULE_DELAY_SECONDS} seconds from now."
+                    ]
+                },
+                "debug": {
+                    "now_utc": now_utc.isoformat(),
+                    "scheduled_at_utc": scheduled_at_utc.isoformat(),
+                    "diff_seconds": diff_seconds,
+                }
+            }
+            Log.info(f"{log_tag} {error_message}")
+            return jsonify(error_message), HTTP_STATUS_CODES["BAD_REQUEST"]
 
         # ---------------------------------------------------
         # ✅ 2) USE SCHEMA NORMALIZED OUTPUTS
@@ -394,13 +431,19 @@ class CreateScheduledPostResource(MethodView):
             normalized_media = [normalized_media]
         elif not isinstance(normalized_media, list):
             normalized_media = None
+            
 
-        destinations = payload["destinations"]
+        # USE RESOLVED DESTINATIONS (with per-platform text)
+        destinations = payload.get("_resolved_destinations") or payload["destinations"]
+
         manual_required = payload.get("_manual_required") or []
 
-        # Optional hard block for manual-required destinations
-        if manual_required and FACEBOOK_STORY_MODE == "reject":
-            pass
+        # ✅ GET PLATFORM-SPECIFIC TEXT AND LINKS
+        platform_text = normalized_content.get("platform_text")
+        platform_link = normalized_content.get("platform_link")
+        
+        # ✅ GET WARNINGS FOR RESPONSE (optional)
+        link_warnings = payload.get("_link_warnings") or []
 
         # ---------------------------------------------------
         # ✅ 3) BUILD DB DOCUMENT (canonical form)
@@ -415,9 +458,12 @@ class CreateScheduledPostResource(MethodView):
             "scheduled_at_utc": scheduled_at_utc,
             "destinations": destinations,
 
+            # ✅ FIXED: Include platform_text and platform_link
             "content": {
                 "text": normalized_content.get("text"),
+                "platform_text": platform_text,
                 "link": normalized_content.get("link"),
+                "platform_link": platform_link,
                 "media": normalized_media,
             },
 
@@ -426,7 +472,6 @@ class CreateScheduledPostResource(MethodView):
 
             "manual_required": manual_required or None,
 
-            # optional UI meta
             "suspension": {
                 "is_suspended": is_suspended,
                 "reason": susp.get("reason"),
@@ -462,6 +507,7 @@ class CreateScheduledPostResource(MethodView):
                 "success": True,
                 "message": "scheduled (manual_required)",
                 "data": created,
+                "warnings": {"links_ignored": link_warnings} if link_warnings else None,
             }), HTTP_STATUS_CODES["CREATED"]
 
         # ---------------------------------------------------
@@ -477,6 +523,7 @@ class CreateScheduledPostResource(MethodView):
                 "success": True,
                 "message": "scheduled (publishing suspended)",
                 "data": created,
+                "warnings": {"links_ignored": link_warnings} if link_warnings else None,
             }), HTTP_STATUS_CODES["CREATED"]
 
         # ---------------------------------------------------
@@ -487,7 +534,6 @@ class CreateScheduledPostResource(MethodView):
 
             job_id = f"publish-{business_id}-{post_id}"
 
-            # cancel old job if exists
             try:
                 existing = scheduler.get_job(job_id)
                 if existing:
@@ -524,12 +570,20 @@ class CreateScheduledPostResource(MethodView):
                 "message": "Scheduled post created but enqueue failed",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-        return jsonify({
+        # ✅ BUILD RESPONSE WITH OPTIONAL WARNINGS
+        response = {
             "success": True,
             "message": "scheduled",
             "data": created,
-        }), HTTP_STATUS_CODES["CREATED"]
+        }
+        
+        # ✅ Include link warnings if any platforms had their links ignored
+        if link_warnings:
+            response["warnings"] = {
+                "links_ignored": link_warnings
+            }
 
+        return jsonify(response), HTTP_STATUS_CODES["CREATED"]
 
 
 

@@ -256,6 +256,43 @@ class Subscription(BaseModel):
             return None
 
     @classmethod
+    def get_active_by_business(cls, business_id):
+        """
+        Get active or trial subscription for a business.
+        (Returns any subscription that gives the business current access)
+        """
+        log_tag = f"[subscription.py][Subscription][get_active_by_business][{business_id}]"
+        
+        try:
+            business_id_obj = ObjectId(business_id)
+            
+            collection = db.get_collection(cls.collection_name)
+            
+            # ✅ ACTIVE OR TRIAL - both give access
+            subscription = collection.find_one({
+                "business_id": business_id_obj,
+                "hashed_status": {
+                    "$in": [
+                        hash_data(cls.STATUS_ACTIVE),
+                        hash_data(cls.STATUS_TRIAL)
+                    ]
+                }
+            }, sort=[("created_at", -1)])
+            
+            if subscription:
+                subscription = cls._normalise_subscription_doc(subscription)
+                Log.info(f"{log_tag} Active/Trial subscription found")
+            else:
+                Log.info(f"{log_tag} No active subscription found")
+            
+            return subscription
+            
+        except Exception as e:
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            return None
+    
+    
+    @classmethod
     def get_current_access_by_business(cls, business_id: str) -> Optional[dict]:
         """
         The subscription that currently grants access:

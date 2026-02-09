@@ -7,6 +7,14 @@ import time, os
 import requests
 import math
 
+#schemas
+
+from ...schemas.social.scheduled_posts_schema import (
+    get_text_for_destination,
+    get_link_for_destination,
+)
+
+
 #models
 from ...models.social.scheduled_post import ScheduledPost
 from ...models.social.social_account import SocialAccount
@@ -1517,19 +1525,26 @@ def _publish_scheduled_post(post_id: str, business_id: str):
     any_failed = False
 
     content = post.get("content") or {}
-    text = (content.get("text") or "").strip()
-    link = content.get("link")
-
-    # global media applies to all destinations unless dest overrides
+    
+    # Global media applies to all destinations unless dest overrides
     global_media = _as_list(content.get("media"))
 
     for dest in post.get("destinations") or []:
         platform = (dest.get("platform") or "").strip().lower()
 
-        # per-destination overrides
-        dest_text = ((dest.get("text") or "")).strip() or text
-        dest_link = dest.get("link") or link
+        # ✅ USE HELPER FUNCTIONS FOR TEXT/LINK RESOLUTION
+        # Priority: destination.text > platform_text[platform] > global text
+        dest_text = get_text_for_destination(content, dest)
+        
+        # Priority: destination.link > platform_link[platform] > global link
+        # Returns None if platform doesn't support links
+        dest_link = get_link_for_destination(content, dest)
+        
+        # Media: destination.media > global media
         dest_media = _as_list(dest.get("media")) or global_media
+        
+        # Debug logging to verify correct text is being used
+        Log.info(f"{log_tag} [{platform}] text_length={len(dest_text)} text_preview={dest_text[:50]}...")
 
         try:
             if platform == "facebook":
@@ -1646,10 +1661,8 @@ def _publish_scheduled_post(post_id: str, business_id: str):
     
     # ✅✅✅ ENQUEUE EMAIL JOBS HERE (AFTER FINAL STATUS UPDATE)
     try:
-        # IMPORTANT: use the same enqueue helper your app uses everywhere.
         from ...extensions.queue import enqueue
 
-        # Decide which email job to run
         if overall_status in (
             ScheduledPost.STATUS_PUBLISHED,
             getattr(ScheduledPost, "STATUS_PARTIAL", "partial"),
@@ -1677,6 +1690,7 @@ def _publish_scheduled_post(post_id: str, business_id: str):
 
     except Exception as e:
         Log.info(f"{log_tag} enqueue email job failed (ignored): {e}")
-
+        
+        
 def publish_scheduled_post(post_id: str, business_id: str):
     return run_in_app_context(_publish_scheduled_post, post_id, business_id)

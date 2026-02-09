@@ -56,8 +56,8 @@ https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oaut
 https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/pinterest/callback
 
 
-curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/x/start" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MWVkZjM5OTExZTdkYjY4MjQ5YjU0IiwiZXhwIjoxNzcwNTkzNDc2LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.kdWsJQY5gVBDOVoj3HkOtFm__mO2A27qU860ho8y_BI"
+curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/instagram/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk4MWVkZjM5OTExZTdkYjY4MjQ5YjU0IiwiZXhwIjoxNzcwNzg2NDkyLCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.tIVe_Lt14xEtd9MS0MDQnCdVFZmRklCq0KMKeKocWTM"
 
 
 
