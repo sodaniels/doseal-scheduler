@@ -1,6 +1,6 @@
 # resources/payment_webhook_resource.py
 
-import os
+import os, ast
 from datetime import datetime
 from flask import request, g, jsonify
 from flask.views import MethodView
@@ -9,6 +9,7 @@ from flask_smorest import Blueprint
 from ....services.pos.subscription_service import SubscriptionService
 from ....constants.payment_methods import PAYMENT_METHODS
 from ....models.business_model import Business
+from ....models.admin.package_model import Package
 from ....utils.logger import Log
 from ....utils.json_response import prepared_response
 from ....utils.payments.mpesa_utils import verify_mpesa_signature
@@ -23,10 +24,7 @@ from ....utils.payments.asoriba_utils import (
 )
 from ....utils.helpers import build_receipt_sms
 from ....services.email_service import (
-    send_user_registration_email,
-    send_new_contact_sale_email,
-    send_password_changed_email,
-    send_otp_email
+    send_payment_confirmation_email
 )
 
 
@@ -36,257 +34,283 @@ payment_webhook_blp = Blueprint("payment_webhooks", __name__, description="Payme
 @payment_webhook_blp.route("/webhooks/payment/hubtel", methods=["POST"])
 class HubtelWebhook(MethodView):
     """Handle Hubtel payment webhooks/callbacks."""
-    
+
     def post(self):
-        """Process Hubtel payment callback."""
-        
         client_reference = None
         log_tag = "[HubtelWebhook][post]"
         client_ip = request.remote_addr
-        
+
         try:
-            # Get raw request data
-            data = request.get_json()
-            
-            Log.info(f"{log_tag} Received Hubtel webhook")
+            data = request.get_json(silent=True) or {}
+
+            Log.info(f"{log_tag} Received Hubtel webhook ip={client_ip}")
             Log.info(f"{log_tag} Callback Transaction: {data}")
-            
-            # Verify and parse callback
+
+            # ---------------------------------------------------------
+            # 1) Verify + Parse callback
+            # ---------------------------------------------------------
             if not verify_hubtel_callback(data):
                 Log.error(f"{log_tag} Invalid Hubtel callback structure")
-                return {
-                    "code": 401,
-                    "message": "Invalid callback structure"
-                }, 401
-            
-            # Parse callback data using helper
+                return {"code": 401, "message": "Invalid callback structure"}, 401
+
             parsed = parse_hubtel_callback(data)
             if not parsed:
                 Log.error(f"{log_tag} Failed to parse callback")
-                return {
-                    "code": 400,
-                    "message": "Failed to parse callback"
-                }, 400
-            
-            client_reference = parsed['client_reference']
-            
-            Log.info(f"{log_tag} Processing payment - Reference: {client_reference}, Code: {parsed['response_code']}")
-            
-            # Get payment from database
+                return {"code": 400, "message": "Failed to parse callback"}, 400
+
+            client_reference = parsed.get("client_reference")
+            if not client_reference:
+                Log.error(f"{log_tag} Missing client_reference in callback")
+                return {"code": 400, "message": "Missing client_reference"}, 400
+
+            Log.info(
+                f"{log_tag} Processing payment reference={client_reference}, response_code={parsed.get('response_code')}"
+            )
+
+            # ---------------------------------------------------------
+            # 2) Load payment
+            # ---------------------------------------------------------
             payment = Payment.get_by_order_id(client_reference)
-            
             if not payment:
                 Log.error(f"{log_tag} Payment not found for reference: {client_reference}")
-                return {
-                    "code": 404,
-                    "message": "Payment not found"
-                }, 404
-            
-            payment_id = payment.get('_id')
-            current_status = payment.get('status')
-            
-            Log.info(f"{log_tag} Payment found: {payment_id}, Current status: {current_status}")
-            
-            # Check if payment is already processed
+                return {"code": 404, "message": "Payment not found"}, 404
+
+            payment_id = str(payment.get("_id"))
+            business_id = str(payment.get("business_id") or "")
+            current_status = (payment.get("status") or "").strip()
+
+            Log.info(f"{log_tag} Payment found id={payment_id}, status={current_status}")
+
+            # Idempotency: already processed
             if current_status in [Payment.STATUS_SUCCESS, Payment.STATUS_FAILED]:
-                Log.warning(f"{log_tag} Payment already processed with status: {current_status}")
-                return {
-                    "code": 200,
-                    "message": "Callback already processed"
-                }, 200
-            
-            # Validate amount matches
-            if parsed['amount']:
-                amount_valid = validate_hubtel_callback_amount(
-                    parsed['amount'],
-                    payment.get('amount')
-                )
-                if not amount_valid:
-                    Log.warning(f"{log_tag} Amount mismatch detected")
-                    # Continue anyway, but log the discrepancy
-            
-            # Update payment with callback data
+                Log.warning(f"{log_tag} Payment already processed with status={current_status}")
+                return {"code": 200, "message": "Callback already processed"}, 200
+
+            # ---------------------------------------------------------
+            # 3) Validate amount (optional, but keep)
+            # ---------------------------------------------------------
+            if parsed.get("amount") is not None:
+                try:
+                    amount_valid = validate_hubtel_callback_amount(parsed["amount"], payment.get("amount"))
+                    if not amount_valid:
+                        Log.warning(f"{log_tag} Amount mismatch detected (continuing)")
+                except Exception as e:
+                    Log.warning(f"{log_tag} Amount validation error (ignored): {e}")
+
+            # ---------------------------------------------------------
+            # 4) Prepare update_data
+            # ---------------------------------------------------------
             update_data = {
-                "checkout_request_id": parsed['checkout_id'] or payment.get('checkout_request_id'),
-                "customer_phone": parsed['customer_phone'] or payment.get('customer_phone'),
-                "customer_name": parsed['customer_name'] or payment.get('customer_name'),
-                "customer_email": parsed['customer_email'] or payment.get('customer_email'),
+                "checkout_request_id": parsed.get("checkout_id") or payment.get("checkout_request_id"),
+                "customer_phone": parsed.get("customer_phone") or payment.get("customer_phone"),
+                "customer_name": parsed.get("customer_name") or payment.get("customer_name"),
+                "customer_email": parsed.get("customer_email") or payment.get("customer_email"),
+                "updated_at": datetime.utcnow(),
             }
             
+            amount_detail = ast.literal_eval(payment.get("amount_detail"))
             
-            # Add payment details to metadata
-            if parsed['payment_details']:
-                existing_metadata = payment.get('metadata', {})
-                existing_metadata['payment_details'] = parsed['payment_details']
-                existing_metadata['sales_invoice_id'] = parsed['sales_invoice_id']
-                existing_metadata['charges'] = parsed['charges']
-                update_data['metadata'] = existing_metadata
-                update_data['callback_response'] = data
+            addon_users = 1 + int(amount_detail.get("addon_users"))
             
-            # Process based on success/failure
-            if parsed['is_success']:
-                # Payment successful
-                Log.info(f"{log_tag} Payment successful - Transaction ID: {parsed['transaction_id']}")
+            package_amount = amount_detail.get("package_amount")
+            currency_symbol = amount_detail.get("from_currency")
+            
+            # return jsonify(amount_detail)
+            total_from_amount = amount_detail.get("total_from_amount") or 0
+
+            # enrich metadata
+            if parsed.get("payment_details") is not None:
+                existing_metadata = payment.get("metadata") or {}
+                if not isinstance(existing_metadata, dict):
+                    existing_metadata = {}
+
+                existing_metadata["payment_details"] = parsed.get("payment_details")
+                existing_metadata["sales_invoice_id"] = parsed.get("sales_invoice_id")
+                existing_metadata["charges"] = parsed.get("charges")
+
+                update_data["metadata"] = existing_metadata
+                update_data["callback_response"] = data
+
+            # ---------------------------------------------------------
+            # 5) Success path
+            # ---------------------------------------------------------
+            if parsed.get("is_success") is True:
+                Log.info(f"{log_tag} Payment SUCCESS tx_id={client_reference}")
                 
-                #Send email of receipt
-                
-                
-                # Update payment status
+                #email
+                try:
+                    package = Package.get_by_id(str(payment.get("package_id")))
+                    send_payment_confirmation_email(
+                        email=payment.get("customer_email"),
+                        fullname=payment.get("customer_name"),
+                        currency=currency_symbol,
+                        receipt_number=payment.get("customer_phone"),
+                        invoice_number=payment.get("reference") or client_reference,
+                        payment_method=payment.get("payment_method"),
+                        paid_date=payment.get("completed_at") or datetime.utcnow(),
+                        plan_name=(package or {}).get("name"),
+                        addon_users=addon_users,
+                        package_amount=package_amount,
+                        total_from_amount=total_from_amount,
+                    )
+                except Exception as e:
+                    Log.warning(f"{log_tag} Error sending payment confirmation (ignored): {e}")
+
+                return {"code": 200, "message": "Callback processed successfully"}, 200
+
+
+                # 5.1 Mark payment success FIRST (critical)
                 Payment.update_status(
                     payment_id,
                     Payment.STATUS_SUCCESS,
-                    gateway_transaction_id=parsed['transaction_id']
+                    gateway_transaction_id=parsed.get("transaction_id"),
                 )
-                
-                # Update additional fields
-                business_id = payment.get("business_id")
-                Payment.update(
-                    payment_id, 
-                    business_id=business_id,
-                    processing_callback=True, 
-                    **update_data
-                )
-                
-                # Create subscription
-                metadata = payment.get('metadata', {})
-                old_package_id = metadata.get('old_package_id')
-                package_id = metadata.get('package_id') or payment.get('package_id')
-                business_id = payment.get('business_id')
-                user_id = payment.get('user_id')
-                user__id = payment.get('user__id')
-                billing_period = metadata.get('billing_period', 'monthly')
-                referernce = parsed.get("client_reference")
-                
-                
-                if not old_package_id:
-                    Log.info(f"{log_tag} Creating subscription for business {business_id} with package {package_id}")
-                    success, subscription_id, error = SubscriptionService.create_subscription(
-                        business_id=business_id,
-                        user_id=user_id,
-                        user__id=user__id,
-                        package_id=package_id,
-                        payment_method=PAYMENT_METHODS["HUBTEL"],
-                        payment_reference=referernce,
-                        payment_done=True
-                    )
-                    
-                    if success:
-                        Log.info(f"{log_tag} Subscription created: {subscription_id}")
-                        
-                        #update subscription status
-                        
-                        try:
-                            update_account_status_package = Business.update_account_status_by_business_id(
-                                business_id,
-                                client_ip,
-                                'subscribed_to_package',
-                                True
-                            )
-                            Log.info(f"{log_tag} update_account_status_package: {update_account_status_package}")
-                        except Exception as e:
-                            Log.info(f"{log_tag} \t Error updating account status: {str(e)}")
-                        
-                        
-                        return {
-                            "code": 200,
-                            "message": "Callback processed successfully",
-                            "subscription_id": subscription_id
-                        }, 200
-                    else:
-                        Log.error(f"{log_tag} Subscription creation failed: {error}")
-                        Payment.update(
-                            payment_id,
-                            business_id=business_id,
-                            processing_callback=True,
-                            notes=f"Payment successful but subscription failed: {error}"
-                        )
-                        return {
-                            "code": 500,
-                            "message": f"Payment successful but subscription failed: {error}"
-                        }, 500
-                else:
-                    Log.info(f"{log_tag} Old package ID: {package_id}")
-                    success, subscription_id, error  = SubscriptionService.apply_or_renew_from_payment(
-                        business_id=business_id,
-                        user_id=user_id,
-                        user__id=user__id,
-                        package_id=package_id,
-                        billing_period=billing_period,
-                        payment_method=PAYMENT_METHODS["HUBTEL"],
-                        payment_reference=parsed['transaction_id'],
-                        payment_id=str(payment.get("_id")),
-                        processing_callback=True,
-                        source="hubtel_callback",
-                    )
-                    
-                    if success:
-                        Log.info(f"{log_tag} Subscription created: {subscription_id}")
-                        return {
-                            "code": 200,
-                            "message": "Callback processed successfully",
-                            "subscription_id": subscription_id
-                        }, 200
-                    else:
-                        Log.error(f"{log_tag} Subscription creation failed: {error}")
-                        Payment.update(
-                            payment_id,
-                            business_id=business_id,
-                            processing_callback=True,
-                            notes=f"Payment successful but subscription failed: {error}"
-                        )
-                        return {
-                            "code": 500,
-                            "message": f"Payment successful but subscription failed: {error}"
-                        }, 500
-                                        
-                
-            else:
-                # Payment failed
-                error_message = get_hubtel_response_code_message(parsed['response_code'])
-                Log.warning(f"{log_tag} Payment failed - {error_message}")
-                
-                Payment.update_status(
-                    payment_id,
-                    Payment.STATUS_FAILED,
-                    error_message=error_message
-                )
-                
+
+                # 5.2 Update payment extra fields
                 Payment.update(
                     payment_id,
                     business_id=business_id,
                     processing_callback=True,
-                    **update_data
+                    completed_at=datetime.utcnow(),
+                    **update_data,
                 )
+
+                # 5.3 Create or renew subscription
+                metadata = payment.get("metadata") or {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+
+                old_package_id = metadata.get("old_package_id")
+                package_id = metadata.get("package_id") or payment.get("package_id")
+                billing_period = metadata.get("billing_period", "monthly")
+
+                user_id = metadata.get("user_id") or payment.get("user_id")
+                user__id = metadata.get("user__id") or payment.get("user__id")
+
+                # choose a consistent payment_reference for subscriptions
+                # (client_reference is usually best, because it’s YOUR order id)
+                payment_reference = client_reference
+
+                if not old_package_id:
+                    Log.info(f"{log_tag} Creating subscription business={business_id} package={package_id}")
+                    success, subscription_id, error = SubscriptionService.create_subscription(
+                        business_id=business_id,
+                        user_id=user_id,
+                        user__id=user__id,
+                        package_id=str(package_id),
+                        payment_method=PAYMENT_METHODS["HUBTEL"],
+                        payment_reference=payment_reference,
+                        payment_done=True,
+                    )
+
+                    if not success:
+                        Log.error(f"{log_tag} Subscription creation failed: {error}")
+                        Payment.update(
+                            payment_id,
+                            business_id=business_id,
+                            processing_callback=True,
+                            notes=f"Payment successful but subscription failed: {error}",
+                            updated_at=datetime.utcnow(),
+                        )
+                        return {"code": 500, "message": f"Payment successful but subscription failed: {error}"}, 500
+
+                    # update business “subscribed_to_package”
+                    try:
+                        Business.update_account_status_by_business_id(
+                            business_id,
+                            client_ip,
+                            "subscribed_to_package",
+                            True,
+                        )
+                    except Exception as e:
+                        Log.warning(f"{log_tag} Error updating account status (ignored): {e}")
+
+                else:
+                    Log.info(f"{log_tag} Plan change/renew flow old_package_id={old_package_id}")
+                    success, subscription_id, error = SubscriptionService.apply_or_renew_from_payment(
+                        business_id=business_id,
+                        user_id=user_id,
+                        user__id=user__id,
+                        package_id=str(package_id),
+                        billing_period=billing_period,
+                        payment_method=PAYMENT_METHODS["HUBTEL"],
+                        payment_reference=payment_reference,
+                        payment_id=payment_id,
+                        processing_callback=True,
+                        source="hubtel_callback",
+                    )
+
+                    if not success:
+                        Log.error(f"{log_tag} Subscription apply/renew failed: {error}")
+                        Payment.update(
+                            payment_id,
+                            business_id=business_id,
+                            processing_callback=True,
+                            notes=f"Payment successful but subscription failed: {error}",
+                            updated_at=datetime.utcnow(),
+                        )
+                        return {"code": 500, "message": f"Payment successful but subscription failed: {error}"}, 500
+
+                # 5.4 Send receipt email (non-blocking)
                 
-                return {
-                    "code": 200,
-                    "message": "Callback processed - Payment failed",
-                    "payment_status": parsed['status'],
-                    "error": error_message
-                }, 200
                 
+                
+                
+                
+            # ---------------------------------------------------------
+            # 6) Failure path
+            # ---------------------------------------------------------
+            error_message = get_hubtel_response_code_message(parsed.get("response_code"))
+            Log.warning(f"{log_tag} Payment FAILED - {error_message}")
+
+            Payment.update_status(
+                payment_id,
+                Payment.STATUS_FAILED,
+                error_message=error_message,
+            )
+
+            Payment.update(
+                payment_id,
+                business_id=business_id,
+                processing_callback=True,
+                completed_at=datetime.utcnow(),
+                **update_data,
+            )
+
+            # Optional: send failed payment email (if you want)
+            # try:
+            #     send_payment_failed_email(...)
+            # except Exception:
+            #     pass
+
+            return {
+                "code": 200,
+                "message": "Callback processed - Payment failed",
+                "payment_status": parsed.get("status"),
+                "error": error_message,
+            }, 200
+
         except Exception as e:
             Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
-            
+
             if client_reference:
                 try:
                     payment = Payment.get_by_order_id(client_reference)
-                    business_id = payment.get("business_id")
                     if payment:
+                        business_id = str(payment.get("business_id") or "")
                         Payment.update(
-                            payment['_id'],
+                            str(payment.get("_id")),
                             business_id=business_id,
                             processing_callback=True,
-                            notes=f"Callback error: {str(e)}"
+                            notes=f"Callback error: {str(e)}",
+                            updated_at=datetime.utcnow(),
                         )
                 except Exception:
                     pass
-            
-            return {
-                "code": 500,
-                "message": f"Error processing callback: {str(e)}"
-            }, 500
 
+            return {"code": 500, "message": f"Error processing callback: {str(e)}"}, 500
+        
+        
 
 @payment_webhook_blp.route("/webhooks/payment/asoriba", methods=["GET", "POST"])
 class AsoribaWebhook(MethodView):

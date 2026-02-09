@@ -920,7 +920,87 @@ def send_otp_email(
         Log.error(f"send_otp_email failed: {exc}")
         raise
 
+# ---------------------------------
+# EMAIL TO USER UPON PAYMENT SUCCESS
+#----------------------------------
+from typing import Dict, Any
 
+def send_payment_confirmation_email(
+    email: str,
+    fullname: str,
+    total_from_amount: float,
+    currency: str,
+    receipt_number: str,
+    invoice_number: str,
+    payment_method: str,
+    paid_date: str,
+    plan_name: str,
+    package_amount: str,
+    invoice_url: str | None = None,
+    addon_users: str | None = None,
+    receipt_url: str | None = None,
+) -> Dict[str, Any]:
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    subject = f"Payment received — {cfg.from_name}"
+
+    text = (
+        f"Hi {fullname},\n\n"
+        f"We’ve received your payment for {plan_name}.\n\n"
+        f"Amount: {currency}{total_from_amount:.2f}\n"
+        f"Receipt #: {receipt_number}\n"
+        f"Invoice #: {invoice_number}\n"
+        f"Payment method: {payment_method}\n"
+        f"Paid on: {paid_date}\n\n"
+    )
+
+    if invoice_url:
+        text += f"Download invoice: {invoice_url}\n"
+    if receipt_url:
+        text += f"Download receipt: {receipt_url}\n"
+
+    text += (
+        "\nIf you didn’t make this payment, contact support immediately.\n\n"
+        f"— {cfg.from_name}"
+    )
+
+    return svc.send_templated(
+        to=email,
+        subject=subject,
+        template="email/payment_confirmation.html",
+        context={
+            "email": email,
+            "fullname": fullname,
+            "app_name": cfg.from_name,
+
+            # Payment summary
+            "total_amount": f"{total_from_amount:.2f}",
+            "currency_symbol": currency,
+            "receipt_number": receipt_number,
+            "invoice_number": invoice_number,
+            "payment_method": payment_method,
+            "package_amount": package_amount,
+            "paid_date": paid_date,
+            "plan_name": plan_name,
+            "addon_users": addon_users,
+
+            # Download links
+            "invoice_url": invoice_url,
+            "receipt_url": receipt_url,
+
+            # Footer
+            "support_email": "support@schedulefy.org",
+            "sender_domain": "schedulefy.org",
+        },
+        text_fallback=text,
+        tags=["payment", "receipt"],
+        meta={
+            "email_type": "payment_confirmation",
+            "receipt_number": receipt_number,
+            "invoice_number": invoice_number,
+        },
+    )
 
 
 
