@@ -22,11 +22,14 @@ from ....utils.payments.hubtel_utils import (
 from ....utils.payments.asoriba_utils import (
     verify_asoriba_signature, parse_asoriba_callback_from_query
 )
-from ....utils.invoice.generate_invoice import generate_invoice_pdf
 from ....utils.helpers import build_receipt_sms
 from ....services.email_service import (
     send_payment_confirmation_email
 )
+
+from ....utils.invoice.generate_invoice import generate_invoice_pdf_bytes
+from ....utils.media.cloudinary_client import upload_invoice_and_get_asset
+from ....services.email_service import send_payment_confirmation_email
 
 
 payment_webhook_blp = Blueprint("payment_webhooks", __name__, description="Payment gateway webhooks")
@@ -140,43 +143,64 @@ class HubtelWebhook(MethodView):
                 
                 #email
                 try:
-                    
-                    package = Package.get_by_id(str(payment.get("package_id")))
-                    
-                    invoice_path = generate_invoice_pdf(
-                        invoice_number=payment.get("reference"),
-                        fullname=payment.get("customer_name"),
-                        email=payment.get("customer_email"),
-                        plan_name=package.get("name"),
-                        amount=package_amount,
-                        currency=payment.get("currency"),
-                        payment_method=payment.get("payment_method"),
-                        receipt_number=payment.get("customer_phone"),
-                        paid_date=str(payment.get("completed_at")),
-                        addon_users=amount_detail.get("addon_users"),
-                        package_amount=amount_detail.get("package_amount"),
-                        total_from_amount=amount_detail.get("total_from_amount"),
+                    package = Package.get_by_id(str(payment.get("package_id"))) or {}
+
+                    invoice_number = payment.get("reference") or client_reference
+                    business_id = str(payment.get("business_id"))
+                    user__id = str(payment.get("user__id"))
+
+                    invoice_bytes = generate_invoice_pdf_bytes(
+                        invoice_number=invoice_number,
+                        fullname=payment.get("customer_name") or "",
+                        email=payment.get("customer_email") or "",
+                        plan_name=package.get("name") or "Subscription",
+                        amount=float(package_amount or 0),
+                        currency=str(currency_symbol or payment.get("currency") or ""),
+                        payment_method=str(payment.get("payment_method") or "hubtel"),
+                        receipt_number=str(payment.get("customer_phone") or ""),
+                        paid_date=str(payment.get("completed_at") or ""),
+                        addon_users=int(amount_detail.get("addon_users") or 0),
+                        package_amount=float(amount_detail.get("package_amount") or 0),
+                        total_from_amount=float(amount_detail.get("total_from_amount") or 0),
                     )
+
+                    # Upload invoice to Cloudinary (optional but recommended)
+                    invoice_asset = upload_invoice_and_get_asset(
+                        business_id=business_id,
+                        user__id=user__id,
+                        invoice_number=invoice_number,
+                        invoice_pdf_bytes=invoice_bytes,
+                    )
+
+                    # Save invoice location on Payment (optional)
+                    try:
+                        Payment.update(
+                            payment_id,
+                            business_id=business_id,
+                            invoice_asset=invoice_asset,
+                        )
+                    except Exception:
+                        pass
 
                     send_payment_confirmation_email(
                         email=payment.get("customer_email"),
                         fullname=payment.get("customer_name"),
-                        currency=currency_symbol,
+                        currency=currency_symbol or payment.get("currency"),
                         receipt_number=payment.get("customer_phone"),
-                        invoice_number=payment.get("reference") or client_reference,
+                        invoice_number=invoice_number,
                         payment_method=payment.get("payment_method"),
-                        paid_date=payment.get("completed_at") or datetime.utcnow(),
-                        plan_name=(package or {}).get("name"),
-                        addon_users=addon_users,
-                        package_amount=package_amount,
-                        amount=package_amount,
-                        total_from_amount=total_from_amount,
-                        invoice_pdf_path=invoice_path,
+                        paid_date=str(payment.get("completed_at") or ""),
+                        plan_name=(package or {}).get("name") or "Subscription",
+                        addon_users=int(amount_detail.get("addon_users") or 0),
+                        package_amount=float(amount_detail.get("package_amount") or 0),
+                        amount=float(package_amount or 0),
+                        total_from_amount=float(total_from_amount or 0),
+                        invoice_pdf_bytes=invoice_bytes,         # ✅ Gmail shows attachment
+                        invoice_url=(invoice_asset or {}).get("url"),  # ✅ fallback link
                     )
+
                 except Exception as e:
                     Log.warning(f"{log_tag} Error sending payment confirmation (ignored): {e}")
-
-                return {"code": 200, "message": "Callback processed successfully"}, 200
 
 
                 # 5.1 Mark payment success FIRST (critical)

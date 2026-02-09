@@ -1,20 +1,24 @@
-#app/utils/media/cloudinary_client.py
+# app/utils/media/cloudinary_client.py
+import os
+import uuid
+from typing import Optional, Dict, Any
 
-import os, uuid
 import cloudinary
 import cloudinary.uploader
+
 
 def init_cloudinary():
     cloudinary.config(
         cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
         api_key=os.getenv("CLOUDINARY_API_KEY"),
         api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-        secure=True
+        secure=True,
     )
+
 
 def upload_image_file(file_storage, folder: str, public_id: str | None = None) -> dict:
     """
-    Uploads a Werkzeug FileStorage to Cloudinary and returns {url, public_id, raw}.
+    Uploads a Werkzeug FileStorage image to Cloudinary.
     """
     init_cloudinary()
 
@@ -22,24 +26,26 @@ def upload_image_file(file_storage, folder: str, public_id: str | None = None) -
         "folder": folder,
         "resource_type": "image",
         "overwrite": True,
+        "secure": True,
     }
     if public_id:
         options["public_id"] = public_id
 
-    # file_storage is request.files["image"]
     result = cloudinary.uploader.upload(file_storage, **options)
 
     return {
         "url": result.get("secure_url"),
         "public_id": result.get("public_id"),
-        "raw": result
+        "raw": result,
     }
+
 
 def upload_video_file(file_obj, folder: str, public_id: str):
     """
-    Uploads a video file to Cloudinary and returns:
-      {"url": <secure_url>, "public_id": <public_id>, "raw": <full response>}
+    Uploads a video to Cloudinary.
     """
+    init_cloudinary()
+
     res = cloudinary.uploader.upload(
         file_obj,
         folder=folder,
@@ -55,21 +61,24 @@ def upload_video_file(file_obj, folder: str, public_id: str):
         "raw": res,
     }
 
-def _upload_raw_file(
+
+def upload_raw_bytes(
     file_bytes: bytes,
+    *,
     folder: str,
     filename: str,
-    public_id: str | None = None,
+    public_id: Optional[str] = None,
     content_type: str = "application/pdf",
-) -> dict:
+) -> Dict[str, Any]:
     """
-    Uploads bytes (PDF) to Cloudinary as a raw asset and returns {url, public_id, raw}.
+    Upload bytes to Cloudinary as a RAW asset (PDF, docs, etc).
+    IMPORTANT: resource_type must be "raw" or Cloudinary will treat it as image/video.
     """
     init_cloudinary()
 
     options = {
         "folder": folder,
-        "resource_type": "raw",     # ✅ IMPORTANT for pdf
+        "resource_type": "raw",
         "overwrite": True,
         "use_filename": True,
         "unique_filename": False,
@@ -84,23 +93,30 @@ def _upload_raw_file(
     return {
         "url": result.get("secure_url"),
         "public_id": result.get("public_id"),
-        "raw": result,
         "bytes": result.get("bytes"),
         "format": result.get("format"),
         "resource_type": result.get("resource_type"),
+        "raw": result,
+        "content_type": content_type,
+        "filename": filename,
     }
 
+
 def upload_invoice_and_get_asset(
+    *,
     business_id: str,
     user__id: str,
     invoice_number: str,
     invoice_pdf_bytes: bytes,
-) -> dict:
+) -> Dict[str, Any]:
+    """
+    Upload invoice PDF bytes to Cloudinary and return a stable asset dict to store in DB.
+    """
     folder = f"invoices/{business_id}/{user__id}"
     public_id = f"invoice_{invoice_number}_{uuid.uuid4().hex}"
 
-    uploaded = _upload_raw_file(
-        file_bytes=invoice_pdf_bytes,
+    uploaded = upload_raw_bytes(
+        invoice_pdf_bytes,
         folder=folder,
         filename=f"Invoice-{invoice_number}.pdf",
         public_id=public_id,
@@ -113,13 +129,6 @@ def upload_invoice_and_get_asset(
         "public_id": uploaded.get("public_id"),
         "url": uploaded.get("url"),
         "bytes": uploaded.get("bytes"),
+        "filename": uploaded.get("filename"),
+        "content_type": uploaded.get("content_type"),
     }
-
-
-
-
-
-
-
-
-
