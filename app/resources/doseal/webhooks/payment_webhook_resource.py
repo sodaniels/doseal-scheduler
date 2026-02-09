@@ -22,6 +22,12 @@ from ....utils.payments.asoriba_utils import (
     verify_asoriba_signature, parse_asoriba_callback_from_query
 )
 from ....utils.helpers import build_receipt_sms
+from ....services.email_service import (
+    send_user_registration_email,
+    send_new_contact_sale_email,
+    send_password_changed_email,
+    send_otp_email
+)
 
 
 payment_webhook_blp = Blueprint("payment_webhooks", __name__, description="Payment gateway webhooks")
@@ -121,6 +127,8 @@ class HubtelWebhook(MethodView):
             if parsed['is_success']:
                 # Payment successful
                 Log.info(f"{log_tag} Payment successful - Transaction ID: {parsed['transaction_id']}")
+                
+                #Send email of receipt
                 
                 
                 # Update payment status
