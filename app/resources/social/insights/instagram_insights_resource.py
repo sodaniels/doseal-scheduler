@@ -1172,7 +1172,7 @@ class InstagramMediaDetailsResource(MethodView):
                 "message": "Instagram account not connected",
             }), HTTP_STATUS_CODES["NOT_FOUND"]
 
-        access_token = acct.get("access_token_plain")
+        access_token = acct.get("access_token")
         if not access_token:
             return jsonify({
                 "success": False,

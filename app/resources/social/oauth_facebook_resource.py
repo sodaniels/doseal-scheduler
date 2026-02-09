@@ -84,7 +84,17 @@ class FacebookOauthStartResource(MethodView):
             "redirect_uri": redirect_uri,
             "state": state,
             "response_type": "code",
-            "scope": "pages_show_list,pages_read_engagement,pages_manage_posts,read_insights",
+            "scope": ",".join([
+                # Existing scopes
+                "pages_show_list",
+                "pages_read_engagement",
+                "pages_manage_posts",
+                "read_insights",
+                # ✅ NEW: Ads scopes
+                "ads_management",
+                "ads_read",
+                "business_management",
+            ]),
         }
 
         url = "https://www.facebook.com/v20.0/dialog/oauth?" + urlencode(params)
@@ -135,7 +145,11 @@ class FacebookOauthCallbackResource(MethodView):
             _store_selection(
                 provider="fb",
                 selection_key=selection_key,
-                payload={"owner": owner, "pages": pages},
+                payload={
+                    "owner": owner, 
+                    "pages": pages,
+                    "user_access_token": user_access_token,
+                },
                 ttl_seconds=300,
             )
 
@@ -199,9 +213,10 @@ class FacebookConnectPageResource(MethodView):
         sel = _load_selection("fb", selection_key)
         if not sel:
             return jsonify({"success": False, "message": "Selection expired. Please reconnect."}), HTTP_STATUS_CODES["BAD_REQUEST"]
-
+        
         owner = sel.get("owner") or {}
         pages = sel.get("pages") or []
+        user_access_token = sel.get("user_access_token")
 
         user = g.get("current_user", {}) or {}
         if str(user.get("business_id")) != str(owner.get("business_id")) or str(user.get("_id")) != str(owner.get("user__id")):
@@ -287,13 +302,14 @@ class FacebookConnectPageResource(MethodView):
                 access_token_plain=page_access_token,
                 refresh_token_plain=None,
                 token_expires_at=None,  # ideally store expires_at if you can obtain it
-                scopes=["pages_show_list", "pages_read_engagement", "pages_manage_posts"],
+                scopes=["pages_show_list", "pages_read_engagement", "pages_manage_posts", "ads_management", "ads_read", "business_management"],
                 platform_user_id=str(page_id),
                 platform_username=selected.get("name"),
                 meta={
                     "page_id": str(page_id),
                     "category": selected.get("category"),
                     "tasks": selected.get("tasks", []),
+                    "user_access_token": user_access_token,
                 },
             )
 
@@ -685,6 +701,9 @@ class InstagramConnectAccountResource(MethodView):
                     "instagram_content_publish",
                     "pages_show_list",
                     "pages_read_engagement",
+                    "ads_management",
+                    "ads_read",
+                    "business_management"
                 ],
 
                 platform_user_id=destination_id,

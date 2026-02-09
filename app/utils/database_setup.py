@@ -2,16 +2,20 @@
 
 import os
 from pathlib import Path
+
+#models
 from ..models.admin.sale import Sale
 from ..models.product_model import Product, Discount
 from ..models.admin.payment import Payment
 from ..models.admin.subscription_model import Subscription
 from ..models.admin.package_model import Package
 from ..models.admin.setup_model import Outlet
-
 from ..models.social.social_account import SocialAccount
 from ..models.social.scheduled_post import ScheduledPost
 from ..models.notifications.notification_settings import NotificationSettings
+from ..models.social.ad_account import AdAccount, AdCampaign
+
+#helpers
 from ..utils.logger import Log
 
 INDEXES_CREATED_FLAG = ".indexes_created"
@@ -54,6 +58,8 @@ def setup_database_indexes():
         SocialAccount.ensure_indexes()
         ScheduledPost.ensure_indexes()
         NotificationSettings.ensure_indexes()
+        AdCampaign.ensure_indexes()
+        AdAccount.ensure_indexes()
         
         # Mark as completed
         mark_indexes_created()

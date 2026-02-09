@@ -404,17 +404,21 @@ class CreateScheduledPostResource(MethodView):
         if diff_seconds < MIN_SCHEDULE_DELAY_SECONDS:
             error_message = {
                 "success": False,
+                "status_code": HTTP_STATUS_CODES["BAD_REQUEST"],
                 "message": f"Scheduled time must be at least {MIN_SCHEDULE_DELAY_SECONDS} seconds in the future",
-                "errors": {
-                    "scheduled_at": [
-                        f"Time is {abs(diff_seconds):.0f} seconds {'in the past' if diff_seconds < 0 else 'too soon'}. "
-                        f"Please schedule at least {MIN_SCHEDULE_DELAY_SECONDS} seconds from now."
-                    ]
-                },
-                "debug": {
-                    "now_utc": now_utc.isoformat(),
-                    "scheduled_at_utc": scheduled_at_utc.isoformat(),
-                    "diff_seconds": diff_seconds,
+                "message_to_show": f"Scheduled time must be at least {MIN_SCHEDULE_DELAY_SECONDS} seconds in the future",
+                "data": {
+                    "errors": {
+                        "scheduled_at": [
+                            f"Time is {abs(diff_seconds):.0f} seconds {'in the past' if diff_seconds < 0 else 'too soon'}. "
+                            f"Please schedule at least {MIN_SCHEDULE_DELAY_SECONDS} seconds from now."
+                        ]
+                    },
+                    "debug": {
+                        "now_utc": now_utc.isoformat(),
+                        "scheduled_at_utc": scheduled_at_utc.isoformat(),
+                        "diff_seconds": diff_seconds,
+                    }
                 }
             }
             Log.info(f"{log_tag} {error_message}")
