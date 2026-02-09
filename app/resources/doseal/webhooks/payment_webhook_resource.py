@@ -22,6 +22,7 @@ from ....utils.payments.hubtel_utils import (
 from ....utils.payments.asoriba_utils import (
     verify_asoriba_signature, parse_asoriba_callback_from_query
 )
+from ....utils.invoice.generate_invoice import generate_invoice_pdf
 from ....utils.helpers import build_receipt_sms
 from ....services.email_service import (
     send_payment_confirmation_email
@@ -139,7 +140,24 @@ class HubtelWebhook(MethodView):
                 
                 #email
                 try:
+                    
                     package = Package.get_by_id(str(payment.get("package_id")))
+                    
+                    invoice_path = generate_invoice_pdf(
+                        invoice_number=payment.get("reference"),
+                        fullname=payment.get("customer_name"),
+                        email=payment.get("customer_email"),
+                        plan_name=package.get("name"),
+                        amount=package_amount,
+                        currency=payment.get("currency"),
+                        payment_method=payment.get("payment_method"),
+                        receipt_number=payment.get("customer_phone"),
+                        paid_date=str(payment.get("completed_at")),
+                        addon_users=amount_detail.get("addon_users"),
+                        package_amount=amount_detail.get("package_amount"),
+                        total_from_amount=amount_detail.get("total_from_amount"),
+                    )
+
                     send_payment_confirmation_email(
                         email=payment.get("customer_email"),
                         fullname=payment.get("customer_name"),
@@ -151,7 +169,9 @@ class HubtelWebhook(MethodView):
                         plan_name=(package or {}).get("name"),
                         addon_users=addon_users,
                         package_amount=package_amount,
+                        amount=package_amount,
                         total_from_amount=total_from_amount,
+                        invoice_pdf_path=invoice_path,
                     )
                 except Exception as e:
                     Log.warning(f"{log_tag} Error sending payment confirmation (ignored): {e}")

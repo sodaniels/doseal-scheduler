@@ -7,14 +7,12 @@
   <title>Payment Receipt | {{ app_name }}</title>
 
   <style>
-    /* Basic resets */
     body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
     table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
     img { -ms-interpolation-mode:bicubic; border:0; height:auto; line-height:100%; outline:none; text-decoration:none; }
     table { border-collapse:collapse !important; }
     body { margin:0 !important; padding:0 !important; width:100% !important; height:100% !important; background:#f6f6f6; }
 
-    /* Container */
     .wrapper { width:100%; background:#f6f6f6; padding:24px 12px; }
     .container { max-width:600px; margin:0 auto; background:#ffffff; border:1px solid #e9e9e9; border-radius:10px; overflow:hidden; }
     .header { padding:20px 24px; background:#ffffff; }
@@ -25,74 +23,50 @@
     p { margin:0 0 14px; }
     .muted { color:#6b7280; font-size:13px; }
 
-    .btn-wrap { padding:10px 0 18px; }
-    .btn {
-      display:inline-block;
-      background:#2563eb;
-      color:#ffffff !important;
-      text-decoration:none;
-      font-weight:700;
-      border-radius:8px;
-      padding:12px 18px;
-      margin-right:8px;
-      margin-bottom:8px;
-    }
-    .btn-secondary { background:#6b7280; }
-
-    /* Summary card */
-    .summary {
-      background:#f9fafb;
-      border:1px solid #e5e7eb;
-      border-radius:8px;
-      padding:16px;
-      margin:16px 0;
-    }
-    .amount {
-      font-size:28px;
-      font-weight:800;
-      letter-spacing:-0.02em;
-      margin:0 0 4px;
-    }
-    .subtle {
-      color:#6b7280;
-      font-size:12px;
-      margin:0;
-    }
-
-    /* Status indicator */
-    .status-paid {
+    .status-success {
       display:inline-block;
       background:#d1fae5;
       color:#065f46;
       padding:4px 10px;
       border-radius:12px;
       font-size:12px;
-      font-weight:700;
+      font-weight:600;
     }
 
-    /* Details table */
-    .details-table { width:100%; margin:16px 0; font-size:13px; }
-    .details-table td { padding:8px 0; border-bottom:1px solid #f3f4f6; vertical-align:top; }
-    .details-table .label { color:#6b7280; width:160px; }
-    .details-table .value { color:#111827; font-weight:600; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; word-break:break-all; }
+    .details-table {
+      width:100%;
+      margin:16px 0;
+      font-size:13px;
+    }
+    .details-table td {
+      padding:8px 0;
+      border-bottom:1px solid #f3f4f6;
+      vertical-align:top;
+    }
+    .details-table .label {
+      color:#6b7280;
+      width:140px;
+    }
+    .details-table .value {
+      color:#111827;
+      font-weight:600;
+    }
 
-    /* Line items */
-    .line-items { width:100%; margin:10px 0 0; font-size:13px; }
-    .line-items th, .line-items td { padding:10px 0; border-bottom:1px solid #f3f4f6; text-align:left; }
-    .line-items th { color:#6b7280; font-weight:700; font-size:12px; }
-    .line-items .right { text-align:right; }
-    .total-row td { border-bottom:0; padding-top:12px; }
-    .total-strong { font-weight:800; font-size:14px; }
+    .note-box {
+      background:#f9fafb;
+      border:1px solid #e5e7eb;
+      border-radius:8px;
+      padding:14px;
+      margin:14px 0;
+      color:#374151;
+      font-size:13px;
+    }
 
-    /* Mobile */
     @media (max-width: 640px) {
       .wrapper { padding:14px 10px; }
       .content { padding:18px; }
       .header { padding:16px 18px; }
       .footer { padding:16px 18px; }
-      .btn { display:block; text-align:center; margin-right:0; }
-      .details-table .label { width:130px; }
     }
   </style>
 </head>
@@ -109,7 +83,7 @@
               <strong>{{ app_name }}</strong>
             </td>
             <td align="right" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#6b7280; font-size:12px;">
-              <span class="status-paid">✓ Paid</span>
+              <span class="status-success">✓ Payment received</span>
             </td>
           </tr>
         </table>
@@ -117,117 +91,54 @@
 
       <!-- Content -->
       <div class="content">
-        <h1>🧾 Payment receipt</h1>
+        <h1>✅ Payment Receipt</h1>
 
         <p>
-          Hi{{ ", " + fullname if fullname else "" }}, thanks for your payment. This email confirms your purchase and includes your receipt details.
+          Hi{{ ", " + fullname if fullname else "" }},<br/>
+          Thanks — we’ve received your payment successfully.
         </p>
 
-        <!-- Summary -->
-        <div class="summary">
-          <p class="amount">{{ currency_symbol |default("£") }}{{ total_amount|default("0.00") }}</p>
-          <p class="subtle">
-            Paid {{ paid_date|default("February 8, 2026") }}
-            {% if billing_period_label %} · {{ billing_period_label }}{% endif %}
-          </p>
-        </div>
-
-        <!-- Action buttons -->
-        <div class="btn-wrap">
-          {% if invoice_url %}
-            <a class="btn" href="{{ invoice_url }}" target="_blank" rel="noopener noreferrer">Download invoice</a>
-          {% endif %}
-          {% if receipt_url %}
-            <a class="btn btn-secondary" href="{{ receipt_url }}" target="_blank" rel="noopener noreferrer">Download receipt</a>
-          {% endif %}
-        </div>
-
-        <!-- Receipt metadata -->
         <table class="details-table" role="presentation">
           <tr>
-            <td class="label">Billed by</td>
-            <td class="value">{{ merchant_name|default("Doseal Limited") }}</td>
+            <td class="label">Plan</td>
+            <td class="value">{{ plan_name|default("—") }}</td>
           </tr>
           <tr>
-            <td class="label">Receipt number</td>
-            <td class="value mono">{{ receipt_number|default("2038-9411-3383") }}</td>
+            <td class="label">Amount paid</td>
+            <td class="value">{{ currency|default("") }} {{ amount|default("—") }}</td>
+          </tr>
+
+          {% if total_from_amount %}
+          <tr>
+            <td class="label">Total (for period)</td>
+            <td class="value">{{ currency|default("") }} {{ total_from_amount }}</td>
+          </tr>
+          {% endif %}
+
+          <tr>
+            <td class="label">Payment method</td>
+            <td class="value">{{ payment_method|default("—") }}</td>
           </tr>
           <tr>
             <td class="label">Invoice number</td>
-            <td class="value mono">{{ invoice_number|default("TN5XQ9NZ-0004") }}</td>
+            <td class="value">{{ invoice_number|default("—") }}</td>
           </tr>
           <tr>
-            <td class="label">Payment method</td>
-            <td class="value">{{ payment_method|default("VISA •••• 8597") }}</td>
+            <td class="label">Receipt number</td>
+            <td class="value">{{ receipt_number|default("—") }}</td>
           </tr>
-          {% if billing_period %}
           <tr>
-            <td class="label">Billing period</td>
-            <td class="value">{{ billing_period }}</td>
+            <td class="label">Paid date</td>
+            <td class="value">{{ paid_date|default("Just now") }}</td>
           </tr>
-          {% else %}
-          <tr>
-            <td class="label">Billing period</td>
-            <td class="value">{{ billing_period_start|default("Feb 8, 2026") }} – {{ billing_period_end|default("Mar 8, 2026") }}</td>
-          </tr>
-          {% endif %}
         </table>
 
-        <!-- Line items -->
-        <table class="line-items" role="presentation">
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th class="right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>
-                <strong>{{ plan_name|default("Claude Pro") }}</strong>
-                {% if qty %}<div class="muted" style="margin-top:2px;">Qty</div>{% else %}<div class="muted" style="margin-top:2px;">Qty 1</div>{% endif %}
-              </td>
-              <td class="right">1</td>
-            </tr>
-
-            <tr>
-              <td class="muted">Package Amount</td>
-              <td class="right">{{ currency_symbol|default("£") }} {{ package_amount|default("0.00") }}</td>
-            </tr>
-
-            <tr>
-              <td class="muted">Addon Users</td>
-              <td class="right">{{ addon_users|default("0") }}</td>
-            </tr>
-
-             <tr>
-              <td class="muted">Subtotal</td>
-              <td class="right">{{ currency_symbol|default("£") }} {{ total_from_amount|default("0.00") }}</td>
-            </tr>
-
-            <tr>
-              <td class="muted">Tax{% if tax_rate %} ({{ tax_rate }}){% else %} (20%){% endif %}</td>
-              <td class="right">{{ currency_symbol|default("£") }} {{ tax_amount|default("0.00") }}</td>
-            </tr>
-
-            <tr class="total-row">
-              <td class="total-strong">Total</td>
-              <td class="right total-strong">{{ currency_symbol|default("£") }} {{ total_amount|default("0.00") }}</td>
-            </tr>
-
-            <tr class="total-row">
-              <td class="muted">Amount paid</td>
-              <td class="right">{{ currency_symbol|default("£") }} {{ total_amount|default("0.00") }}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <p class="muted" style="margin-top:14px;">
-          If you didn’t make this payment, please contact support immediately.
-        </p>
+        <div class="note-box">
+          📎 <strong>Invoice attached:</strong> This email includes your invoice PDF attachment for your records.
+        </div>
 
         <p style="margin-top:18px;">
-          Thanks,<br/>
+          Thank you for your business.<br/>
           — {{ app_name }}
         </p>
       </div>
@@ -242,12 +153,8 @@
           </a>
         </p>
 
-        <p style="margin:0 0 10px;">
-          You’re receiving this receipt because a payment was completed for your account on {{ app_name }}.
-        </p>
-
         <p style="margin:0; color:#9ca3af; font-size:11px;">
-          Receipt sent to <strong>{{ email }}</strong>.
+          This receipt was sent to <strong>{{ email }}</strong> because a payment was processed on {{ app_name }}.
         </p>
       </div>
 
