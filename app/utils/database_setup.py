@@ -14,6 +14,7 @@ from ..models.social.social_account import SocialAccount
 from ..models.social.scheduled_post import ScheduledPost
 from ..models.notifications.notification_settings import NotificationSettings
 from ..models.social.ad_account import AdAccount, AdCampaign
+from ..models.social.social_auth import SocialAuth
 
 #helpers
 from ..utils.logger import Log
@@ -60,6 +61,7 @@ def setup_database_indexes():
         NotificationSettings.ensure_indexes()
         AdCampaign.ensure_indexes()
         AdAccount.ensure_indexes()
+        SocialAuth.ensure_indexes
         
         # Mark as completed
         mark_indexes_created()
