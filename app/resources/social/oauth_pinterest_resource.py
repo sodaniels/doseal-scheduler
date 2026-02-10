@@ -369,11 +369,18 @@ class PinterestConnectBoardResource(MethodView):
                     existing.get("token_expires_at") if isinstance(existing, dict) else None
                 ),
 
-                # If you store scopes in selection, prefer that; otherwise env fallback.
-                scopes=(
-                    sel.get("scopes")
-                    or (os.getenv("PINTEREST_SCOPES", "").split(",") if os.getenv("PINTEREST_SCOPES") else [])
-                ),
+                
+                scopes=[
+                    "boards:read",
+                    "boards:write",
+                    "pins:read ",
+                    "pins:write",
+                    "user_accounts:read",
+                    "ads:read",
+                    "ads:write",
+                    "catalogs:read",
+                    "catalogs:write"
+                ],
 
                 platform_user_id=destination_id,
                 platform_username=selected.get("name"),
