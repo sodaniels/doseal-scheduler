@@ -1,6 +1,7 @@
 # app/routes/social/facebook_ads_resource.py
 
-import os
+import os, json
+import time
 from datetime import datetime, timezone, timedelta
 from flask_smorest import Blueprint
 from flask import request, jsonify, g
@@ -24,6 +25,68 @@ from ...schemas.social.social_schema import (
 
 
 blp_facebook_ads = Blueprint("facebook_ads", __name__)
+
+
+def _update_campaign_status(campaign_id: str, fb_status: str, local_status: str):
+    """Helper to update campaign status on Facebook and locally."""
+    user = g.get("current_user", {}) or {}
+    business_id = str(user.get("business_id", ""))
+    
+    log_tag = f"[facebook_ads_resource.py][UpdateCampaignStatus][{campaign_id}]"
+    
+    campaign = AdCampaign.get_by_id(campaign_id, business_id)
+    if not campaign:
+        Log.info(f"{log_tag} Campaign not found. campaign_id={campaign_id}")
+        return jsonify({
+            "success": False,
+            "status_code": HTTP_STATUS_CODES["NOT_FOUND"],
+            "message": "Campaign not found",
+        }), HTTP_STATUS_CODES["NOT_FOUND"]
+    
+    if not campaign.get("fb_campaign_id"):
+        return jsonify({
+            "success": False,
+            "status_code": HTTP_STATUS_CODES["BAD_REQUEST"],
+            "message": "Campaign not synced with Facebook",
+        }), HTTP_STATUS_CODES["BAD_REQUEST"]
+    
+    ad_account = AdAccount.get_by_ad_account_id(business_id, campaign["ad_account_id"])
+    if not ad_account or not ad_account.get("access_token_plain"):
+        return jsonify({
+            "success": False,
+            "status_code": HTTP_STATUS_CODES["BAD_REQUEST"],
+            "message": "Ad account not found or token missing",
+        }), HTTP_STATUS_CODES["BAD_REQUEST"]
+    
+    try:
+        service = FacebookAdsService(
+            ad_account["access_token_plain"],
+            campaign["ad_account_id"]
+        )
+        
+        result = service.update_campaign_status(campaign["fb_campaign_id"], fb_status)
+        
+        if not result.get("success"):
+            return jsonify({
+                "success": False,
+                "message": f"Failed to update campaign status",
+                "error": result.get("error_message", result.get("error")),
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        # Update local status
+        AdCampaign.update_status(campaign_id, business_id, local_status)
+        
+        return jsonify({
+            "success": True,
+            "message": f"Campaign {fb_status.lower()} successfully",
+        }), HTTP_STATUS_CODES["OK"]
+    
+    except Exception as e:
+        Log.error(f"{log_tag} Exception: {e}")
+        return jsonify({
+            "success": False,
+            "message": "Failed to update campaign status",
+        }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
 # =========================================
@@ -80,9 +143,17 @@ class FacebookAdAccountsAvailableResource(MethodView):
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
         
         try:
+            start_time = time.time()
+            
             # ✅ Create service without ad_account_id (not needed for listing)
             service = FacebookAdsService(user_access_token)
             result = service.get_user_ad_accounts()
+            
+            end_time = time.time()
+            duration = end_time - start_time
+            
+            Log.info(f"{log_tag}[{client_ip}] Fetching ad accounts completed in {duration:.2f} seconds")
+        
             
             if not result.get("success"):
                 error = result.get("error", {})
@@ -175,8 +246,10 @@ class FacebookAdAccountConnectResource(MethodView):
                 "message": "ad_account_id is required",
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
         
+            
         # Get Facebook access token
         fb_accounts = SocialAccount.list_destinations(business_id, user__id, "facebook")
+        
         if not fb_accounts:
             Log.info(f"{log_tag} No Facebook account connected.")
             return jsonify({
@@ -230,6 +303,9 @@ class FacebookAdAccountConnectResource(MethodView):
                 if page_account:
                     page_name = page_account.get("destination_name")
             
+            
+            start_time = time.time()
+             
             # Save to database
             ad_account = AdAccount.create({
                 "business_id": business_id,
@@ -244,6 +320,12 @@ class FacebookAdAccountConnectResource(MethodView):
                 "business_manager_id": ad_account_info.get("business", {}).get("id"),
                 "access_token": access_token,
             })
+            
+            end_time = time.time()
+            duration = end_time - start_time
+            
+            Log.info(f"{log_tag}[{client_ip}] Creating AdAccount completed in {duration:.2f} seconds")
+        
             
             return jsonify({
                 "success": True,
@@ -263,7 +345,6 @@ class FacebookAdAccountConnectResource(MethodView):
                 "message": "Failed to connect ad account",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-
 # =========================================
 # LIST CONNECTED AD ACCOUNTS
 # =========================================
@@ -272,174 +353,131 @@ class FacebookAdAccountsResource(MethodView):
     """
     List ad accounts connected to this business.
     """
-    
+
     @token_required
     def get(self):
+        client_ip = request.remote_addr
         user = g.get("current_user", {}) or {}
-        business_id = str(user.get("business_id", ""))
-        
-        ad_accounts = AdAccount.list_by_business(business_id)
-        
-        return jsonify({
-            "success": True,
-            "data": ad_accounts,
-        }), HTTP_STATUS_CODES["OK"]
 
+        business_id = str(user.get("business_id", ""))
+        user__id = str(user.get("_id", ""))
+        account_type = user.get("account_type")
+
+        log_tag = make_log_tag(
+            "facebook_ads_resource.py",
+            "FacebookAdAccountsResource",
+            "get",
+            client_ip,
+            user__id,
+            account_type,
+            business_id,
+            business_id,
+        )
+
+        start_time = time.time()
+        Log.info(f"{log_tag} Fetching connected ad accounts...")
+
+        try:
+            ad_accounts = AdAccount.list_by_business(business_id)
+
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} Retrieved {len(ad_accounts)} ad accounts in {duration:.2f}s")
+
+            return jsonify({
+                "success": True,
+                "data": ad_accounts,
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            duration = time.time() - start_time
+            Log.error(f"{log_tag} Failed after {duration:.2f}s err={e}")
+
+            return jsonify({
+                "success": False,
+                "message": "Failed to retrieve ad accounts",
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 # =========================================
 # BOOST POST
 # =========================================
 @blp_facebook_ads.route("/social/facebook/boost-post", methods=["POST"])
 class FacebookBoostPostResource(MethodView):
-    """
-    Boost an existing Facebook post.
-    
-    Body:
-    {
-        "ad_account_id": "act_123456789",
-        "page_id": "758138094536716",
-        "post_id": "1520745236717998",
-        "budget_amount": 1000,  // in cents ($10.00)
-        "duration_days": 7,
-        "targeting": {
-            "countries": ["US", "GB", "GH"],
-            "age_min": 18,
-            "age_max": 45,
-            "genders": [1, 2],
-            "interests": [{"id": "123", "name": "Technology"}]
-        }
-    }
-    """
-    
+
     @token_required
     @blp_facebook_ads.arguments(FacebookBoostPostSchema, location="json")
-    @blp_facebook_ads.response(200, FacebookBoostPostSchema)
     def post(self, body):
         client_ip = request.remote_addr
         user = g.get("current_user", {}) or {}
+
         business_id = str(user.get("business_id", ""))
         user__id = str(user.get("_id", ""))
-        
-        log_tag = f"[facebook_ads_resource.py][BoostPost][{client_ip}]"
-        
-        body = request.get_json(silent=True) or {}
-        
-        ad_account_id = body.get("ad_account_id")
-        page_id = body.get("page_id")
-        post_id = body.get("post_id")
-        budget_amount = body.get("budget_amount", 500)  # Default $5
-        duration_days = body.get("duration_days", 7)
-        targeting_input = body.get("targeting", {})
-        scheduled_post_id = body.get("scheduled_post_id")  # Optional link
-        is_adset_budget_sharing_enabled = body.get("is_adset_budget_sharing_enabled", False)
-        
-        # =========================================
-        # VALIDATION
-        # =========================================
-        if not all([ad_account_id, page_id, post_id]):
-            return jsonify({
-                "success": False,
-                "message": "ad_account_id, page_id, and post_id are required",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-        if budget_amount < 100:  # Minimum $1
-            return jsonify({
-                "success": False,
-                "message": "Minimum budget is 100 cents ($1.00)",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-        if duration_days < 1 or duration_days > 90:
-            return jsonify({
-                "success": False,
-                "message": "Duration must be between 1 and 90 days",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-        # =========================================
-        # GET ACCESS TOKEN
-        # =========================================
-        # First try to get from AdAccount collection
-        ad_account = AdAccount.get_by_ad_account_id(business_id, ad_account_id)
-        access_token = None
-        currency = "USD"
-        
-        if ad_account:
-            access_token = ad_account.get("access_token_plain")
-            currency = ad_account.get("currency", "USD")
-        
-        # ✅ Fallback: Get user_access_token from SocialAccount meta
-        if not access_token:
-            Log.info(f"{log_tag} No token in AdAccount, trying SocialAccount meta...")
-            
-            fb_account = SocialAccount.find_destination(business_id, "facebook", page_id)
-            if fb_account:
-                # Get full account with decrypted token
-                fb_account_full = SocialAccount.get_destination(
-                    business_id,
-                    fb_account.get("user__id") or user__id,
-                    "facebook",
-                    page_id
-                )
-                if fb_account_full:
-                    meta = fb_account_full.get("meta", {}) or {}
-                    access_token = meta.get("user_access_token")
-                    
-                    # Fallback to page token
-                    if not access_token:
-                        access_token = fb_account_full.get("access_token_plain")
-                        Log.info(f"{log_tag} Using page token as fallback")
-        
-        if not access_token:
-            return jsonify({
-                "success": False,
-                "message": "Access token not found. Please reconnect your Facebook account with ads permissions.",
-                "code": "NO_ACCESS_TOKEN",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-        # =========================================
-        # BUILD TARGETING
-        # =========================================
+        account_type = user.get("account_type")
+
+        log_tag = make_log_tag(
+            "facebook_ads_resource.py",
+            "FacebookBoostPostResource",
+            "post",
+            client_ip,
+            user__id,
+            account_type,
+            business_id,
+            business_id,
+        )
+
+        start_time = time.time()
+        Log.info(f"{log_tag} Boost post request received")
+
         try:
+            ad_account_id = body["ad_account_id"]
+            page_id = body["page_id"]
+            post_id = body["post_id"]
+            budget_amount = body["budget_amount"]
+            duration_days = body["duration_days"]
+            targeting_input = body.get("targeting", {})
+            scheduled_post_id = body.get("scheduled_post_id")
+            is_adset_budget_sharing_enabled = body.get("is_adset_budget_sharing_enabled", False)
+
+            Log.info(
+                f"{log_tag} Params post_id={post_id} "
+                f"budget={budget_amount} duration={duration_days}"
+            )
+
+            # -------------------------------------------------
+            # Resolve access token
+            # -------------------------------------------------
+            ad_account = AdAccount.get_by_ad_account_id(business_id, ad_account_id)
+            if not ad_account or not ad_account.get("access_token_plain"):
+                Log.warning(f"{log_tag} Missing ad account or token")
+                return jsonify({
+                    "success": False,
+                    "message": "Ad account not connected or token missing",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+            access_token = ad_account["access_token_plain"]
+            currency = ad_account.get("currency", "USD")
+
             service = FacebookAdsService(access_token, ad_account_id)
-            
-            # ✅ Get interests from input, but only if they look valid
-            interests_input = targeting_input.get("interests", [])
-            valid_interests = None
-            
-            if interests_input:
-                # Filter: only include interests with numeric IDs longer than 5 digits
-                valid_interests = [
-                    i for i in interests_input
-                    if isinstance(i, dict) 
-                    and i.get("id")
-                    and str(i.get("id")).isdigit()
-                    and len(str(i.get("id"))) > 5
-                ]
-                # If no valid interests, set to None to use broad targeting
-                if not valid_interests:
-                    valid_interests = None
-                    Log.info(f"{log_tag} No valid interests provided, using broad targeting")
-    
-            
+
+            # -------------------------------------------------
+            # Build targeting
+            # -------------------------------------------------
             targeting = service.build_targeting(
-                countries=targeting_input.get("countries") or ["US"],  # ✅ Default to US
+                countries=targeting_input.get("countries") or ["US"],
                 age_min=targeting_input.get("age_min", 18),
                 age_max=targeting_input.get("age_max", 65),
                 genders=targeting_input.get("genders"),
-                interests=valid_interests,  # ✅ Only valid interests
+                interests=targeting_input.get("interests"),
                 behaviors=targeting_input.get("behaviors"),
-                locales=targeting_input.get("locales"),
-                publisher_platforms=targeting_input.get("publisher_platforms"),
-                facebook_positions=targeting_input.get("facebook_positions"),
-                instagram_positions=targeting_input.get("instagram_positions"),
             )
-            
-            Log.info(f"{log_tag} Built targeting: {targeting}")  # ✅ Debug
-            
-            # =========================================
-            # BOOST THE POST
-            # =========================================
-            Log.info(f"{log_tag} Boosting post {post_id} on page {page_id}...")
-            
+
+            Log.info(f"{log_tag} Targeting built successfully")
+
+            # -------------------------------------------------
+            # Boost post
+            # -------------------------------------------------
+            Log.info(f"{log_tag} Sending boost request to Facebook")
+
+            fb_start = time.time()
             result = service.boost_post(
                 page_id=page_id,
                 post_id=post_id,
@@ -448,13 +486,17 @@ class FacebookBoostPostResource(MethodView):
                 targeting=targeting,
                 is_adset_budget_sharing_enabled=is_adset_budget_sharing_enabled,
             )
-            
+            fb_duration = time.time() - fb_start
+
+            Log.info(f"{log_tag} Facebook boost completed in {fb_duration:.2f}s")
+
             if not result.get("success"):
                 errors = result.get("errors", [])
                 error_messages = [e.get("error", str(e)) for e in errors]
                 
                 sweet_error_object = errors[0].get("details")
                 
+                Log.info(f"{log_tag} error_messages: {error_messages}")
                 Log.info(f"{log_tag} Boost failed: {errors}")
                 return jsonify({
                     "success": False,
@@ -463,16 +505,16 @@ class FacebookBoostPostResource(MethodView):
                     "message_to_show": sweet_error_object.get("error_user_msg"),
                     "error": errors,
                 }), HTTP_STATUS_CODES["BAD_REQUEST"]
-            
-            # =========================================
-            # SAVE CAMPAIGN TO DATABASE
-            # =========================================
+
+            # -------------------------------------------------
+            # Persist campaign
+            # -------------------------------------------------
             campaign = AdCampaign.create({
                 "business_id": business_id,
                 "user__id": user__id,
                 "ad_account_id": ad_account_id,
                 "page_id": page_id,
-                "campaign_name": f"Boost Post {str(post_id)[-8:]}",
+                "campaign_name": f"Boost Post {post_id[-8:]}",
                 "objective": AdCampaign.OBJECTIVE_ENGAGEMENT,
                 "budget_type": AdCampaign.BUDGET_LIFETIME,
                 "budget_amount": budget_amount,
@@ -484,74 +526,83 @@ class FacebookBoostPostResource(MethodView):
                 "post_id": post_id,
                 "fb_campaign_id": result.get("campaign_id"),
                 "fb_adset_id": result.get("adset_id"),
-                "fb_creative_id": result.get("creative_id"),
                 "fb_ad_id": result.get("ad_id"),
                 "status": AdCampaign.STATUS_ACTIVE,
-                "meta": {
-                    "is_adset_budget_sharing_enabled": is_adset_budget_sharing_enabled,
-                },
             })
-            
-            Log.info(f"{log_tag} Post boosted successfully: campaign={campaign['_id']}, fb_campaign={result.get('campaign_id')}")
-            
+
+            total_duration = time.time() - start_time
+            Log.info(
+                f"{log_tag} Boost successful campaign={campaign['_id']} "
+                f"in {total_duration:.2f}s"
+            )
+
             return jsonify({
                 "success": True,
-                "message": "Post boosted successfully!",
                 "data": {
                     "_id": campaign["_id"],
                     "fb_campaign_id": result.get("campaign_id"),
                     "fb_adset_id": result.get("adset_id"),
-                    "fb_creative_id": result.get("creative_id"),
                     "fb_ad_id": result.get("ad_id"),
-                    "budget": f"${budget_amount / 100:.2f}",
-                    "currency": currency,
+                    "budget": f"{currency} {budget_amount / 100:.2f}",
                     "duration_days": duration_days,
-                    "status": "active",
                 },
             }), HTTP_STATUS_CODES["CREATED"]
-        
-        except ValueError as e:
-            # Handle validation errors from service (e.g., missing ad_account_id)
-            Log.error(f"{log_tag} ValueError: {e}")
-            return jsonify({
-                "success": False,
-                "message": str(e),
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
+
         except Exception as e:
-            Log.error(f"{log_tag} Exception: {e}")
+            duration = time.time() - start_time
+            Log.error(f"{log_tag} Exception after {duration:.2f}s err={e}")
+
             return jsonify({
                 "success": False,
-                "message": "Failed to boost post. Please try again.",
-                "error": str(e) if os.getenv("DEBUG") else None,
+                "message": "Failed to boost post",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
 
 # =========================================
 # LIST CAMPAIGNS
 # =========================================
 @blp_facebook_ads.route("/social/facebook/campaigns", methods=["GET"])
 class FacebookCampaignsResource(MethodView):
-    """
-    List all ad campaigns for the business.
-    """
-    
+
     @token_required
     def get(self):
+        client_ip = request.remote_addr
         user = g.get("current_user", {}) or {}
+
         business_id = str(user.get("business_id", ""))
-        
-        page = int(request.args.get("page", 1))
-        per_page = int(request.args.get("per_page", 20))
-        status = request.args.get("status")
-        
-        result = AdCampaign.list_by_business(
-            business_id=business_id,
-            status=status,
-            page=page,
-            per_page=per_page,
+        user__id = str(user.get("_id", ""))
+        account_type = user.get("account_type")
+
+        log_tag = make_log_tag(
+            "facebook_ads_resource.py",
+            "FacebookCampaignsResource",
+            "get",
+            client_ip,
+            user__id,
+            account_type,
+            business_id,
+            business_id,
         )
-        
-        return jsonify({
+
+        start_time = time.time()
+        Log.info(f"{log_tag} Fetching campaigns")
+
+        try:
+            page = int(request.args.get("page", 1))
+            per_page = int(request.args.get("per_page", 20))
+            status = request.args.get("status")
+
+            result = AdCampaign.list_by_business(
+                business_id=business_id,
+                status=status,
+                page=page,
+                per_page=per_page,
+            )
+
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} Retrieved campaigns in {duration:.2f}s")
+
+            return jsonify({
             "success": True,
             "data": result["items"],
             "pagination": {
@@ -562,96 +613,79 @@ class FacebookCampaignsResource(MethodView):
             },
         }), HTTP_STATUS_CODES["OK"]
 
+        except Exception as e:
+            duration = time.time() - start_time
+            Log.error(f"{log_tag} Failed after {duration:.2f}s err={e}")
+
+            return jsonify({
+                "success": False,
+                "message": "Failed to fetch campaigns",
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
 
 # =========================================
 # GET CAMPAIGN INSIGHTS
 # =========================================
 @blp_facebook_ads.route("/social/facebook/campaigns/<campaign_id>/insights", methods=["GET"])
 class FacebookCampaignInsightsResource(MethodView):
-    """
-    Get performance insights for a campaign.
-    """
-    
     @token_required
-    def get(self, campaign_id: str):
+    def get(self, campaign_id):
+        client_ip = request.remote_addr
         user = g.get("current_user", {}) or {}
         business_id = str(user.get("business_id", ""))
-        
-        log_tag = f"[facebook_ads_resource.py][CampaignInsights][{campaign_id}]"
-        
-        date_preset = request.args.get("date_preset", "last_7d")
-        
-        # Get campaign
-        campaign = AdCampaign.get_by_id(campaign_id, business_id)
-        if not campaign:
-            return jsonify({
-                "success": False,
-                "message": "Campaign not found",
-            }), HTTP_STATUS_CODES["NOT_FOUND"]
-        
-        if not campaign.get("fb_campaign_id"):
-            return jsonify({
-                "success": False,
-                "message": "Campaign not synced with Facebook",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-        # Get ad account
-        ad_account = AdAccount.get_by_ad_account_id(business_id, campaign["ad_account_id"])
-        if not ad_account or not ad_account.get("access_token_plain"):
-            return jsonify({
-                "success": False,
-                "message": "Ad account not found or token missing",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
+
+        log_tag = make_log_tag(
+            "facebook_ads_resource.py",
+            "FacebookCampaignInsightsResource",
+            "get",
+            client_ip,
+            user.get("_id"),
+            user.get("account_type"),
+            business_id,
+            business_id,
+        )
+
+        start_time = time.time()
+        Log.info(f"{log_tag} Fetching insights for. campaign={campaign_id}")
+
         try:
+            date_preset = request.args.get("date_preset", "last_7d")
+
+            campaign = AdCampaign.get_by_id(campaign_id, business_id)
+            if not campaign:
+                Log.info(f"{log_tag} Campaign not found. campaign={campaign_id}")
+                return jsonify({"success": False, "message": "Campaign not found"}), 404
+
+            ad_account = AdAccount.get_by_ad_account_id(business_id, campaign["ad_account_id"])
             service = FacebookAdsService(
                 ad_account["access_token_plain"],
-                campaign["ad_account_id"]
+                campaign["ad_account_id"],
             )
-            
+
             result = service.get_campaign_insights(
                 campaign["fb_campaign_id"],
                 date_preset=date_preset,
             )
-            
-            if not result.get("success"):
-                return jsonify({
-                    "success": False,
-                    "message": "Failed to fetch insights",
-                    "error": result.get("error_message", result.get("error")),
-                }), HTTP_STATUS_CODES["BAD_REQUEST"]
-            
-            insights = result.get("data", {}).get("data", [])
-            
-            # Update stored results
-            if insights:
-                latest = insights[0]
-                AdCampaign.update_results(campaign_id, business_id, {
-                    "impressions": int(latest.get("impressions", 0)),
-                    "reach": int(latest.get("reach", 0)),
-                    "clicks": int(latest.get("clicks", 0)),
-                    "spend": float(latest.get("spend", 0)),
-                    "cpc": float(latest.get("cpc", 0)),
-                    "cpm": float(latest.get("cpm", 0)),
-                    "ctr": float(latest.get("ctr", 0)),
-                    "actions": latest.get("actions", []),
-                })
-            
+
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} Insights fetched in {duration:.2f}s")
+
             return jsonify({
                 "success": True,
-                "data": insights,
+                "data": result.get("data", {}).get("data", []),
             }), HTTP_STATUS_CODES["OK"]
-        
+
         except Exception as e:
-            Log.error(f"{log_tag} Exception: {e}")
+            duration = time.time() - start_time
+            Log.error(f"{log_tag} Failed after {duration:.2f}s err={e}")
+
             return jsonify({
                 "success": False,
                 "message": "Failed to fetch insights",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
-
 # =========================================
-# PAUSE/RESUME CAMPAIGN
+# PAUSE CAMPAIGN
 # =========================================
 @blp_facebook_ads.route("/social/facebook/campaigns/<campaign_id>/pause", methods=["POST"])
 class FacebookCampaignPauseResource(MethodView):
@@ -662,6 +696,9 @@ class FacebookCampaignPauseResource(MethodView):
         return _update_campaign_status(campaign_id, "PAUSED", AdCampaign.STATUS_PAUSED)
 
 
+# =========================================
+# RESUME CAMPAIGN
+# =========================================
 @blp_facebook_ads.route("/social/facebook/campaigns/<campaign_id>/resume", methods=["POST"])
 class FacebookCampaignResumeResource(MethodView):
     """Resume a paused campaign."""
@@ -669,65 +706,6 @@ class FacebookCampaignResumeResource(MethodView):
     @token_required
     def post(self, campaign_id: str):
         return _update_campaign_status(campaign_id, "ACTIVE", AdCampaign.STATUS_ACTIVE)
-
-
-def _update_campaign_status(campaign_id: str, fb_status: str, local_status: str):
-    """Helper to update campaign status on Facebook and locally."""
-    user = g.get("current_user", {}) or {}
-    business_id = str(user.get("business_id", ""))
-    
-    log_tag = f"[facebook_ads_resource.py][UpdateCampaignStatus][{campaign_id}]"
-    
-    campaign = AdCampaign.get_by_id(campaign_id, business_id)
-    if not campaign:
-        return jsonify({
-            "success": False,
-            "message": "Campaign not found",
-        }), HTTP_STATUS_CODES["NOT_FOUND"]
-    
-    if not campaign.get("fb_campaign_id"):
-        return jsonify({
-            "success": False,
-            "message": "Campaign not synced with Facebook",
-        }), HTTP_STATUS_CODES["BAD_REQUEST"]
-    
-    ad_account = AdAccount.get_by_ad_account_id(business_id, campaign["ad_account_id"])
-    if not ad_account or not ad_account.get("access_token_plain"):
-        return jsonify({
-            "success": False,
-            "message": "Ad account not found or token missing",
-        }), HTTP_STATUS_CODES["BAD_REQUEST"]
-    
-    try:
-        service = FacebookAdsService(
-            ad_account["access_token_plain"],
-            campaign["ad_account_id"]
-        )
-        
-        result = service.update_campaign_status(campaign["fb_campaign_id"], fb_status)
-        
-        if not result.get("success"):
-            return jsonify({
-                "success": False,
-                "message": f"Failed to update campaign status",
-                "error": result.get("error_message", result.get("error")),
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-        # Update local status
-        AdCampaign.update_status(campaign_id, business_id, local_status)
-        
-        return jsonify({
-            "success": True,
-            "message": f"Campaign {fb_status.lower()} successfully",
-        }), HTTP_STATUS_CODES["OK"]
-    
-    except Exception as e:
-        Log.error(f"{log_tag} Exception: {e}")
-        return jsonify({
-            "success": False,
-            "message": "Failed to update campaign status",
-        }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
 
 # =========================================
 # SEARCH INTERESTS
@@ -738,8 +716,26 @@ class FacebookTargetingInterestsResource(MethodView):
     
     @token_required
     def get(self):
+        client_ip = request.remote_addr
         user = g.get("current_user", {}) or {}
+
         business_id = str(user.get("business_id", ""))
+        user__id = str(user.get("_id", ""))
+        account_type = user.get("account_type")
+
+        log_tag = make_log_tag(
+            "facebook_ads_resource.py",
+            "FacebookTargetingInterestsResource",
+            "get",
+            client_ip,
+            user__id,
+            account_type,
+            business_id,
+            business_id,
+        )
+
+        fb_start = time.time()
+        Log.info(f"{log_tag} Fetching targeting interests")
         
         query = request.args.get("q", "")
         if not query or len(query) < 2:
@@ -771,6 +767,10 @@ class FacebookTargetingInterestsResource(MethodView):
             
             result = service.search_interests(query)
             
+            fb_duration = time.time() - fb_start
+
+            Log.info(f"{log_tag} Facebook search interests in {fb_duration:.2f}s")
+            
             if not result.get("success"):
                 return jsonify({
                     "success": False,
@@ -797,3 +797,110 @@ class FacebookTargetingInterestsResource(MethodView):
                 "success": False,
                 "message": "Failed to search interests",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+# =========================================
+# FACEBOOK REACH ESTIMATE
+# =========================================
+@blp_facebook_ads.route("/social/facebook/reach-estimate", methods=["GET"])
+class FacebookReachEstimateResource(MethodView):
+    """
+    Estimate audience reach for a given targeting spec.
+    """
+
+    @token_required
+    def get(self):
+        client_ip = request.remote_addr
+        user = g.get("current_user", {}) or {}
+
+        business_id = str(user.get("business_id", ""))
+        user__id = str(user.get("_id", ""))
+        account_type = user.get("account_type")
+
+        log_tag = make_log_tag(
+            "facebook_ads_resource.py",
+            "FacebookReachEstimateResource",
+            "get",
+            client_ip,
+            user__id,
+            account_type,
+            business_id,
+            business_id,
+        )
+
+        start_time = time.time()
+        Log.info(f"{log_tag} Reach estimate request started")
+
+        ad_account_id = request.args.get("ad_account_id")
+        targeting_raw = request.args.get("targeting")
+
+        if not ad_account_id:
+            return jsonify({
+                "success": False,
+                "message": "ad_account_id is required",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # normalize ad account id (avoid act_act_)
+        if not ad_account_id.startswith("act_"):
+            ad_account_id = f"act_{ad_account_id}"
+
+        # Parse targeting JSON
+        try:
+            targeting = json.loads(targeting_raw) if targeting_raw else {}
+        except Exception:
+            return jsonify({
+                "success": False,
+                "message": "Invalid targeting JSON",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Get ad account
+        ad_account = AdAccount.get_by_ad_account_id(business_id, ad_account_id)
+        if not ad_account or not ad_account.get("access_token"):
+            return jsonify({
+                "success": False,
+                "message": "Ad account not found or token missing",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        try:
+            service = FacebookAdsService(
+                ad_account["access_token"],
+                ad_account_id,
+            )
+
+            result = service.get_reach_estimate(targeting)
+
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} Reach estimate completed in {duration:.2f}s")
+
+            if not result.get("success"):
+                Log.error(f"{log_tag} Reach estimate failed: {result.get('error')}")
+                return jsonify(result), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+            return jsonify({
+                "success": True,
+                "data": {
+                    "users_lower_bound": result["data"].get("users_lower_bound"),
+                    "users_upper_bound": result["data"].get("users_upper_bound"),
+                },
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.error(f"{log_tag} Exception: {e}")
+            return jsonify({
+                "success": False,
+                "message": "Failed to estimate reach",
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+

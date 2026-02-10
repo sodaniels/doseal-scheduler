@@ -861,4 +861,74 @@ class FacebookAdsService:
             Log.info(f"{log_tag} Exception during cleanup (ignored): {e}")
 
 
+    def _normalize_ad_account_id(ad_account_id: str) -> str:
+        """
+        Ensure ad account ID is numeric (no act_ prefix).
+        Used ONLY for reach estimate endpoint.
+        """
+        if not ad_account_id:
+            return ad_account_id
+        return ad_account_id.replace("act_", "", 1)
+
+    # --------------------------------------------------
+    # ✅ REACH ESTIMATE
+    # --------------------------------------------------
+    def get_reach_estimate(self, targeting: dict):
+        """
+        Calls:
+        GET /act_<AD_ACCOUNT_ID>/reachestimate
+        """
+
+        params = {
+            "targeting_spec": json.dumps(targeting),
+        }
+
+        return self._request(
+            "GET",
+            f"act_{self.ad_account_id}/reachestimate",
+            params=params,
+        )
+
+
+    # =========================================
+    # FACEBOOK ADS SERVICE — REACH ESTIMATE
+    # =========================================
+    def get_reach_estimate(self, targeting: dict) -> dict:
+        """
+        Calls:
+        GET /act_<AD_ACCOUNT_ID>/reachestimate
+        """
+
+        try:
+            # Facebook REQUIRED params for reach estimate
+            params = {
+                "targeting_spec": json.dumps(targeting),
+                "objective": "POST_ENGAGEMENT",
+                "optimization_goal": "POST_ENGAGEMENT",
+                "billing_event": "IMPRESSIONS",
+            }
+
+            endpoint = f"/{self.ad_account_id}/reachestimate"
+
+            resp = self._request(
+                method="GET",
+                endpoint=endpoint,
+                params=params,
+            )
+
+            data = resp.get("data", [{}])[0] if isinstance(resp.get("data"), list) else {}
+
+            return {
+                "success": True,
+                "data": {
+                    "users_lower_bound": data.get("users_lower_bound"),
+                    "users_upper_bound": data.get("users_upper_bound"),
+                },
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
 
