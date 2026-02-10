@@ -1,6 +1,7 @@
 # app/services/social/facebook_ads_service.py
 
 import json
+import time
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
@@ -932,3 +933,397 @@ class FacebookAdsService:
                 "error": str(e),
             }
 
+
+    # =========================================
+    # INSTAGRAM AD CREATIVE MANAGEMENT
+    # =========================================
+    
+    def get_instagram_accounts(self, page_id: str) -> Dict[str, Any]:
+        """
+        Get Instagram accounts connected to a Facebook Page.
+        Required to create Instagram ads.
+        """
+        return self._request(
+            "GET",
+            f"{page_id}/instagram_accounts",
+            params={
+                "fields": "id,username,profile_pic,followers_count,media_count"
+            }
+        )
+    
+    def get_instagram_account_from_page(self, page_id: str) -> Dict[str, Any]:
+        """
+        Get the Instagram Business Account ID linked to a Facebook Page.
+        This is needed for creating Instagram ad creatives.
+        """
+        return self._request(
+            "GET",
+            f"{page_id}",
+            params={
+                "fields": "instagram_business_account{id,username,profile_picture_url,followers_count}"
+            }
+        )
+    
+    def create_instagram_creative_from_post(
+        self,
+        name: str,
+        instagram_account_id: str,
+        media_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Create an ad creative from an existing Instagram post.
+        
+        Args:
+            name: Creative name
+            instagram_account_id: Instagram Business Account ID
+            media_id: Instagram Media ID to promote
+        """
+        self._require_ad_account()
+        
+        log_tag = "[FacebookAdsService][create_instagram_creative_from_post]"
+        
+        Log.info(f"{log_tag} Creating Instagram creative from media_id: {media_id}")
+        
+        data = {
+            "name": name,
+            "object_story_spec": json.dumps({
+                "instagram_actor_id": instagram_account_id,
+                "source_instagram_media_id": media_id,
+            }),
+        }
+        
+        return self._request("POST", f"{self.ad_account_id}/adcreatives", data=data)
+    
+    def create_instagram_creative_new_post(
+        self,
+        name: str,
+        instagram_account_id: str,
+        page_id: str,
+        message: str,
+        image_url: str = None,
+        video_url: str = None,
+        link: str = None,
+        call_to_action_type: str = "LEARN_MORE",
+    ) -> Dict[str, Any]:
+        """
+        Create an ad creative with a new Instagram post (not from existing post).
+        
+        Args:
+            name: Creative name
+            instagram_account_id: Instagram Business Account ID
+            page_id: Facebook Page ID (required for Instagram ads)
+            message: Caption text
+            image_url: URL of image (for image ads)
+            video_url: URL of video (for video ads)
+            link: Destination URL for CTA
+            call_to_action_type: CTA button type
+        """
+        self._require_ad_account()
+        
+        log_tag = "[FacebookAdsService][create_instagram_creative_new_post]"
+        
+        # Build link_data or video_data
+        if video_url:
+            media_data = {
+                "video_data": {
+                    "video_url": video_url,
+                    "message": message,
+                }
+            }
+            if link:
+                media_data["video_data"]["call_to_action"] = {
+                    "type": call_to_action_type,
+                    "value": {"link": link}
+                }
+        else:
+            media_data = {
+                "link_data": {
+                    "message": message,
+                    "link": link or "",
+                }
+            }
+            if image_url:
+                media_data["link_data"]["picture"] = image_url
+            if link:
+                media_data["link_data"]["call_to_action"] = {
+                    "type": call_to_action_type,
+                    "value": {"link": link}
+                }
+        
+        object_story_spec = {
+            "instagram_actor_id": instagram_account_id,
+            "page_id": page_id,
+            **media_data,
+        }
+        
+        data = {
+            "name": name,
+            "object_story_spec": json.dumps(object_story_spec),
+        }
+        
+        Log.info(f"{log_tag} Creating new Instagram creative")
+        
+        return self._request("POST", f"{self.ad_account_id}/adcreatives", data=data)
+
+    # =========================================
+    # BOOST INSTAGRAM POST (SIMPLIFIED FLOW)
+    # =========================================
+    
+    def boost_instagram_post(
+        self,
+        instagram_account_id: str,
+        page_id: str,
+        media_id: str,
+        budget_amount: int,
+        duration_days: int = 7,
+        targeting: Dict[str, Any] = None,
+        optimization_goal: str = "POST_ENGAGEMENT",
+        campaign_name: str = None,
+        is_adset_budget_sharing_enabled: bool = False,
+        advantage_audience: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Simplified method to boost an existing Instagram post.
+        
+        Creates Campaign → Ad Set → Creative → Ad in one flow.
+        
+        Args:
+            instagram_account_id: Instagram Business Account ID
+            page_id: Facebook Page ID (required for Instagram ads)
+            media_id: Instagram Media ID to boost
+            budget_amount: Total budget in cents (e.g., 1000 = $10.00)
+            duration_days: How many days to run the ad
+            targeting: Targeting spec (None = default broad targeting)
+            optimization_goal: What to optimize for
+            campaign_name: Optional campaign name
+            is_adset_budget_sharing_enabled: Allow ad sets to share budget
+            advantage_audience: Enable Advantage+ audience (Meta AI targeting)
+        
+        Returns:
+            Dict with success, campaign_id, adset_id, creative_id, ad_id, errors
+        """
+        self._require_ad_account()
+        
+        log_tag = "[FacebookAdsService][boost_instagram_post]"
+        
+        # Default targeting if none provided
+        if not targeting:
+            targeting = self.build_targeting(
+                countries=["US"],
+                age_min=18,
+                age_max=65,
+                advantage_audience=advantage_audience,
+                # Instagram-specific placements
+                publisher_platforms=["instagram"],
+                instagram_positions=["stream", "story", "explore", "reels"],
+            )
+        else:
+            # Ensure targeting_automation is set
+            if "targeting_automation" not in targeting:
+                targeting["targeting_automation"] = {
+                    "advantage_audience": 1 if advantage_audience else 0
+                }
+            # Ensure Instagram placements if not specified
+            if "publisher_platforms" not in targeting:
+                targeting["publisher_platforms"] = ["instagram"]
+            if "instagram_positions" not in targeting:
+                targeting["instagram_positions"] = ["stream", "story", "explore", "reels"]
+        
+        # Calculate dates
+        start_time = datetime.now(timezone.utc)
+        end_time = start_time + timedelta(days=duration_days)
+        
+        # Generate names
+        short_id = str(media_id)[-8:]
+        campaign_name = campaign_name or f"Boost IG Post {short_id}"
+        
+        result = {
+            "success": False,
+            "campaign_id": None,
+            "adset_id": None,
+            "creative_id": None,
+            "ad_id": None,
+            "errors": [],
+        }
+        
+        try:
+            # 1. Create Campaign
+            Log.info(f"{log_tag} Creating campaign...")
+            campaign_start = time.time()
+            
+            campaign_result = self.create_campaign(
+                name=campaign_name,
+                objective="OUTCOME_ENGAGEMENT",
+                status="PAUSED",
+                is_adset_budget_sharing_enabled=is_adset_budget_sharing_enabled,
+            )
+            
+            campaign_duration = time.time() - campaign_start
+            Log.info(f"{log_tag} Campaign API call completed in {campaign_duration:.2f}s")
+            
+            if not campaign_result.get("success"):
+                result["errors"].append({
+                    "step": "campaign",
+                    "error": campaign_result.get("error_message", campaign_result.get("error")),
+                    "details": campaign_result.get("error"),
+                })
+                return result
+            
+            campaign_id = campaign_result["data"]["id"]
+            result["campaign_id"] = campaign_id
+            Log.info(f"{log_tag} Campaign created: {campaign_id}")
+            
+            # 2. Create Ad Set
+            Log.info(f"{log_tag} Creating ad set...")
+            Log.info(f"{log_tag} Targeting: {json.dumps(targeting, indent=2)}")
+            
+            adset_start = time.time()
+            
+            adset_result = self.create_adset(
+                campaign_id=campaign_id,
+                name=f"Boost IG AdSet {short_id}",
+                targeting=targeting,
+                budget_amount=budget_amount,
+                budget_type="lifetime",
+                optimization_goal=optimization_goal,
+                billing_event="IMPRESSIONS",
+                start_time=start_time,
+                end_time=end_time,
+                status="PAUSED",
+            )
+            
+            adset_duration = time.time() - adset_start
+            Log.info(f"{log_tag} AdSet API call completed in {adset_duration:.2f}s")
+            
+            if not adset_result.get("success"):
+                result["errors"].append({
+                    "step": "adset",
+                    "error": adset_result.get("error_message", adset_result.get("error")),
+                    "details": adset_result.get("error"),
+                })
+                self._cleanup_campaign(campaign_id)
+                return result
+            
+            adset_id = adset_result["data"]["id"]
+            result["adset_id"] = adset_id
+            Log.info(f"{log_tag} Ad Set created: {adset_id}")
+            
+            # 3. Create Creative from existing Instagram post
+            Log.info(f"{log_tag} Creating Instagram creative from media_id: {media_id}...")
+            
+            creative_start = time.time()
+            
+            creative_result = self.create_instagram_creative_from_post(
+                name=f"Boost IG Creative {short_id}",
+                instagram_account_id=instagram_account_id,
+                media_id=media_id,
+            )
+            
+            creative_duration = time.time() - creative_start
+            Log.info(f"{log_tag} Creative API call completed in {creative_duration:.2f}s")
+            
+            if not creative_result.get("success"):
+                result["errors"].append({
+                    "step": "creative",
+                    "error": creative_result.get("error_message", creative_result.get("error")),
+                    "details": creative_result.get("error"),
+                })
+                self._cleanup_campaign(campaign_id)
+                return result
+            
+            creative_id = creative_result["data"]["id"]
+            result["creative_id"] = creative_id
+            Log.info(f"{log_tag} Creative created: {creative_id}")
+            
+            # 4. Create Ad
+            Log.info(f"{log_tag} Creating ad...")
+            
+            ad_start = time.time()
+            
+            ad_result = self.create_ad(
+                name=f"Boost IG Ad {short_id}",
+                adset_id=adset_id,
+                creative_id=creative_id,
+                status="PAUSED",
+            )
+            
+            ad_duration = time.time() - ad_start
+            Log.info(f"{log_tag} Ad API call completed in {ad_duration:.2f}s")
+            
+            if not ad_result.get("success"):
+                result["errors"].append({
+                    "step": "ad",
+                    "error": ad_result.get("error_message", ad_result.get("error")),
+                    "details": ad_result.get("error"),
+                })
+                self._cleanup_campaign(campaign_id)
+                return result
+            
+            ad_id = ad_result["data"]["id"]
+            result["ad_id"] = ad_id
+            Log.info(f"{log_tag} Ad created: {ad_id}")
+            
+            # 5. Activate the campaign
+            Log.info(f"{log_tag} Activating campaign...")
+            
+            activate_start = time.time()
+            activate_result = self.update_campaign_status(campaign_id, "ACTIVE")
+            activate_duration = time.time() - activate_start
+            
+            Log.info(f"{log_tag} Activate API call completed in {activate_duration:.2f}s")
+            
+            if not activate_result.get("success"):
+                result["errors"].append({
+                    "step": "activate",
+                    "error": activate_result.get("error_message", activate_result.get("error")),
+                    "warning": "Campaign created but failed to activate. Please activate manually.",
+                })
+                # Don't delete - let user activate manually
+            
+            result["success"] = True
+            Log.info(f"{log_tag} Instagram post boosted successfully!")
+            
+            return result
+        
+        except Exception as e:
+            Log.error(f"{log_tag} Exception: {e}")
+            result["errors"].append({
+                "step": "unknown",
+                "error": str(e),
+            })
+            return result
+    
+    def get_instagram_media(
+        self,
+        instagram_account_id: str,
+        limit: int = 25,
+    ) -> Dict[str, Any]:
+        """
+        Get recent media from an Instagram Business Account.
+        Useful for letting users select which post to boost.
+        """
+        return self._request(
+            "GET",
+            f"{instagram_account_id}/media",
+            params={
+                "fields": "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count",
+                "limit": limit,
+            }
+        )
+    
+    def get_instagram_media_insights(
+        self,
+        media_id: str,
+        metrics: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Get insights for a specific Instagram media.
+        """
+        if not metrics:
+            metrics = "impressions,reach,engagement,saved"
+        
+        return self._request(
+            "GET",
+            f"{media_id}/insights",
+            params={"metric": metrics}
+        )

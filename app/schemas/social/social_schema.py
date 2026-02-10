@@ -159,7 +159,23 @@ class FacebookBoostPostSchema(Schema):
         if targeting is not None and not isinstance(targeting, dict):
             raise ValidationError({"targeting": ["targeting must be an object"]})
 
+class InstagramBoostPostSchema(Schema):
+    ad_account_id = fields.String(required=True)
+    page_id = fields.String(required=True)
+    instagram_account_id = fields.String(required=False)
+    media_id = fields.String(required=True)
+    budget_amount = fields.Integer(required=True, validate=validate.Range(min=100))
+    duration_days = fields.Integer(required=True, validate=validate.Range(min=1, max=90))
+    targeting = fields.Dict(required=False)
+    scheduled_post_id = fields.String(required=False)
+    is_adset_budget_sharing_enabled = fields.Boolean(required=False, load_default=False)
+    advantage_audience = fields.Boolean(required=False, load_default=False)
 
+
+class InstagramMediaListSchema(Schema):
+    page_id = fields.String(required=False)
+    instagram_account_id = fields.String(required=False)
+    limit = fields.Integer(required=False, load_default=25)
 
 
 

@@ -85,7 +85,8 @@ from .social.insights.pinterest_insights_resource import blp_pinterest_insights
 from .social.insights.social_dashboard_resource import blp_social_dashboard
 from .social.business_suspension_resource import blp_business_suspension
 from .notifications.notification_settings_resource import blp_notifications
-from .social.facebook_ads_resource import blp_facebook_ads
+from .social.campaigns.facebook_ads_resource import blp_facebook_ads
+from .social.campaigns.instagram_ads_resource import blp_instagram_ads
 
 __all__ = [
     #-------------------
@@ -125,6 +126,7 @@ __all__ = [
     "blp_business_suspension",
     "blp_notifications",
     "blp_facebook_ads",
+    "blp_instagram_ads",
     #-------------------
     #ADMIN ROUTES
     #-------------------

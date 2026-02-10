@@ -90,6 +90,7 @@ from ..resources import (
     blp_business_suspension,
     blp_notifications,
     blp_facebook_ads,
+    blp_instagram_ads,
     
 )
 
@@ -144,6 +145,7 @@ def register_social_routes(app, api):
         blp_notifications,
         blp_subscription,
         blp_facebook_ads,
+        blp_instagram_ads,
     ]
 
     for blueprint in blueprints:

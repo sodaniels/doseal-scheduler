@@ -8,18 +8,18 @@ from flask import request, jsonify, g
 from flask.views import MethodView
 from bson import ObjectId
 
-from ..doseal.admin.admin_business_resource import token_required
-from ...constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
-from ...utils.logger import Log
-from ...utils.helpers import make_log_tag
-from ...utils.json_response import prepared_response
+from ...doseal.admin.admin_business_resource import token_required
+from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
+from ....utils.logger import Log
+from ....utils.helpers import make_log_tag
+from ....utils.json_response import prepared_response
 
-from ...models.social.social_account import SocialAccount
-from ...models.social.ad_account import AdAccount, AdCampaign
-from ...services.social.facebook_ads_service import FacebookAdsService
+from ....models.social.social_account import SocialAccount
+from ....models.social.ad_account import AdAccount, AdCampaign
+from ....services.social.facebook_ads_service import FacebookAdsService
 
 #schemas
-from ...schemas.social.social_schema import (
+from ....schemas.social.social_schema import (
     AccountConnectionSchema, AddsAccountConnectionSchema, FacebookBoostPostSchema
 )
 
