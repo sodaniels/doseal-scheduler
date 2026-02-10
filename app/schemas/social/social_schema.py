@@ -171,13 +171,21 @@ class InstagramBoostPostSchema(Schema):
     is_adset_budget_sharing_enabled = fields.Boolean(required=False, load_default=False)
     advantage_audience = fields.Boolean(required=False, load_default=False)
 
-
 class InstagramMediaListSchema(Schema):
     page_id = fields.String(required=False)
     instagram_account_id = fields.String(required=False)
     limit = fields.Integer(required=False, load_default=25)
 
-
+class PinterestAccountConnectionSchema(Schema):
+    destination_id = fields.Str(
+        required=True,
+        error_messages={"required": "Destination ID is required", "invalid": "Invalid Destination"}
+    )
+    ad_account_id = fields.Str(
+        required=True,
+        error_messages={"required": "Ad Account ID is required", "invalid": "Invalid DesAd Account ID"}
+    )
+   
 
 
 

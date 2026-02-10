@@ -18,7 +18,9 @@ from ....models.social.social_account import SocialAccount
 from ....models.social.pinterest_ad_account import PinterestAdAccount, PinterestAdCampaign
 from ....services.social.pinterest_ads_service import PinterestAdsService
 
-from ....schemas.social.social_schema import AccountConnectionSchema
+from ....schemas.social.social_schema import (
+    AccountConnectionSchema, PinterestAccountConnectionSchema
+)
 
 
 blp_pinterest_ads = Blueprint("pinterest_ads", __name__)
@@ -186,7 +188,9 @@ class PinterestAdAccountConnectResource(MethodView):
     """
     
     @token_required
-    def post(self):
+    @blp_pinterest_ads.arguments(PinterestAccountConnectionSchema, location="query")
+    @blp_pinterest_ads.response(200, PinterestAccountConnectionSchema)
+    def post(self, body):
         client_ip = request.remote_addr
         user = g.get("current_user", {}) or {}
         
@@ -208,7 +212,6 @@ class PinterestAdAccountConnectResource(MethodView):
         start_time = time.time()
         Log.info(f"{log_tag} Connecting Pinterest ad account")
         
-        body = request.get_json(silent=True) or {}
         ad_account_id = body.get("ad_account_id")
         
         if not ad_account_id:
@@ -228,15 +231,21 @@ class PinterestAdAccountConnectResource(MethodView):
                 }), HTTP_STATUS_CODES["CONFLICT"]
             
             # Get Pinterest access token
-            token_info = _get_pinterest_access_token(business_id, user__id, log_tag)
+            pi_account = SocialAccount.get_destination(
+                business_id=business_id, 
+                user__id=user__id, 
+                platform="pinterest", 
+                destination_id=body.get("destination_id"),
+            )
             
-            if not token_info.get("success"):
+            
+            if not pi_account:
                 return jsonify({
                     "success": False,
-                    "message": token_info.get("error", "Pinterest access token not found"),
+                    "message": "Pinterest access token not found",
                 }), HTTP_STATUS_CODES["BAD_REQUEST"]
             
-            access_token = token_info["access_token"]
+            access_token = pi_account.get("access_token")
             
             # Verify ad account access
             service = PinterestAdsService(access_token, ad_account_id)
