@@ -318,20 +318,6 @@ def _create_account_from_facebook(
     
     business_col = db.get_collection("businesses")
     
-    # business_data = dict()
-    # business_data["tenant_id"] = tenant_id
-    # business_data["business_name"] = name
-    # business_data["first_name"] = first_name
-    # business_data["last_name"] = last_name
-    # business_data["email"] = email
-    # business_data["password"] = hashed_password
-    # business_data["client_id"] = client_id_plain
-    # business_data["account_status"] = account_status
-    # business_data["account_type"] = account_type
-    # business_data["image"] = profile.get("profile_picture")
-    # business_data["facebook_user_id"] = profile.get("facebook_user_id")
-    # business_data["social_login_provider"] = profile.get("facebook")
-    
     business_doc = {
         "tenant_id": encrypt_data(tenant_id),
         "business_name": encrypt_data(name),
@@ -352,8 +338,6 @@ def _create_account_from_facebook(
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     }
-    # business = Business(**business_data)
-    # (client_id, tenant_id, business_id, email) = business.save()
     
     business_result = business_col.insert_one(business_doc)
     business_id = business_result.inserted_id
@@ -930,6 +914,14 @@ class AccountStatusResource(MethodView):
                 "has_active_subscription": has_subscription,
             }
             
+             # =========================================
+            #BUSINESS DETAILS
+            # =========================================
+            account_status = None
+            business = Business.get_business_by_id(business_id)
+            if business:
+                account_status = decrypt_data(business.get("account_status"))
+            
             if subscription_details:
                 subscription_response.update(subscription_details)
             elif latest_subscription:
@@ -947,6 +939,7 @@ class AccountStatusResource(MethodView):
                     },
                     "subscription": subscription_response,
                     "can_connect_social_accounts": has_subscription,
+                    "account": account_status
                 },
             }), HTTP_STATUS_CODES["OK"]
         
