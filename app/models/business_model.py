@@ -189,6 +189,8 @@ class Business(BaseModel):
         account_type: str = "super_admin",
         image: Optional[str] = None,  # kept plain
         user_id: Optional[str] = None,
+        facebook_user_id: Optional[str] = None,
+        social_login_provider: Optional[str] = None,
         **kwargs,
     ):
         client_id_plain = generate_client_id()
@@ -227,14 +229,16 @@ class Business(BaseModel):
         self.package = self._enc(package)
         self.return_url = self._enc(return_url)
         self.callback_url = self._enc(callback_url)
+        self.facebook_user_id = self._enc(facebook_user_id) if facebook_user_id else None
+        self.social_login_provider = self._enc(social_login_provider) if social_login_provider else None
 
         # Status/account_type
         self.status = self._enc(status or "Active")
         self.hashed_status = hash_data(status or "Active")
         self.account_type = self._enc(account_type or "super_admin")
-
+        
         # Plain optional fields
-        self.image = image
+        self.image = self._enc(image) if image else None
         self.user_id = user_id
 
         self.created_at = _now()
@@ -279,6 +283,8 @@ class Business(BaseModel):
             "client_id_hashed": self.client_id_hashed,
             "return_url": getattr(self, "return_url", None),
             "callback_url": getattr(self, "callback_url", None),
+            "facebook_user_id": getattr(self, "facebook_user_id", None),
+            "social_login_provider": getattr(self, "social_login_provider", None),
             "status": self.status,
             "account_status": self.account_status,
             "hashed_status": self.hashed_status,

@@ -1314,10 +1314,11 @@ class CurrentUserResource(MethodView):
         # Get business info
         business = Business.get_business_by_email(email)
         
+        
         decrypte_full_name = decrypt_data(user.get("fullname"))
         
         business_info = dict()
-    
+
         business_info = {key: safe_decrypt(business.get(key)) for key in BUSINESS_FIELDS}
         
         # Token is for 24 hours
@@ -1326,7 +1327,8 @@ class CurrentUserResource(MethodView):
             "admin_id": str(user.get("_id")),
             "business_id": target_business_id,
             "email": business.get("email"),
-            "profile": business_info
+            "account_status": business.get("account_status"),
+            "profile": business_info,
         }
     
         

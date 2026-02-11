@@ -318,7 +318,19 @@ def _create_account_from_facebook(
     
     business_col = db.get_collection("businesses")
     
-    business_data = dict()
+    # business_data = dict()
+    # business_data["tenant_id"] = tenant_id
+    # business_data["business_name"] = name
+    # business_data["first_name"] = first_name
+    # business_data["last_name"] = last_name
+    # business_data["email"] = email
+    # business_data["password"] = hashed_password
+    # business_data["client_id"] = client_id_plain
+    # business_data["account_status"] = account_status
+    # business_data["account_type"] = account_type
+    # business_data["image"] = profile.get("profile_picture")
+    # business_data["facebook_user_id"] = profile.get("facebook_user_id")
+    # business_data["social_login_provider"] = profile.get("facebook")
     
     business_doc = {
         "tenant_id": encrypt_data(tenant_id),
@@ -332,7 +344,7 @@ def _create_account_from_facebook(
         "client_id_hashed": hash_data(client_id_plain),
         "status": encrypt_data("Active"),
         "hashed_status": hash_data("Active"),
-        "account_status": encrypt_data(str(account_status)),
+        "account_status": encrypt_data(account_status),
         "account_type": encrypt_data(account_type),
         "image": profile.get("profile_picture"),
         "facebook_user_id": profile.get("facebook_user_id"),
@@ -340,10 +352,11 @@ def _create_account_from_facebook(
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     }
+    # business = Business(**business_data)
+    # (client_id, tenant_id, business_id, email) = business.save()
     
     business_result = business_col.insert_one(business_doc)
     business_id = business_result.inserted_id
-    
     Log.info(f"{log_tag} Business created: {business_id}")
     
     # =========================================
@@ -432,7 +445,7 @@ def _create_account_from_facebook(
     except Exception as e:
         Log.error(f"{log_tag} Error creating client: {e}")
     
-    return (business_doc, user_doc)
+    return (business_id, user_doc)
 
 
 # =========================================
