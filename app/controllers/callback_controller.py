@@ -80,15 +80,15 @@ def get_confirm_account_():
         user_from_auth = User.get_auth_code(auth_value)
         Log.info(f"user_from_auth: {user_from_auth}")
         
+        
         if user_from_auth:
             
-            business = Business.get_business(decrypt_data(user_from_auth.get("client_id")))
+            business = Business.get_business(decrypt_data(user_from_auth.get("email")))
             
             Log.info(f"business: {business}")
             
-            update_status = User.update_user_status(user_from_auth["email_hashed"])
-            
-            # Log.info(f"update_status: {update_status}")
+            update_status = User.update_user_status(user_from_auth.get("email_hashed"))
+
             
             if update_status:
                 # Redirect to return_url with success status
