@@ -1310,6 +1310,8 @@ class CurrentUserResource(MethodView):
         # Get user from database
         user = User.get_by_id(auth_user__id, target_business_id)
         
+        email = decrypt_data(user.get("email"))
+        
         if user is None:
             Log.info(f"{log_tag} [{client_ip}] user not found")
             return jsonify({
@@ -1318,11 +1320,8 @@ class CurrentUserResource(MethodView):
                 "message": "User not found"
             }), HTTP_STATUS_CODES["NOT_FOUND"]
         
-        # Decrypt sensitive fields
-        client_id = decrypt_data(user["client_id"])
-        
         # Get business info
-        business = Business.get_business_by_client_id(client_id)
+        business = Business.get_business_by_email(email)
         
         decrypte_full_name = decrypt_data(user.get("fullname"))
         
