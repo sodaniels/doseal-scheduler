@@ -828,6 +828,8 @@ class FacebookLoginCallbackResource(MethodView):
                 duration = time.time() - start_time
                 Log.info(f"{log_tag} Login successful in {duration:.2f}s")
                 
+                Log.info(f"tokens: {tokens}")
+                
                 # Return JSON or redirect
                 if "application/json" in request.headers.get("Accept", ""):
                     return jsonify({
@@ -981,3 +983,200 @@ class FacebookLoginCallbackResource(MethodView):
                 "success": False,
                 "message": "Failed to complete Facebook login",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+# =========================================
+# SET PASSWORD (for Facebook users)
+# =========================================
+@blp_facebook_login.route("/auth/set-password", methods=["POST"])
+class SetPasswordResource(MethodView):
+    """
+    Set a password for users who signed up via Facebook Login.
+    
+    This allows them to also log in with email/password.
+    
+    Body:
+    {
+        "password": "newPasword123"
+    }
+    """
+    
+    def post(self):
+        from ....resources.doseal.admin.admin_business_resource import token_required
+        
+        @token_required
+        def _post():
+            user = g.get("current_user", {}) or {}
+            business_id = str(user.get("business_id", ""))
+            user__id = str(user.get("_id", ""))
+            
+            client_ip = request.remote_addr
+            log_tag = f"[facebook_login_resource.py][SetPasswordResource][{client_ip}][{user__id}]"
+            
+            body = request.get_json(silent=True) or {}
+            new_password = body.get("password")
+            
+            if not new_password:
+                return jsonify({
+                    "success": False,
+                    "message": "Password is required",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            if len(new_password) < 8:
+                return jsonify({
+                    "success": False,
+                    "message": "Password must be at least 8 characters",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            try:
+                # Update user password
+                result = User.update_password(
+                    user_id=user__id,
+                    business_id=business_id,
+                    new_password=new_password,
+                )
+                
+                if result:
+                    Log.info(f"{log_tag} Password set successfully")
+                    return jsonify({
+                        "success": True,
+                        "message": "Password set successfully. You can now log in with email and password.",
+                    }), HTTP_STATUS_CODES["OK"]
+                else:
+                    return jsonify({
+                        "success": False,
+                        "message": "Failed to set password",
+                    }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+            
+            except Exception as e:
+                Log.error(f"{log_tag} Error: {e}")
+                return jsonify({
+                    "success": False,
+                    "message": "Failed to set password",
+                }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+        
+        return _post()
+
+
+# =========================================
+# CHECK LOGIN METHODS
+# =========================================
+@blp_facebook_login.route("/auth/login-methods", methods=["GET"])
+class LoginMethodsResource(MethodView):
+    """
+    Get available login methods for the current user.
+    
+    Returns which methods are available:
+    - email_password: Can log in with email/password
+    - facebook: Can log in with Facebook
+    """
+    
+    def get(self):
+        from ....resources.doseal.admin.admin_business_resource import token_required
+        
+        @token_required
+        def _get():
+            user = g.get("current_user", {}) or {}
+            business_id = str(user.get("business_id", ""))
+            user__id = str(user.get("_id", ""))
+            
+            # Get full user document
+            user_doc = User.get_by_id(user__id, business_id)
+            
+            if not user_doc:
+                return jsonify({
+                    "success": False,
+                    "message": "User not found",
+                }), HTTP_STATUS_CODES["NOT_FOUND"]
+            
+            # Check if user has a usable password
+            # (Users created via Facebook have a random password they don't know)
+            has_facebook = bool(user_doc.get("facebook_user_id"))
+            social_provider = user_doc.get("social_login_provider")
+            
+            # If they registered via Facebook and never set a password, they can't use email/password
+            # We can't actually know if they know their password, so we just check if Facebook is linked
+            has_password = bool(user_doc.get("password"))
+            registered_via_social = social_provider in ["facebook", "google", "apple"]
+            
+            return jsonify({
+                "success": True,
+                "data": {
+                    "email_password": has_password,
+                    "facebook": has_facebook,
+                    "registered_via": social_provider or "email",
+                    "can_set_password": registered_via_social,  # Show "Set Password" option if they registered via social
+                },
+            }), HTTP_STATUS_CODES["OK"]
+        
+        return _get()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
