@@ -11,30 +11,25 @@ from flask_smorest import Blueprint
 from flask import request, jsonify, redirect, g
 from flask.views import MethodView
 from bson import ObjectId
-from pymongo.errors import DuplicateKeyError
+import json
 
-#helpers
+# helpers
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
 from ....utils.helpers import create_token_response_admin
-from ....utils.social.token_utils import (
-    is_token_expired,
-    is_token_expiring_soon,
-)
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
-from ....utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
 from ....extensions.redis_conn import redis_client
 from ....extensions.db import db
 
-#models
+# models
 from ....models.business_model import Business, Client
 from ....models.user_model import User
-from ....models.social.social_account import SocialAccount
+from ....models.admin.subscription_model import Subscription
 from ....models.notifications.notification_settings import NotificationSettings
 
-#services
+# services
 from ....services.seeders.social_role_seeder import SocialRoleSeeder
 
 
@@ -47,7 +42,7 @@ blp_facebook_login = Blueprint("facebook_login", __name__)
 FACEBOOK_API_VERSION = "v20.0"
 FACEBOOK_GRAPH_URL = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}"
 
-# Scopes for login + business access
+# Scopes for login only (minimal - just authentication)
 FACEBOOK_LOGIN_SCOPES = [
     "email",
     "public_profile",
@@ -69,6 +64,97 @@ FACEBOOK_ADS_SCOPES = [
 
 
 # =========================================
+# HELPER: Check if user has active subscription
+# =========================================
+def _has_active_subscription(business_id: str, log_tag: str) -> bool:
+    """
+    Check if the business has an active subscription using Subscription model.
+    
+    Returns True if subscription status is Active or Trial.
+    """
+    try:
+        # Use the Subscription model's get_active_by_business method
+        active_sub = Subscription.get_active_by_business(business_id)
+        
+        if active_sub:
+            status = active_sub.get("status")
+            Log.info(f"{log_tag} Business {business_id} has active subscription with status: {status}")
+            return True
+        
+        Log.info(f"{log_tag} Business {business_id} has NO active subscription")
+        return False
+        
+    except Exception as e:
+        Log.error(f"{log_tag} Error checking subscription: {e}")
+        return False
+
+
+# =========================================
+# HELPER: Get subscription details
+# =========================================
+def _get_subscription_details(business_id: str, log_tag: str) -> Optional[dict]:
+    """
+    Get subscription details for the business using Subscription model.
+    
+    Returns normalized subscription data or None.
+    """
+    try:
+        # Use the Subscription model's get_active_by_business method
+        # This returns a normalized dict with decrypted fields
+        active_sub = Subscription.get_active_by_business(business_id)
+        
+        if active_sub:
+            return {
+                "subscription_id": active_sub.get("_id"),
+                "status": active_sub.get("status"),  # Already decrypted by model
+                "package_id": active_sub.get("package_id"),
+                "billing_period": active_sub.get("billing_period"),  # Already decrypted
+                "currency": active_sub.get("currency"),  # Already decrypted
+                "price_paid": active_sub.get("price_paid"),  # Already decrypted to float
+                "start_date": active_sub.get("start_date").isoformat() if active_sub.get("start_date") else None,
+                "end_date": active_sub.get("end_date").isoformat() if active_sub.get("end_date") else None,
+                "trial_end_date": active_sub.get("trial_end_date").isoformat() if active_sub.get("trial_end_date") else None,
+                "auto_renew": active_sub.get("auto_renew"),
+                "term_number": active_sub.get("term_number"),
+            }
+        
+        return None
+        
+    except Exception as e:
+        Log.error(f"{log_tag} Error getting subscription details: {e}")
+        return None
+
+
+# =========================================
+# HELPER: Get latest subscription (any status)
+# =========================================
+def _get_latest_subscription(business_id: str, log_tag: str) -> Optional[dict]:
+    """
+    Get the latest subscription for the business regardless of status.
+    Useful for showing subscription history or expired status.
+    """
+    try:
+        latest_sub = Subscription.get_latest_by_business(business_id)
+        
+        if latest_sub:
+            return {
+                "subscription_id": latest_sub.get("_id"),
+                "status": latest_sub.get("status"),
+                "package_id": latest_sub.get("package_id"),
+                "billing_period": latest_sub.get("billing_period"),
+                "start_date": latest_sub.get("start_date").isoformat() if latest_sub.get("start_date") else None,
+                "end_date": latest_sub.get("end_date").isoformat() if latest_sub.get("end_date") else None,
+                "cancelled_at": latest_sub.get("cancelled_at").isoformat() if latest_sub.get("cancelled_at") else None,
+            }
+        
+        return None
+        
+    except Exception as e:
+        Log.error(f"{log_tag} Error getting latest subscription: {e}")
+        return None
+
+
+# =========================================
 # HELPER: Exchange code for token
 # =========================================
 def _exchange_code_for_token(code: str, redirect_uri: str, log_tag: str) -> dict:
@@ -81,7 +167,6 @@ def _exchange_code_for_token(code: str, redirect_uri: str, log_tag: str) -> dict
     if not app_id or not app_secret:
         raise ValueError("META_APP_ID and META_APP_SECRET must be set")
     
-    # Exchange code for short-lived token
     token_url = f"{FACEBOOK_GRAPH_URL}/oauth/access_token"
     params = {
         "client_id": app_id,
@@ -161,56 +246,10 @@ def _get_facebook_user_profile(access_token: str, log_tag: str) -> dict:
 
 
 # =========================================
-# HELPER: Get Facebook Pages
-# =========================================
-def _get_facebook_pages(access_token: str, log_tag: str) -> list:
-    """Get Facebook Pages the user manages."""
-    import requests
-    
-    response = requests.get(
-        f"{FACEBOOK_GRAPH_URL}/me/accounts",
-        params={
-            "access_token": access_token,
-            "fields": "id,name,category,access_token,picture.width(200).height(200),instagram_business_account{id,username,profile_picture_url,followers_count},tasks",
-        },
-        timeout=30,
-    )
-    
-    if response.status_code != 200:
-        Log.info(f"{log_tag} Failed to get pages: {response.text}")
-        return []
-    
-    data = response.json()
-    pages = data.get("data", [])
-    
-    formatted_pages = []
-    for page in pages:
-        instagram = page.get("instagram_business_account", {})
-        
-        formatted_pages.append({
-            "page_id": page.get("id"),
-            "page_name": page.get("name"),
-            "category": page.get("category"),
-            "page_access_token": page.get("access_token"),
-            "picture": page.get("picture", {}).get("data", {}).get("url"),
-            "tasks": page.get("tasks", []),
-            "instagram": {
-                "instagram_id": instagram.get("id"),
-                "username": instagram.get("username"),
-                "profile_picture": instagram.get("profile_picture_url"),
-                "followers_count": instagram.get("followers_count"),
-            } if instagram.get("id") else None,
-        })
-    
-    return formatted_pages
-
-
-# =========================================
-# HELPER: Create Business and User (mirrors registration)
+# HELPER: Create Business and User
 # =========================================
 def _create_account_from_facebook(
     profile: dict,
-    facebook_access_token: str,
     log_tag: str,
 ) -> Tuple[dict, dict]:
     """
@@ -223,7 +262,11 @@ def _create_account_from_facebook(
     4. Seed SocialRoles
     5. Create Client
     
-    Returns: (business_doc, user_doc) - full MongoDB documents
+    NOTE: Pages are NOT connected here. User must:
+    1. Subscribe to a package
+    2. Then connect pages via /social/oauth/facebook/start
+    
+    Returns: (business_doc, user_doc)
     """
     
     email = profile.get("email")
@@ -234,7 +277,7 @@ def _create_account_from_facebook(
     if not name:
         name = email.split("@")[0] if email else "User"
     
-    # Generate a random password (user can set it later or continue using Facebook login)
+    # Generate a random password (user can set it later)
     random_password = secrets.token_urlsafe(16)
     hashed_password = bcrypt.hashpw(
         random_password.encode("utf-8"),
@@ -245,7 +288,7 @@ def _create_account_from_facebook(
     tenant_id = str(ObjectId())
     client_id_plain = generate_client_id()
     
-    # Account status (email verified since they used Facebook login)
+    # Account status - NOT subscribed yet
     account_status = [
         {
             "account_created": {
@@ -255,15 +298,16 @@ def _create_account_from_facebook(
         },
         {
             "business_email_verified": {
-                "status": True,
+                "status": True,  # Verified via Facebook
             }
         },
         {
             "subscribed_to_package": {
-                "status": False,
+                "status": False,  # NOT subscribed - needs to choose package
             }
         }
     ]
+    
     
     account_type = SYSTEM_USERS["BUSINESS_OWNER"]
     
@@ -273,6 +317,8 @@ def _create_account_from_facebook(
     Log.info(f"{log_tag} Creating business for {email}")
     
     business_col = db.get_collection("businesses")
+    
+    business_data = dict()
     
     business_doc = {
         "tenant_id": encrypt_data(tenant_id),
@@ -333,8 +379,6 @@ def _create_account_from_facebook(
     
     user_result = user_col.insert_one(user_doc)
     user_id = user_result.inserted_id
-    
-    # Add _id to user_doc for return
     user_doc["_id"] = user_id
     
     Log.info(f"{log_tag} User created: {user_id}")
@@ -388,412 +432,7 @@ def _create_account_from_facebook(
     except Exception as e:
         Log.error(f"{log_tag} Error creating client: {e}")
     
-    # Return full user document (needed for create_token_response_admin)
     return (business_doc, user_doc)
-
-
-# =========================================
-# HELPER: Connect a single Facebook Page with quota enforcement
-# =========================================
-def _connect_single_facebook_page(
-    business_id: str,
-    user__id: str,
-    page_id: str,
-    page_name: str,
-    page_access_token: str,
-    page_category: str,
-    page_picture: str,
-    page_tasks: list,
-    user_access_token: str,
-    enforcer: QuotaEnforcer,
-    log_tag: str,
-) -> dict:
-    """
-    Connect a single Facebook Page with quota enforcement.
-    
-    Returns: {"success": bool, "message": str, "should_reserve_quota": bool}
-    """
-    
-    scopes = [
-        "pages_show_list",
-        "pages_read_engagement",
-        "pages_manage_posts",
-        "read_insights",
-        "ads_management",
-        "ads_read",
-        "business_management",
-    ]
-    
-    destination_id = str(page_id)
-    
-    # ---------------------------------------------------------
-    # Check if this destination already exists
-    #   - if already connected and token is still valid => skip (already connected)
-    #   - if already connected but token expired => allow refresh WITHOUT reserve
-    #   - if not connected => reserve quota then create
-    # ---------------------------------------------------------
-    try:
-        existing = SocialAccount.get_destination(
-            business_id,
-            user__id,
-            "facebook",
-            destination_id,
-        )
-    except Exception as e:
-        existing = None
-        Log.info(f"{log_tag} Error retrieving social destination: {str(e)}")
-
-    should_reserve_quota = False
-
-    if existing:
-        # If token_expires_at tracking exists, use it
-        if not is_token_expired(existing):
-            # Optional: if expiring soon, allow refresh (no quota) instead of blocking
-            if is_token_expiring_soon(existing, minutes=10):
-                Log.info(f"{log_tag} Facebook Page {page_id} token expiring soon; refreshing without consuming quota")
-            else:
-                Log.info(f"{log_tag} Facebook Page {page_id} already connected with valid token; skipping")
-                return {
-                    "success": True,
-                    "message": "Already connected",
-                    "already_connected": True,
-                    "should_reserve_quota": False,
-                }
-        else:
-            Log.info(f"{log_tag} Facebook Page {page_id} token expired; refreshing without consuming quota")
-    else:
-        should_reserve_quota = True
-
-    # ---- RESERVE QUOTA if this is a brand new connection ----
-    if should_reserve_quota:
-        try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",
-                reason="social_accounts:create",
-            )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} Plan limit reached for Facebook Page {page_id}: {e.meta}")
-            return {
-                "success": False,
-                "message": e.message,
-                "error": e.meta,
-                "plan_limit_reached": True,
-                "should_reserve_quota": should_reserve_quota,
-            }
-
-    try:
-        SocialAccount.upsert_destination(
-            business_id=business_id,
-            user__id=user__id,
-            platform="facebook",
-            destination_id=destination_id,
-            destination_type="page",
-            destination_name=page_name,
-            access_token_plain=page_access_token,
-            refresh_token_plain=None,
-            token_expires_at=None,
-            scopes=scopes,
-            platform_user_id=destination_id,
-            platform_username=page_name,
-            meta={
-                "page_id": destination_id,
-                "category": page_category,
-                "picture": page_picture,
-                "tasks": page_tasks,
-                "user_access_token": user_access_token,
-            },
-        )
-        
-        Log.info(f"{log_tag} Facebook Page {page_id} connected successfully")
-        return {
-            "success": True,
-            "message": "Connected successfully" if should_reserve_quota else "Refreshed successfully",
-            "should_reserve_quota": should_reserve_quota,
-        }
-
-    except DuplicateKeyError as e:
-        Log.info(f"{log_tag} DuplicateKeyError for Facebook Page {page_id}: {e}")
-        if should_reserve_quota:
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-        return {
-            "success": True,
-            "message": "Already connected (no changes required)",
-            "should_reserve_quota": False,
-        }
-
-    except Exception as e:
-        Log.error(f"{log_tag} Failed to upsert Facebook Page {page_id}: {e}")
-        if should_reserve_quota:
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-        return {
-            "success": False,
-            "message": f"Failed to connect: {str(e)}",
-            "should_reserve_quota": should_reserve_quota,
-        }
-
-
-# =========================================
-# HELPER: Connect a single Instagram account with quota enforcement
-# =========================================
-def _connect_single_instagram(
-    business_id: str,
-    user__id: str,
-    ig_id: str,
-    ig_username: str,
-    page_id: str,
-    page_name: str,
-    page_access_token: str,
-    ig_profile_picture: str,
-    ig_followers_count: int,
-    user_access_token: str,
-    enforcer: QuotaEnforcer,
-    log_tag: str,
-) -> dict:
-    """
-    Connect a single Instagram account with quota enforcement.
-    
-    Returns: {"success": bool, "message": str, "should_reserve_quota": bool}
-    """
-    
-    scopes = [
-        "instagram_basic",
-        "instagram_content_publish",
-        "instagram_manage_insights",
-        "pages_show_list",
-        "pages_read_engagement",
-        "ads_management",
-        "ads_read",
-        "business_management",
-    ]
-    
-    destination_id = str(ig_id)
-    
-    # ---------------------------------------------------------
-    # Check if this destination already exists
-    # ---------------------------------------------------------
-    try:
-        existing = SocialAccount.get_destination(
-            business_id,
-            user__id,
-            "instagram",
-            destination_id,
-        )
-    except Exception as e:
-        existing = None
-        Log.info(f"{log_tag} Error retrieving Instagram destination: {str(e)}")
-
-    should_reserve_quota = False
-
-    if existing:
-        if not is_token_expired(existing):
-            if is_token_expiring_soon(existing, minutes=10):
-                Log.info(f"{log_tag} Instagram {ig_id} token expiring soon; refreshing without consuming quota")
-            else:
-                Log.info(f"{log_tag} Instagram {ig_id} already connected with valid token; skipping")
-                return {
-                    "success": True,
-                    "message": "Already connected",
-                    "already_connected": True,
-                    "should_reserve_quota": False,
-                }
-        else:
-            Log.info(f"{log_tag} Instagram {ig_id} token expired; refreshing without consuming quota")
-    else:
-        should_reserve_quota = True
-
-    # ---- RESERVE QUOTA if this is a brand new connection ----
-    if should_reserve_quota:
-        try:
-            enforcer.reserve(
-                counter_name="social_accounts",
-                limit_key="max_social_accounts",
-                qty=1,
-                period="billing",
-                reason="social_accounts:create",
-            )
-        except PlanLimitError as e:
-            Log.info(f"{log_tag} Plan limit reached for Instagram {ig_id}: {e.meta}")
-            return {
-                "success": False,
-                "message": e.message,
-                "error": e.meta,
-                "plan_limit_reached": True,
-                "should_reserve_quota": should_reserve_quota,
-            }
-
-    try:
-        SocialAccount.upsert_destination(
-            business_id=business_id,
-            user__id=user__id,
-            platform="instagram",
-            destination_id=destination_id,
-            destination_type="ig_user",
-            destination_name=ig_username,
-            access_token_plain=page_access_token,  # Instagram uses page token
-            refresh_token_plain=None,
-            token_expires_at=existing.get("token_expires_at") if isinstance(existing, dict) else None,
-            scopes=scopes,
-            platform_user_id=destination_id,
-            platform_username=ig_username,
-            meta={
-                "ig_user_id": destination_id,
-                "ig_username": ig_username,
-                "page_id": str(page_id),
-                "page_name": page_name,
-                "profile_picture": ig_profile_picture,
-                "followers_count": ig_followers_count,
-                "user_access_token": user_access_token,
-            },
-        )
-        
-        Log.info(f"{log_tag} Instagram {ig_id} connected successfully")
-        return {
-            "success": True,
-            "message": "Connected successfully" if should_reserve_quota else "Refreshed successfully",
-            "should_reserve_quota": should_reserve_quota,
-        }
-
-    except DuplicateKeyError as e:
-        Log.info(f"{log_tag} DuplicateKeyError for Instagram {ig_id}: {e}")
-        if should_reserve_quota:
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-        return {
-            "success": True,
-            "message": "Already connected (no changes required)",
-            "should_reserve_quota": False,
-        }
-
-    except Exception as e:
-        Log.error(f"{log_tag} Failed to upsert Instagram {ig_id}: {e}")
-        if should_reserve_quota:
-            enforcer.release(counter_name="social_accounts", qty=1, period="billing")
-        return {
-            "success": False,
-            "message": f"Failed to connect: {str(e)}",
-            "should_reserve_quota": should_reserve_quota,
-        }
-
-
-# =========================================
-# HELPER: Connect Facebook Pages & Instagram with quota enforcement
-# =========================================
-def _connect_facebook_pages(
-    business_id: str,
-    user__id: str,
-    user_access_token: str,
-    pages: list,
-    log_tag: str,
-) -> dict:
-    """
-    Connect Facebook Pages and Instagram accounts with quota enforcement.
-    Uses your existing SocialAccount.upsert_destination pattern with QuotaEnforcer.
-    
-    Returns: {
-        "pages": [{"page_id": ..., "page_name": ..., "status": ...}],
-        "instagram": [{"instagram_id": ..., "username": ..., "status": ...}],
-        "quota_errors": [...]
-    }
-    """
-    connected = {
-        "pages": [],
-        "instagram": [],
-        "quota_errors": [],
-    }
-    
-    # Initialize quota enforcer for this business
-    enforcer = QuotaEnforcer(business_id)
-    
-    for page in pages:
-        page_id = page.get("page_id")
-        page_name = page.get("page_name")
-        page_access_token = page.get("page_access_token")
-        
-        if not page_access_token:
-            Log.info(f"{log_tag} No token for page {page_id}, skipping")
-            continue
-        
-        Log.info(f"{log_tag} Connecting page: {page_id} - {page_name}")
-        
-        # ---------------------------------------------------------
-        # CONNECT FACEBOOK PAGE
-        # ---------------------------------------------------------
-        fb_result = _connect_single_facebook_page(
-            business_id=business_id,
-            user__id=user__id,
-            page_id=page_id,
-            page_name=page_name,
-            page_access_token=page_access_token,
-            page_category=page.get("category"),
-            page_picture=page.get("picture"),
-            page_tasks=page.get("tasks", []),
-            user_access_token=user_access_token,
-            enforcer=enforcer,
-            log_tag=log_tag,
-        )
-        
-        if fb_result.get("plan_limit_reached"):
-            connected["quota_errors"].append({
-                "platform": "facebook",
-                "page_id": page_id,
-                "page_name": page_name,
-                "message": fb_result.get("message"),
-            })
-            # Stop trying to connect more accounts if plan limit reached
-            Log.info(f"{log_tag} Plan limit reached, stopping further connections")
-            break
-        
-        if fb_result.get("success"):
-            connected["pages"].append({
-                "page_id": page_id,
-                "page_name": page_name,
-                "status": "connected" if not fb_result.get("already_connected") else "already_connected",
-            })
-        
-        # ---------------------------------------------------------
-        # CONNECT INSTAGRAM (if linked to this page)
-        # ---------------------------------------------------------
-        instagram = page.get("instagram")
-        if instagram and instagram.get("instagram_id"):
-            ig_id = instagram["instagram_id"]
-            ig_username = instagram.get("username", "")
-            
-            Log.info(f"{log_tag} Connecting Instagram: {ig_id} - {ig_username}")
-            
-            ig_result = _connect_single_instagram(
-                business_id=business_id,
-                user__id=user__id,
-                ig_id=ig_id,
-                ig_username=ig_username,
-                page_id=page_id,
-                page_name=page_name,
-                page_access_token=page_access_token,
-                ig_profile_picture=instagram.get("profile_picture"),
-                ig_followers_count=instagram.get("followers_count"),
-                user_access_token=user_access_token,
-                enforcer=enforcer,
-                log_tag=log_tag,
-            )
-            
-            if ig_result.get("plan_limit_reached"):
-                connected["quota_errors"].append({
-                    "platform": "instagram",
-                    "instagram_id": ig_id,
-                    "username": ig_username,
-                    "message": ig_result.get("message"),
-                })
-                # Continue with next page, but note we hit limit for Instagram
-                Log.info(f"{log_tag} Plan limit reached for Instagram, continuing with pages only")
-            elif ig_result.get("success"):
-                connected["instagram"].append({
-                    "instagram_id": ig_id,
-                    "username": ig_username,
-                    "status": "connected" if not ig_result.get("already_connected") else "already_connected",
-                })
-    
-    return connected
 
 
 # =========================================
@@ -801,7 +440,6 @@ def _connect_facebook_pages(
 # =========================================
 def _store_login_state(state: str, data: dict, ttl_seconds: int = 600):
     """Store OAuth state in Redis."""
-    import json
     redis_client.setex(
         f"fb_login_state:{state}",
         ttl_seconds,
@@ -811,7 +449,6 @@ def _store_login_state(state: str, data: dict, ttl_seconds: int = 600):
 
 def _consume_login_state(state: str) -> Optional[dict]:
     """Retrieve and delete OAuth state from Redis."""
-    import json
     key = f"fb_login_state:{state}"
     raw = redis_client.get(key)
     if not raw:
@@ -831,9 +468,11 @@ class FacebookLoginStartResource(MethodView):
     """
     Initiate Facebook Login OAuth flow.
     
+    This is for AUTHENTICATION ONLY - not for connecting pages.
+    Pages should be connected via /social/oauth/facebook/start AFTER subscription.
+    
     Query params:
     - return_url: Where to redirect after auth (default: FRONTEND_URL)
-    - include_ads: Include ads management scopes (true/false)
     """
     
     def get(self):
@@ -844,7 +483,6 @@ class FacebookLoginStartResource(MethodView):
         Log.info(f"{log_tag} Initiating Facebook login")
         
         try:
-            # Get environment variables
             app_id = os.getenv("META_APP_ID") or os.getenv("FACEBOOK_APP_ID")
             redirect_uri = os.getenv("FACEBOOK_LOGIN_REDIRECT_URI") or os.getenv("FACEBOOK_REDIRECT_URI")
             
@@ -855,9 +493,7 @@ class FacebookLoginStartResource(MethodView):
                     "message": "Server OAuth configuration missing",
                 }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
             
-            # Get optional parameters
             return_url = request.args.get("return_url", os.getenv("FRONTEND_URL", "/"))
-            include_ads = request.args.get("include_ads", "false").lower() == "true"
             
             # Generate state for CSRF protection
             state = secrets.token_urlsafe(24)
@@ -865,22 +501,16 @@ class FacebookLoginStartResource(MethodView):
             # Store state in Redis
             _store_login_state(state, {
                 "return_url": return_url,
-                "include_ads": include_ads,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
             
-            # Build scopes
-            scopes = FACEBOOK_LOGIN_SCOPES.copy()
-            if include_ads:
-                scopes.extend(FACEBOOK_ADS_SCOPES)
-            
-            # Build authorization URL
+            # Build authorization URL - ONLY login scopes (no page permissions)
             params = {
                 "client_id": app_id,
                 "redirect_uri": redirect_uri,
                 "state": state,
                 "response_type": "code",
-                "scope": ",".join(scopes),
+                "scope": ",".join(FACEBOOK_LOGIN_SCOPES),
             }
             
             auth_url = f"https://www.facebook.com/{FACEBOOK_API_VERSION}/dialog/oauth?" + urlencode(params)
@@ -908,12 +538,15 @@ class FacebookLoginCallbackResource(MethodView):
     """
     Handle Facebook Login OAuth callback.
     
-    This endpoint:
+    This endpoint ONLY handles authentication:
     1. Exchanges code for access token
     2. Gets user profile from Facebook
     3. Creates account OR logs in existing user
-    4. Connects Facebook Pages and Instagram accounts (with quota enforcement)
-    5. Returns JWT tokens using create_token_response_admin
+    4. Returns JWT tokens
+    
+    NOTE: Pages are NOT connected here. After login:
+    - If no subscription: User should be redirected to pricing
+    - If has subscription: User can connect pages via /social/oauth/facebook/start
     """
     
     def get(self):
@@ -1003,26 +636,15 @@ class FacebookLoginCallbackResource(MethodView):
                 }), HTTP_STATUS_CODES["BAD_REQUEST"]
             
             # =========================================
-            # 3. GET FACEBOOK PAGES
+            # 3. CHECK IF USER EXISTS
             # =========================================
-            Log.info(f"{log_tag} Getting Facebook pages...")
-            
-            pages_start = time.time()
-            pages = _get_facebook_pages(access_token, log_tag)
-            pages_duration = time.time() - pages_start
-            
-            Log.info(f"{log_tag} Found {len(pages)} pages in {pages_duration:.2f}s")
-            
-            # =========================================
-            # 4. CHECK IF USER EXISTS
-            # =========================================
-            
-            # First, check by Facebook user ID
             user_col = db.get_collection("users")
             existing_user = user_col.find_one({"facebook_user_id": facebook_user_id})
             
             if existing_user:
-                # User exists with this Facebook account - LOG THEM IN
+                # =========================================
+                # EXISTING USER (by Facebook ID) - LOG THEM IN
+                # =========================================
                 Log.info(f"{log_tag} Existing user found by facebook_user_id, logging in")
                 
                 business = Business.get_business_by_id(str(existing_user["business_id"]))
@@ -1034,24 +656,13 @@ class FacebookLoginCallbackResource(MethodView):
                         "message": "Account not found. Please contact support.",
                     }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
                 
-                # Connect/update Facebook Pages and Instagram (with quota enforcement)
-                connected = {"pages": [], "instagram": [], "quota_errors": []}
-                if pages:
-                    connected = _connect_facebook_pages(
-                        business_id=str(business["_id"]),
-                        user__id=str(existing_user["_id"]),
-                        user_access_token=access_token,
-                        pages=pages,
-                        log_tag=log_tag,
-                    )
-                
-                # Get decrypted account_type for token generation
+                # Get account_type for token generation
                 account_type = decrypt_data(existing_user.get("account_type")) if existing_user.get("account_type") else SYSTEM_USERS["BUSINESS_OWNER"]
                 
                 duration = time.time() - start_time
                 Log.info(f"{log_tag} Login successful in {duration:.2f}s")
                 
-                # Use your existing token helper
+                # Return token
                 return create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
@@ -1063,7 +674,9 @@ class FacebookLoginCallbackResource(MethodView):
             existing_business = Business.get_business_by_email(email)
             
             if existing_business:
-                # User exists with this email - link Facebook and log them in
+                # =========================================
+                # EXISTING USER (by email) - Link Facebook and LOG THEM IN
+                # =========================================
                 Log.info(f"{log_tag} Existing business found by email, linking Facebook account")
                 
                 existing_user = User.get_user_by_email(email)
@@ -1098,24 +711,13 @@ class FacebookLoginCallbackResource(MethodView):
                 # Refresh user doc to get updated fields
                 existing_user = user_col.find_one({"_id": existing_user["_id"]})
                 
-                # Connect Facebook Pages and Instagram (with quota enforcement)
-                connected = {"pages": [], "instagram": [], "quota_errors": []}
-                if pages:
-                    connected = _connect_facebook_pages(
-                        business_id=str(existing_business["_id"]),
-                        user__id=str(existing_user["_id"]),
-                        user_access_token=access_token,
-                        pages=pages,
-                        log_tag=log_tag,
-                    )
-                
-                # Get decrypted account_type for token generation
+                # Get account_type for token generation
                 account_type = decrypt_data(existing_user.get("account_type")) if existing_user.get("account_type") else SYSTEM_USERS["BUSINESS_OWNER"]
                 
                 duration = time.time() - start_time
                 Log.info(f"{log_tag} Login with Facebook link successful in {duration:.2f}s")
                 
-                # Use your existing token helper
+                # Return token
                 return create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
@@ -1124,26 +726,14 @@ class FacebookLoginCallbackResource(MethodView):
                 )
             
             # =========================================
-            # 5. CREATE NEW ACCOUNT
+            # 4. NEW USER - Create account
             # =========================================
             Log.info(f"{log_tag} Creating new account from Facebook profile")
             
             business_doc, user_doc = _create_account_from_facebook(
                 profile=profile,
-                facebook_access_token=access_token,
                 log_tag=log_tag,
             )
-            
-            # Connect Facebook Pages and Instagram (with quota enforcement)
-            connected = {"pages": [], "instagram": [], "quota_errors": []}
-            if pages:
-                connected = _connect_facebook_pages(
-                    business_id=str(user_doc["business_id"]),
-                    user__id=str(user_doc["_id"]),
-                    user_access_token=access_token,
-                    pages=pages,
-                    log_tag=log_tag,
-                )
             
             # Get account_type for token generation
             account_type = SYSTEM_USERS["BUSINESS_OWNER"]
@@ -1151,7 +741,7 @@ class FacebookLoginCallbackResource(MethodView):
             duration = time.time() - start_time
             Log.info(f"{log_tag} New account created in {duration:.2f}s")
             
-            # Use your existing token helper
+            # Return token
             return create_token_response_admin(
                 user=user_doc,
                 account_type=account_type,
@@ -1183,7 +773,7 @@ class SetPasswordResource(MethodView):
     
     Body:
     {
-        "password": "newPasword123"
+        "password": "newPassword123"
     }
     """
     
@@ -1215,7 +805,6 @@ class SetPasswordResource(MethodView):
                 }), HTTP_STATUS_CODES["BAD_REQUEST"]
             
             try:
-                # Update user password
                 result = User.update_password(
                     user_id=user__id,
                     business_id=business_id,
@@ -1245,16 +834,42 @@ class SetPasswordResource(MethodView):
 
 
 # =========================================
-# CHECK LOGIN METHODS
+# CHECK ACCOUNT STATUS (login methods + subscription)
 # =========================================
-@blp_facebook_login.route("/auth/login-methods", methods=["GET"])
-class LoginMethodsResource(MethodView):
+@blp_facebook_login.route("/auth/account-status", methods=["GET"])
+class AccountStatusResource(MethodView):
     """
-    Get available login methods for the current user.
+    Get account status including login methods and subscription status.
     
-    Returns which methods are available:
-    - email_password: Can log in with email/password
-    - facebook: Can log in with Facebook
+    Uses the Subscription model to check subscription status.
+    
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "login_methods": {
+                "email_password": true,
+                "facebook": true,
+                "registered_via": "facebook",
+                "can_set_password": true
+            },
+            "subscription": {
+                "has_active_subscription": true,
+                "subscription_id": "...",
+                "status": "Active",  // or "Trial"
+                "package_id": "...",
+                "billing_period": "monthly",
+                "currency": "USD",
+                "price_paid": 29.99,
+                "start_date": "2025-01-01T00:00:00",
+                "end_date": "2025-02-01T00:00:00",
+                "trial_end_date": null,
+                "auto_renew": true,
+                "term_number": 1
+            },
+            "can_connect_social_accounts": true
+        }
+    }
     """
     
     def get(self):
@@ -1266,6 +881,9 @@ class LoginMethodsResource(MethodView):
             business_id = str(user.get("business_id", ""))
             user__id = str(user.get("_id", ""))
             
+            client_ip = request.remote_addr
+            log_tag = f"[facebook_login_resource.py][AccountStatusResource][{client_ip}][{business_id}]"
+            
             # Get full user document
             user_doc = User.get_by_id(user__id, business_id)
             
@@ -1275,11 +893,108 @@ class LoginMethodsResource(MethodView):
                     "message": "User not found",
                 }), HTTP_STATUS_CODES["NOT_FOUND"]
             
-            # Check if user has a usable password
+            # =========================================
+            # LOGIN METHODS
+            # =========================================
             has_facebook = bool(user_doc.get("facebook_user_id"))
             social_provider = user_doc.get("social_login_provider")
             has_password = bool(user_doc.get("password"))
             registered_via_social = social_provider in ["facebook", "google", "apple"]
+            
+            # =========================================
+            # SUBSCRIPTION STATUS (using Subscription model)
+            # =========================================
+            has_subscription = _has_active_subscription(business_id, log_tag)
+            subscription_details = _get_subscription_details(business_id, log_tag)
+            
+            # If no active subscription, get latest to show status
+            latest_subscription = None
+            if not has_subscription:
+                latest_subscription = _get_latest_subscription(business_id, log_tag)
+            
+            # Build subscription response
+            subscription_response = {
+                "has_active_subscription": has_subscription,
+            }
+            
+            if subscription_details:
+                subscription_response.update(subscription_details)
+            elif latest_subscription:
+                # Show latest subscription info even if not active
+                subscription_response["latest_subscription"] = latest_subscription
+            
+            return jsonify({
+                "success": True,
+                "data": {
+                    "login_methods": {
+                        "email_password": has_password,
+                        "facebook": has_facebook,
+                        "registered_via": social_provider or "email",
+                        "can_set_password": registered_via_social,
+                    },
+                    "subscription": subscription_response,
+                    "can_connect_social_accounts": has_subscription,
+                },
+            }), HTTP_STATUS_CODES["OK"]
+        
+        return _get()
+
+
+# =========================================
+# CHECK LOGIN METHODS (backward compatibility)
+# =========================================
+@blp_facebook_login.route("/auth/login-methods", methods=["GET"])
+class LoginMethodsResource(MethodView):
+    """
+    Get available login methods for the current user.
+    
+    Uses the Subscription model to check subscription status.
+    
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "email_password": true,
+            "facebook": true,
+            "registered_via": "facebook",
+            "can_set_password": true,
+            "has_subscription": true,
+            "subscription_status": "Active",
+            "can_connect_social_accounts": true
+        }
+    }
+    """
+    
+    def get(self):
+        from ....resources.doseal.admin.admin_business_resource import token_required
+        
+        @token_required
+        def _get():
+            user = g.get("current_user", {}) or {}
+            business_id = str(user.get("business_id", ""))
+            user__id = str(user.get("_id", ""))
+            
+            client_ip = request.remote_addr
+            log_tag = f"[facebook_login_resource.py][LoginMethodsResource][{client_ip}][{business_id}]"
+            
+            user_doc = User.get_by_id(user__id, business_id)
+            
+            if not user_doc:
+                return jsonify({
+                    "success": False,
+                    "message": "User not found",
+                }), HTTP_STATUS_CODES["NOT_FOUND"]
+            
+            # Login methods
+            has_facebook = bool(user_doc.get("facebook_user_id"))
+            social_provider = user_doc.get("social_login_provider")
+            has_password = bool(user_doc.get("password"))
+            registered_via_social = social_provider in ["facebook", "google", "apple"]
+            
+            # Subscription check using Subscription model
+            has_subscription = _has_active_subscription(business_id, log_tag)
+            subscription_details = _get_subscription_details(business_id, log_tag)
+            subscription_status = subscription_details.get("status") if subscription_details else None
             
             return jsonify({
                 "success": True,
@@ -1288,6 +1003,9 @@ class LoginMethodsResource(MethodView):
                     "facebook": has_facebook,
                     "registered_via": social_provider or "email",
                     "can_set_password": registered_via_social,
+                    "has_subscription": has_subscription,
+                    "subscription_status": subscription_status,
+                    "can_connect_social_accounts": has_subscription,
                 },
             }), HTTP_STATUS_CODES["OK"]
         

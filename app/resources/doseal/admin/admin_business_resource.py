@@ -661,9 +661,7 @@ class LoginBusinessInitiateResource(MethodView):
             
         Log.info(f"{log_tag} [{client_ip}][{email}]: login info matched")
         
-        client_id = decrypt_data(user["client_id"])
-        
-        business = Business.get_business_by_client_id(client_id)
+        business = Business.get_business_by_email(email)
         if not business: 
             abort(401, message="Your access has been revoked. Contact your administrator")
             
@@ -731,15 +729,13 @@ class LoginBusinessInitiateResource(MethodView):
         # )
   
   
-  
-  
 #-------------------------------------------------------
 # LOGIN EXECUTE
 #-------------------------------------------------------
 @blp_business_auth.route("/auth/login/execute", methods=["POST"])
 class LoginBusinessExecuteResource(MethodView):
-    @login_ip_limiter("login")
-    @login_user_limiter("login")
+    # @login_ip_limiter("login")
+    # @login_user_limiter("login")
     @blp_business_auth.arguments(LoginExecuteSchema, location="form")
     @blp_business_auth.response(200, LoginExecuteResponseSchema)
     @blp_business_auth.doc(
@@ -863,18 +859,13 @@ class LoginBusinessExecuteResource(MethodView):
                 "UNAUTHORIZED",
                 "Invalid email or password",
             )
-        
-        client_id = decrypt_data(user["client_id"])
-        
         try:
             
-            business = Business.get_business_by_client_id(client_id)
+            business = Business.get_business_by_email(email)
             if not business: 
                 abort(401, message="Your access has been revoked. Contact your administrator")
                 
             account_type = business.get("account_type")
-            
-            decrypted_data = decrypt_data(account_type)
 
             # when user was not found
             if user is None:
@@ -907,7 +898,7 @@ class LoginBusinessExecuteResource(MethodView):
             # proceed to create token when user payload was created
             return create_token_response_admin(
                 user=user,
-                account_type=decrypted_data,
+                account_type=account_type,
                 client_ip=client_ip, 
                 log_tag=log_tag, 
             )
