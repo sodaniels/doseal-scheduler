@@ -12,21 +12,33 @@ from flask import request, jsonify, redirect, g
 from flask.views import MethodView
 from bson import ObjectId
 
+#helpers
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
+from ....utils.helpers import create_token_response_admin
+from ....utils.social.token_utils import (
+    is_token_expired,
+    is_token_expiring_soon,
+)
+from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
+from ....utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
 from ....extensions.redis_conn import redis_client
 from ....extensions.db import db
 
+#models
 from ....models.business_model import Business, Client
 from ....models.user_model import User
 from ....models.social.social_account import SocialAccount
 from ....models.notifications.notification_settings import NotificationSettings
+
+#services
 from ....services.seeders.social_role_seeder import SocialRoleSeeder
 
-# Import your existing token helper
-from ....utils.helpers import create_token_response_admin
+
+
+
 
 
 blp_facebook_login = Blueprint("facebook_login", __name__)
@@ -417,11 +429,18 @@ def _connect_facebook_pages(
         page_name = page.get("page_name")
         page_access_token = page.get("page_access_token")
         
+        destination_id=str(page_id)
+        
         if not page_access_token:
             Log.info(f"{log_tag} No token for page {page_id}, skipping")
             continue
         
         Log.info(f"{log_tag} Connecting page: {page_id} - {page_name}")
+        
+        
+        #-------------------------------------
+        #CONNECTING FACEBOOK
+        #-------------------------------------
         
         # Connect Facebook Page
         try:
