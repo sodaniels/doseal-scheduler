@@ -20,6 +20,11 @@ from ....utils.helpers import create_token_response_admin
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
+from ....utils.rate_limits import (
+    social_login_initiator_limiter,
+    social_login_callback_limiter
+)
+
 from ....extensions.redis_conn import redis_client
 from ....extensions.db import db
 
@@ -436,6 +441,7 @@ def _consume_login_state(state: str) -> Optional[dict]:
 # =========================================
 # INITIATE YOUTUBE/GOOGLE LOGIN
 # =========================================
+@social_login_initiator_limiter("google_login")
 @blp_youtube_login.route("/auth/google/business/login", methods=["GET"])
 class YouTubeLoginStartResource(MethodView):
     """
@@ -513,6 +519,7 @@ class YouTubeLoginStartResource(MethodView):
 # =========================================
 # YOUTUBE/GOOGLE LOGIN CALLBACK
 # =========================================
+@social_login_callback_limiter("google_login")
 @blp_youtube_login.route("/auth/google/business/callback", methods=["GET"])
 class YouTubeLoginCallbackResource(MethodView):
     """
