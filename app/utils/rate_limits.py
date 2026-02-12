@@ -1080,7 +1080,73 @@ def subscription_payment_ip_limiter(
         error_message=error_message,
     )
 
+# ---------- SOCIAL AUTH HELPERS ----------
 
+def social_login_initiator_limiter(
+    provider: str = "social",
+    limit_str: str = "10 per minute; 30 per hour; 100 per day",
+    scope: str | None = None,
+):
+    """
+    Reusable decorator for social login INITIATION endpoints (per IP).
+    Covers: /auth/{provider}/login, /auth/{provider}/business/login, etc.
+
+    Default: 10 per minute; 30 per hour; 100 per day (per IP)
+
+    Rationale:
+    - Initiation just builds a redirect URL (cheap), but abuse can
+      flood Redis with state keys and trigger unnecessary OAuth flows.
+    - Higher ceiling than registration since users may click "Login
+      with X" several times in one session.
+    - 100/day handles shared IPs (offices, schools).
+
+    Example:
+        decorators = [social_login_initiator_limiter("linkedin")]
+        decorators = [social_login_initiator_limiter("google", limit_str="5 per minute; 20 per hour")]
+    """
+    scope = scope or f"{provider}-social-login-initiate-ip"
+    error_message = f"Too many {provider} login attempts. Please try again later."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=default_ip_key_func,
+        methods=["GET"],
+        error_message=error_message,
+    )
+
+
+def social_login_callback_limiter(
+    provider: str = "social",
+    limit_str: str = "10 per minute; 30 per hour; 100 per day",
+    scope: str | None = None,
+):
+    """
+    Reusable decorator for social login CALLBACK endpoints (per IP).
+    Covers: /auth/{provider}/callback, /auth/{provider}/business/callback, etc.
+
+    Default: 10 per minute; 30 per hour; 100 per day (per IP)
+
+    Rationale:
+    - Callbacks are heavy: token exchange + profile fetch + DB writes.
+    - Matching the initiator limit is intentional — each initiation
+      should produce at most one callback, so limits stay in sync.
+    - Tight per-minute window guards against replayed/forged callbacks.
+
+    Example:
+        decorators = [social_login_callback_limiter("linkedin")]
+        decorators = [social_login_callback_limiter("facebook", limit_str="5 per minute; 20 per hour")]
+    """
+    scope = scope or f"{provider}-social-login-callback-ip"
+    error_message = f"Too many {provider} login callback attempts. Please try again later."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=default_ip_key_func,
+        methods=["GET"],
+        error_message=error_message,
+    )
 
 
 

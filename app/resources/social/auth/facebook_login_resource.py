@@ -20,6 +20,10 @@ from ....utils.helpers import create_token_response_admin
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
+from ....utils.rate_limits import (
+    social_login_initiator_limiter,
+    social_login_callback_limiter
+)
 from ....extensions.redis_conn import redis_client
 from ....extensions.db import db
 
@@ -61,7 +65,6 @@ FACEBOOK_ADS_SCOPES = [
     "ads_read",
     "business_management",
 ]
-
 
 # =========================================
 # HELPER: Check if user has active subscription
@@ -461,6 +464,7 @@ def _consume_login_state(state: str) -> Optional[dict]:
 # =========================================
 # INITIATE FACEBOOK LOGIN
 # =========================================
+@social_login_initiator_limiter("facebook_login")
 @blp_facebook_login.route("/auth/facebook/business/login", methods=["GET"])
 class FacebookLoginStartResource(MethodView):
     """
@@ -531,6 +535,7 @@ class FacebookLoginStartResource(MethodView):
 # =========================================
 # FACEBOOK LOGIN CALLBACK
 # =========================================
+@social_login_callback_limiter("facebook_login")
 @blp_facebook_login.route("/auth/facebook/business/callback", methods=["GET"])
 class FacebookLoginCallbackResource(MethodView):
     """

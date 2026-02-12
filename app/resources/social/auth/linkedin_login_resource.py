@@ -20,6 +20,10 @@ from ....utils.helpers import create_token_response_admin
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
+from ....utils.rate_limits import (
+    social_login_initiator_limiter,
+    social_login_callback_limiter
+)
 from ....extensions.redis_conn import redis_client
 from ....extensions.db import db
 
@@ -457,6 +461,7 @@ def _consume_login_state(state: str) -> Optional[dict]:
 # =========================================
 # INITIATE LINKEDIN LOGIN
 # =========================================
+@social_login_initiator_limiter("linkedin_login")
 @blp_linkedin_login.route("/auth/linkedin/business/login", methods=["GET"])
 class LinkedInLoginStartResource(MethodView):
     """
@@ -530,6 +535,7 @@ class LinkedInLoginStartResource(MethodView):
 # =========================================
 # LINKEDIN LOGIN CALLBACK
 # =========================================
+@social_login_callback_limiter("linkedin_login")
 @blp_linkedin_login.route("/auth/linkedin/business/callback", methods=["GET"])
 class LinkedInLoginCallbackResource(MethodView):
     """
@@ -772,3 +778,37 @@ class LinkedInLoginCallbackResource(MethodView):
                 "success": False,
                 "message": "Failed to complete LinkedIn login",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

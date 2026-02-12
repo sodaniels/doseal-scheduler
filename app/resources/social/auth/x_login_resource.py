@@ -39,7 +39,10 @@ from ....services.social.adapters.x_adapter import XAdapter
 
 # utils
 from ....utils.schedule_helper import _safe_json_load
-
+from ....utils.rate_limits import (
+    social_login_initiator_limiter,
+    social_login_callback_limiter
+)
 
 blp_x_login = Blueprint("x_login", __name__)
 
@@ -459,6 +462,7 @@ def _consume_login_state(state: str) -> Optional[dict]:
 # =========================================
 # INITIATE X LOGIN (OAuth 1.0a)
 # =========================================
+@social_login_initiator_limiter("x_login")
 @blp_x_login.route("/auth/x/business/login", methods=["GET"])
 class XLoginStartResource(MethodView):
     """
@@ -552,6 +556,7 @@ class XLoginStartResource(MethodView):
 # =========================================
 # X LOGIN CALLBACK (OAuth 1.0a)
 # =========================================
+@social_login_callback_limiter("x_login")
 @blp_x_login.route("/auth/x/business/callback", methods=["GET"])
 class XLoginCallbackResource(MethodView):
     """
