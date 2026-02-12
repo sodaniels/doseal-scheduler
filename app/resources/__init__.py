@@ -92,6 +92,7 @@ from .social.auth.facebook_login_resource import blp_facebook_login
 from .social.auth.instagram_login_resource import blp_instagram_login
 from .social.auth.x_login_resource import blp_x_login
 from .social.auth.linkedin_login_resource import blp_linkedin_login
+from .social.auth.youtube_login_resource import blp_youtube_login
 
 __all__ = [
     #-------------------
@@ -137,6 +138,7 @@ __all__ = [
     "blp_instagram_login",
     "blp_x_login",
     "blp_linkedin_login",
+    "blp_youtube_login",
     #-------------------
     #ADMIN ROUTES
     #-------------------
