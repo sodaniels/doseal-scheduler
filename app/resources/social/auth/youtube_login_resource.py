@@ -436,7 +436,7 @@ def _consume_login_state(state: str) -> Optional[dict]:
 # =========================================
 # INITIATE YOUTUBE/GOOGLE LOGIN
 # =========================================
-@blp_youtube_login.route("/auth/youtube/business/login", methods=["GET"])
+@blp_youtube_login.route("/auth/google/business/login", methods=["GET"])
 class YouTubeLoginStartResource(MethodView):
     """
     Initiate YouTube/Google Login OAuth 2.0 flow.
@@ -513,7 +513,7 @@ class YouTubeLoginStartResource(MethodView):
 # =========================================
 # YOUTUBE/GOOGLE LOGIN CALLBACK
 # =========================================
-@blp_youtube_login.route("/auth/youtube/business/callback", methods=["GET"])
+@blp_youtube_login.route("/auth/google/business/callback", methods=["GET"])
 class YouTubeLoginCallbackResource(MethodView):
     """
     Handle YouTube/Google Login OAuth 2.0 callback.
