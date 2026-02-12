@@ -95,6 +95,7 @@ from ..resources import (
     blp_facebook_login,
     blp_instagram_login,
     blp_x_login,
+    blp_linkedin_login,
     
 )
 
@@ -154,6 +155,7 @@ def register_social_routes(app, api):
         blp_facebook_login,
         blp_instagram_login,
         blp_x_login,
+        blp_linkedin_login,
     ]
 
     for blueprint in blueprints:
