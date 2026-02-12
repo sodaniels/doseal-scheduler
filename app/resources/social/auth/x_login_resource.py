@@ -960,7 +960,10 @@ class XUpdateEmailResource(MethodView):
             
             business = Business.get_business_by_id(business_id)
             
-            fullname = f"{decrypt_data(business.get("first_name"))} {decrypt_data(business.get("last_name"))}"
+            first_name = decrypt_data(business.get("first_name"))
+            last_name = decrypt_data(business.get("last_name"))
+            
+            fullname = first_name + "  " + last_name
             
             
             if not new_email:
