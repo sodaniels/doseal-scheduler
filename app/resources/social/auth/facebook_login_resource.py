@@ -298,6 +298,7 @@ def _create_account_from_facebook(
         },
         {
             "business_email_verified": {
+                "created_at": str(datetime.utcnow()),
                 "status": True,  # Verified via Facebook
             }
         },

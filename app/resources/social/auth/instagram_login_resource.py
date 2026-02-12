@@ -354,6 +354,7 @@ def _create_account_from_instagram(
         },
         {
             "business_email_verified": {
+                "created_at": str(datetime.utcnow()),
                 "status": True,  # Verified via Instagram/Facebook
             }
         },

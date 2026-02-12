@@ -295,6 +295,7 @@ def _create_account_from_linkedin(
         },
         {
             "business_email_verified": {
+                "created_at": str(datetime.utcnow()),
                 "status": profile.get("email_verified", True),  # LinkedIn verifies emails
             }
         },
