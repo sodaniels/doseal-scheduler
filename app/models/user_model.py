@@ -363,17 +363,17 @@ class User(BaseModel):
 
     @staticmethod
     def update_last_login(
-        *, subscriber_id: str | ObjectId, ip_address: str | None = None
+        *, _id: str | ObjectId, ip_address: str | None = None
     ) -> bool:
         """
-        Update the subscriber's last login timestamp and append a record to login_history.
+        Update the user's last login timestamp and append a record to login_history.
         """
         users_collection = db.get_collection("users")
 
-        if not subscriber_id:
-            raise ValueError("subscriber_id is required")
-        if not isinstance(subscriber_id, ObjectId):
-            subscriber_id = ObjectId(subscriber_id)
+        if not _id:
+            raise ValueError("_id is required")
+        if not isinstance(_id, ObjectId):
+            _id = ObjectId(_id)
 
         current_time = datetime.utcnow().isoformat()
         login_entry = {
@@ -386,7 +386,7 @@ class User(BaseModel):
             "$push": {"login_history": login_entry},
         }
 
-        result = users_collection.update_one({"subscriber_id": subscriber_id}, update_doc)
+        result = users_collection.update_one({"_id": _id}, update_doc)
         return result.matched_count > 0
 
     @staticmethod

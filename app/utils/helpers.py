@@ -676,6 +676,17 @@ def create_token_response_admin(user, client_ip, account_type, log_tag):
         refresh_time_to_live
     )
     
+     # update last login
+    try:
+        Log.info(f"{log_tag}[{client_ip}]: updating last login for user: {user['_id']}")
+        last_login_update = User.update_last_login(
+            _id=user_data.get("_id"), 
+            ip_address=client_ip
+        )
+        Log.info(f"{log_tag}[{client_ip}]: last login updated for user: {last_login_update}")
+    except Exception as e:
+        Log.error(f"{log_tag}[{client_ip}]: error updating last login for user: {e}") 
+    
     # Token is for 24 hours
     response = {
         'access_token': access_token, 
