@@ -158,6 +158,35 @@ class StartTrialResource(MethodView):
             duration = time.time() - start_time
             Log.info(f"{log_tag} Trial started successfully in {duration:.2f}s")
             
+            subscription["business_id"] = str(subscription.get("business_id"))
+            subscription["user_id"] = str(subscription.get("user_id"))
+            subscription["package_id"] = str(subscription.get("package_id"))
+            
+            #Send email notification
+            try:
+                from ....services.email_service import send_trial_started_email
+                from ....models.business_model import Business
+                
+                business = Business.get_business_by_id(business_id)
+                email = business.get("email") if business else None
+                business_name = business.get("business_name") if business else None
+                
+                dashboard_url = os.getenv("DASHBOARD_URL", "https://app.schedulefy.org/dashboard")
+                
+                trial_email_response = send_trial_started_email(
+                    email=email,
+                    fullname=business_name,
+                    plan_name=package.get("name"),
+                    trial_days=subscription.get("trial_days"),
+                    trial_start_date=subscription.get("trial_start_date"),
+                    trial_end_date=subscription.get("trial_end_date"),
+                    dashboard_url=dashboard_url
+                )
+                Log.info(f"{log_tag} Trial started email sent: {trial_email_response}")
+            except Exception as e:
+                Log.error(f"{log_tag} Error sending trial started email: {e}")
+                
+            
             return jsonify({
                 "success": True,
                 "message": "Trial started successfully! You have 30 days to explore all features.",

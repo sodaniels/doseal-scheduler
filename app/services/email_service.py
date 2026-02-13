@@ -6,6 +6,7 @@ import requests
 import jinja2
 from dataclasses import dataclass
 from email.message import EmailMessage
+from datetime import datetime
 from typing import Optional, Dict, Any, List, Union, TypedDict
 
 from app.utils.logger import Log
@@ -831,8 +832,57 @@ def send_payment_confirmation_email(
     )
 
 
+# =========================================================
+# TRIAL STARTED EMAIL
+# =========================================================
+def send_trial_started_email(
+    *,
+    email: str,
+    fullname: Optional[str],
+    plan_name: str,
+    trial_days: int,
+    trial_start_date: datetime,
+    trial_end_date: datetime,
+    dashboard_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    cfg = load_email_config()
+    svc = EmailService(cfg)
 
+    app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+    subject = f"Your {trial_days}-day free trial has started | {app_name}"
 
+    text = (
+        f"Hi {fullname or ''},\n\n"
+        f"Your free trial has started!\n\n"
+        f"Plan: {plan_name}\n"
+        f"Trial duration: {trial_days} days\n"
+        f"Ends on: {trial_end_date.strftime('%Y-%m-%d')}\n\n"
+        f"Access your dashboard: {dashboard_url or ''}\n\n"
+        f"— {app_name}"
+    )
+
+    return svc.send_templated(
+        to=email,
+        subject=subject,
+        template="email/trial_started.html",
+        context={
+            "email": email,
+            "fullname": fullname,
+            "app_name": app_name,
+            "plan_name": plan_name,
+            "trial_days": trial_days,
+            "trial_start_date": trial_start_date.strftime("%Y-%m-%d"),
+            "trial_end_date": trial_end_date.strftime("%Y-%m-%d"),
+            "dashboard_url": dashboard_url,
+            "support_email": os.getenv("SUPPORT_EMAIL", "support@schedulefy.org"),
+        },
+        text_fallback=text,
+        tags=["trial", "onboarding"],
+        meta={
+            "email_type": "trial_started",
+            "plan_name": plan_name,
+        },
+    )
 
 
 

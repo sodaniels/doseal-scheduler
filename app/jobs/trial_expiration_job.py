@@ -3,6 +3,12 @@
 from datetime import datetime, timedelta
 from ..models.admin.subscription_model import Subscription
 from ..utils.logger import Log
+from ..services.email_service import (
+    send_user_registration_email,
+    send_new_contact_sale_email,
+    send_password_changed_email,
+    send_otp_email
+)
 
 
 def process_expired_trials():

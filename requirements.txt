@@ -64,6 +64,7 @@ cloudinary
 requests-oauthlib
 #invoice
 reportlab
+celery
 
 
 
