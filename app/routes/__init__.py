@@ -282,5 +282,5 @@ def register_admin_routes(app, api):
     # Root route
     @app.route('/')
     def index():
-        return {"message": "POS Service Online — API is healthy and ready to receive requests."}
+        return {"message": "Schedulefy — API is healthy and ready to receive requests."}
 
