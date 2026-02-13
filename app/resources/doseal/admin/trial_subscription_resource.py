@@ -20,6 +20,7 @@ from ....models.admin.subscription_model import Subscription
 from ....models.admin.payment import Payment
 from ....models.admin.package_model import Package
 from ...doseal.admin.admin_business_resource import token_required
+from ....services.email_service import send_trial_cancelled_email
 from ....utils.rate_limits import (
     trial_start_limiter,
     trial_status_limiter,
@@ -28,7 +29,6 @@ from ....utils.rate_limits import (
     trial_cancel_limiter,
     subscription_packages_limiter
 )
-
 
 blp_trial_subscription = Blueprint("trial_subscription", __name__)
 
@@ -813,6 +813,31 @@ class CancelSubscriptionResource(MethodView):
 
             duration = time.time() - start_time
             Log.info(f"{log_tag} Completed in {duration:.2f}s")
+            
+            # send cancellation email
+            try:
+                from ....models.business_model import Business
+                from ....models.admin.package_model import Package
+                
+                business = Business.get_business_by_id(business_id)
+                email = business.get("email") if business else None
+                business_name = business.get("business_name") if business else None
+                
+                package = Package.get_by_id(subscription.get("package_id"))
+                
+                upgrade_url = os.getenv("UPGRADE_URL", "https://app.schedulefy.org/dashboard")
+                
+                cancel_email_response = send_trial_cancelled_email(
+                    email=email,
+                    fullname=business_name,
+                    plan_name=package.get("name") if package else "Unknown Plan"    ,
+                    cancelled_at=now,
+                    reason=reason,
+                    upgrade_url=upgrade_url
+                )
+                Log.info(f"{log_tag} Trial cancelled email sent: {cancel_email_response}")
+            except Exception as e:
+                Log.error(f"{log_tag} Error sending trial cancelled email: {e}")
 
             return jsonify({
                 "success": True,
