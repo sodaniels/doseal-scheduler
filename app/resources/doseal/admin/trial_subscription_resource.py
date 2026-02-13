@@ -8,6 +8,8 @@ from flask import request, jsonify, g
 from flask.views import MethodView
 from bson import ObjectId
 
+from build.lib.app.utils.crypt import encrypt_data, hash_data
+
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
 from ....utils.helpers import make_log_tag
@@ -22,6 +24,8 @@ from ....utils.rate_limits import (
     trial_start_limiter,
     trial_status_limiter,
     trial_convert_limiter,
+    read_protected_user_limiter,
+    trial_cancel_limiter,
     subscription_packages_limiter
 )
 
@@ -275,7 +279,6 @@ class TrialStatusResource(MethodView):
                 "success": False,
                 "message": "Failed to get trial status",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
 
 # =========================================
 # CONVERT TRIAL TO PAID
@@ -644,6 +647,7 @@ class ConvertTrialResource(MethodView):
 # =========================================
 # GET AVAILABLE PACKAGES FOR TRIAL
 # =========================================
+@read_protected_user_limiter("package_for_trial")
 @blp_trial_subscription.route("/subscription/packages", methods=["GET"])
 class AvailablePackagesResource(MethodView):
     """
@@ -689,3 +693,179 @@ class AvailablePackagesResource(MethodView):
                 "success": False,
                 "message": "Failed to get packages",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+# =========================================
+# CANCEL SUBSCRIPTION
+# =========================================
+@trial_cancel_limiter("trial_cancel")
+@blp_trial_subscription.route("/subscription/trial/cancel", methods=["POST"])
+class CancelSubscriptionResource(MethodView):
+    """
+    Cancel an active or trial subscription.
+
+    This does NOT delete history.
+    It marks the subscription as CANCELLED.
+
+    Body:
+    {
+        "subscription_id": "...",          // REQUIRED
+        "reason": "No longer needed"        // OPTIONAL
+    }
+    """
+
+    @token_required
+    def post(self):
+        client_ip = request.remote_addr
+        start_time = time.time()
+
+        user_info = g.get("current_user", {}) or {}
+        business_id = str(user_info.get("business_id", ""))
+        user_id = str(user_info.get("_id", ""))
+
+        log_tag = (
+            f"[subscription_resource.py][CancelSubscriptionResource]"
+            f"[post][{client_ip}][{business_id}]"
+        )
+
+        Log.info(f"{log_tag} Cancel subscription request received")
+
+        body = request.get_json(silent=True) or {}
+        subscription_id = body.get("subscription_id")
+        reason = body.get("reason")
+
+        # =========================================
+        # 1. VALIDATE INPUT
+        # =========================================
+        if not subscription_id:
+            Log.info(f"{log_tag} Missing subscription_id in request body")
+            return prepared_response(False, "BAD_REQUEST", "subscription_id is required")
+
+        try:
+            subscription_col = db.get_collection(Subscription.collection_name)
+
+            # =========================================
+            # 2. FETCH SUBSCRIPTION & VERIFY OWNERSHIP
+            # =========================================
+            subscription = subscription_col.find_one({
+                "_id": ObjectId(subscription_id),
+                "business_id": ObjectId(business_id),
+            })
+
+            if not subscription:
+                Log.info(f"{log_tag} Subscription not found: {subscription_id}")
+                return prepared_response(False, "NOT_FOUND", "Subscription not found")
+
+            decrypted_status = Subscription._safe_decrypt(subscription.get("status"))
+
+            # =========================================
+            # 3. BLOCK INVALID STATES
+            # =========================================
+            if decrypted_status in [
+                Subscription.STATUS_CANCELLED,
+                Subscription.STATUS_EXPIRED,
+            ]:
+                Log.info(f"{log_tag} Subscription already inactive: {subscription_id}")
+                return jsonify({
+                    "success": True,
+                    "message": "Subscription is already inactive",
+                    "data": {
+                        "subscription_id": subscription_id,
+                        "status": decrypted_status,
+                    },
+                }), HTTP_STATUS_CODES["OK"]
+
+            if decrypted_status == Subscription.STATUS_SUSPENDED:
+                Log.info(f"{log_tag} Cancelling suspended subscription")
+
+            # =========================================
+            # 4. PERFORM CANCELLATION
+            # =========================================
+            now = datetime.utcnow()
+
+            update_doc = {
+                "status": encrypt_data(Subscription.STATUS_CANCELLED),
+                "hashed_status": hash_data(Subscription.STATUS_CANCELLED),
+                "cancelled_at": now,
+                "cancelled_by": ObjectId(user_id),
+                "updated_at": now,
+            }
+
+            if reason:
+                update_doc["cancellation_reason"] = encrypt_data(reason)
+
+            subscription_col.update_one(
+                {"_id": ObjectId(subscription_id)},
+                {"$set": update_doc},
+            )
+
+            Log.info(f"{log_tag} Subscription cancelled successfully")
+
+            # =========================================
+            # 5. UPDATE BUSINESS ACCOUNT STATUS
+            # =========================================
+            Subscription._update_business_subscription_status(
+                business_id=business_id,
+                subscribed=False,
+                is_trial=bool(subscription.get("is_trial")),
+                log_tag=log_tag,
+            )
+
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} Completed in {duration:.2f}s")
+
+            return jsonify({
+                "success": True,
+                "message": "Subscription cancelled successfully",
+                "data": {
+                    "subscription_id": subscription_id,
+                    "cancelled_at": now.isoformat(),
+                    "previous_status": decrypted_status,
+                },
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            duration = time.time() - start_time
+            Log.error(f"{log_tag} Error after {duration:.2f}s: {e}", exc_info=True)
+            
+            return prepared_response(False, "INTERNAL_ERROR", "Failed to cancel subscription. Please contact support.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

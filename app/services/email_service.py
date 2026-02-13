@@ -885,9 +885,110 @@ def send_trial_started_email(
     )
 
 
+# =========================================================
+# TRIAL ENDED EMAIL
+# =========================================================
+def send_trial_ended_email(
+    *,
+    email: str,
+    fullname: Optional[str],
+    plan_name: str,
+    trial_days: int,
+    trial_end_date: datetime,
+    upgrade_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    cfg = load_email_config()
+    svc = EmailService(cfg)
+
+    app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+    subject = f"Your free trial has ended | {app_name}"
+
+    text = (
+        f"Hi {fullname or ''},\n\n"
+        f"Your {trial_days}-day free trial of {plan_name} has ended on "
+        f"{trial_end_date.strftime('%Y-%m-%d')}.\n\n"
+        f"To continue using {app_name}, please upgrade your plan.\n"
+        f"{'Upgrade here: ' + upgrade_url if upgrade_url else ''}\n\n"
+        f"— {app_name}"
+    )
+
+    return svc.send_templated(
+        to=email,
+        subject=subject,
+        template="email/trial_ended.html",
+        context={
+            "email": email,
+            "fullname": fullname,
+            "app_name": app_name,
+            "plan_name": plan_name,
+            "trial_days": trial_days,
+            "trial_end_date": trial_end_date.strftime("%Y-%m-%d"),
+            "upgrade_url": upgrade_url,
+            "support_email": os.getenv("SUPPORT_EMAIL", "support@schedulefy.org"),
+        },
+        text_fallback=text,
+        tags=["trial", "expired"],
+        meta={
+            "email_type": "trial_ended",
+            "plan_name": plan_name,
+        },
+    )
 
 
+# =========================================================
+# TRIAL CANCELLED EMAIL
+# =========================================================
+def send_trial_cancelled_email(
+    *,
+    email: str,
+    fullname: Optional[str],
+    plan_name: str,
+    cancelled_at: Optional[datetime] = None,
+    reason: Optional[str] = None,
+    upgrade_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    cfg = load_email_config()
+    svc = EmailService(cfg)
 
+    app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+    subject = f"Your free trial was cancelled | {app_name}"
+
+    cancelled_at_str = (
+        cancelled_at.strftime("%Y-%m-%d %H:%M")
+        if cancelled_at else None
+    )
+
+    text = (
+        f"Hi {fullname or ''},\n\n"
+        f"Your free trial of {plan_name} has been cancelled.\n\n"
+        f"{'Reason: ' + reason if reason else ''}\n"
+        f"{'Cancelled at: ' + cancelled_at_str if cancelled_at_str else ''}\n\n"
+        f"You can subscribe anytime to continue using {app_name}.\n"
+        f"{'Choose a plan: ' + upgrade_url if upgrade_url else ''}\n\n"
+        f"— {app_name}"
+    )
+
+    return svc.send_templated(
+        to=email,
+        subject=subject,
+        template="email/trial_cancelled.html",
+        context={
+            "email": email,
+            "fullname": fullname,
+            "app_name": app_name,
+            "plan_name": plan_name,
+            "cancelled_at": cancelled_at_str,
+            "reason": reason,
+            "upgrade_url": upgrade_url,
+            "support_email": os.getenv("SUPPORT_EMAIL", "support@schedulefy.org"),
+        },
+        text_fallback=text,
+        tags=["trial", "cancelled"],
+        meta={
+            "email_type": "trial_cancelled",
+            "plan_name": plan_name,
+        },
+    )
 
 
 

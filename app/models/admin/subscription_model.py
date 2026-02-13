@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta
 from bson import ObjectId
 from typing import Optional, Dict, Any, List, Union
+from flask import jsonify
 
 from build.lib.tests import business
 
@@ -24,6 +25,7 @@ class Subscription(BaseModel):
 
     # Subscription Statuses (store encrypted + hashed)
     STATUS_TRIAL = "Trial"
+    STATUS_TRIAL_EXPIRED = "TrialExpired"
     STATUS_ACTIVE = "Active"
     STATUS_INACTIVE = "Inactive"
     STATUS_SCHEDULED = "Scheduled"
@@ -181,6 +183,18 @@ class Subscription(BaseModel):
         return doc
 
     # ---------------- INTERNAL HELPER ---------------- #
+    
+    @classmethod
+    def _safe_decrypt(cls, value):
+        """Safely decrypt a value, returning original if decryption fails."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        try:
+            return decrypt_data(value)
+        except Exception:
+            return value
 
     @staticmethod
     def _normalise_subscription_doc(subscription: dict) -> Optional[dict]:
@@ -190,11 +204,15 @@ class Subscription(BaseModel):
         subscription["_id"] = str(subscription["_id"])
         subscription["business_id"] = str(subscription["business_id"])
         subscription["package_id"] = str(subscription["package_id"])
+        subscription["user_id"] = str(subscription["user_id"])
         if subscription.get("user__id"):
             subscription["user__id"] = str(subscription["user__id"])
         if subscription.get("previous_subscription_id"):
             subscription["previous_subscription_id"] = str(subscription["previous_subscription_id"])
-
+            
+        if subscription.get("cancelled_by"):
+            subscription["cancelled_by"] = str(subscription["cancelled_by"])
+            
         # Decrypt fields
         for field in Subscription.FIELDS_TO_DECRYPT:
             if field in subscription and subscription[field] is not None:

@@ -1256,7 +1256,32 @@ def subscription_packages_limiter(
         error_message=error_message,
     )
 
+def trial_cancel_limiter(
+    limit_str: str = "2 per hour; 5 per day",
+    scope: str | None = None,
+):
+    """
+    Rate limiter for cancelling a trial subscription.
 
+    Covers:
+    - POST /subscription/trial/cancel
+
+    Rationale:
+    - State-changing action
+    - Prevents rapid toggle / replay
+    - Per-business/user scoped to avoid abuse across IPs
+    - Trial cancellation should be deliberate and infrequent
+    """
+    scope = scope or "trial-cancel-business"
+    error_message = "Too many trial cancellation attempts. Please try again later."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=user_key_func,   # 🔐 per authenticated user/business
+        methods=["POST"],
+        error_message=error_message,
+    )
 
 
 
