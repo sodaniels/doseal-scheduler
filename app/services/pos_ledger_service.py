@@ -43,6 +43,7 @@ def _id_variants(v) -> list:
 # ---------- Collections ----------
 def _stock_ledger():
     return db.get_collection("stock_ledger")
+    
 
 def _stock_holds():
     return db.get_collection("stock_holds")
