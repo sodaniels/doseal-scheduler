@@ -27,6 +27,9 @@ venv/bin/rqscheduler
 ## NGROK STATIC ADDRESS
 ngrok http 9090 --url=inscribable-manipulatedly-davon.ngrok-free.dev
 
+## Test expirey job
+flask --app app:create_social_app expire-trials
+
 
 # SWAGGER
 https://inscribable-manipulatedly-davon.ngrok-free.dev/api/openapi.json

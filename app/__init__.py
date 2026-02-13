@@ -24,6 +24,7 @@ from .utils.error_handlers import (
 )
 from app.config import load_config
 from .middleware.subscription_scheduler import run_scheduled_subscription_activation
+from .jobs.trial_expiration_job import register_trial_commands
 
 
 # instantiate subscribers app
@@ -72,6 +73,9 @@ def create_social_app():
 
     # Add global middleware
     app.before_request(detect_access_mode)
+    
+    #trial commands
+    register_trial_commands(app)
 
     # Register all blueprints using `api.register_blueprint(...)`
     register_social_routes(app, api)

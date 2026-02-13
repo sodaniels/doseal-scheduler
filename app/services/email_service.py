@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Union, TypedDict
+from ..models.business_model import Business
 
 from app.utils.logger import Log
 
@@ -991,9 +992,143 @@ def send_trial_cancelled_email(
     )
 
 
+# =========================================================
+# TRIAL EXPIRING EMAIL
+# =========================================================
+def send_trial_expiring_email(business_id: str, days_remaining: int) -> Dict[str, Any]:
+    """
+    Send trial-expiry reminder email.
+
+    Triggered when trial is about to end (e.g. 3 days, 1 day).
+    """
+    log_tag = f"[email_service.py][send_trial_expiring_email][{business_id}]"
+
+    try:
+        business = Business.get_business_by_id(business_id)
+        if not business:
+            Log.warning(f"{log_tag} Business not found")
+            return {"success": False}
+
+        email = business.get("email")
+        business_name = business.get("business_name") or "there"
+
+        if not email:
+            Log.warning(f"{log_tag} No email on business")
+            return {"success": False}
+
+        cfg = load_email_config()
+        svc = EmailService(cfg)
+
+        app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+        support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
+
+        upgrade_url = os.getenv(
+            "UPGRADE_URL",
+            f"{os.getenv('FRONTEND_URL', '')}/billing"
+        )
+
+        subject = f"Your {app_name} trial ends in {days_remaining} day{'s' if days_remaining != 1 else ''}"
+
+        text_fallback = (
+            f"Hi {business_name},\n\n"
+            f"Your {app_name} trial ends in {days_remaining} day(s).\n\n"
+            f"Upgrade now to keep full access:\n"
+            f"{upgrade_url}\n\n"
+            f"— {app_name}"
+        )
+
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/trial_expiring.html",
+            context={
+                "email": email,
+                "business_name": business_name,
+                "days_remaining": days_remaining,
+                "app_name": app_name,
+                "upgrade_url": upgrade_url,
+                "support_email": support_email,
+            },
+            text_fallback=text_fallback,
+            tags=["trial", "trial-expiring"],
+            meta={
+                "email_type": "trial_expiring",
+                "days_remaining": days_remaining,
+                "business_id": business_id,
+            },
+        )
+
+    except Exception as e:
+        Log.error(f"{log_tag} Error sending email: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 
+# =========================================================
+# TRIAL EXPIRED EMAIL
+# =========================================================
+def send_trial_expired_email(business_id: str) -> Dict[str, Any]:
+    """
+    Send email notifying that a trial has ended.
+    """
+    log_tag = f"[email_service][send_trial_expired_email][{business_id}]"
 
+    try:
+        business = Business.get_business_by_id(business_id)
+        if not business:
+            Log.warning(f"{log_tag} Business not found")
+            return {"success": False}
+
+        email = business.get("email")
+        business_name = business.get("business_name") or "there"
+
+        if not email:
+            Log.warning(f"{log_tag} No email found for business")
+            return {"success": False}
+
+        cfg = load_email_config()
+        svc = EmailService(cfg)
+
+        app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+        support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
+
+        upgrade_url = os.getenv(
+            "UPGRADE_URL",
+            f"{os.getenv('FRONTEND_URL', '')}/billing"
+        )
+
+        subject = f"Your {app_name} trial has ended"
+
+        text_fallback = (
+            f"Hi {business_name},\n\n"
+            f"Your {app_name} trial has ended.\n\n"
+            f"Upgrade now to regain full access:\n"
+            f"{upgrade_url}\n\n"
+            f"If you need help, contact {support_email}\n\n"
+            f"— {app_name}"
+        )
+
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/trial_expired.html",
+            context={
+                "email": email,
+                "business_name": business_name,
+                "app_name": app_name,
+                "upgrade_url": upgrade_url,
+                "support_email": support_email,
+            },
+            text_fallback=text_fallback,
+            tags=["trial", "trial-expired"],
+            meta={
+                "email_type": "trial_expired",
+                "business_id": business_id,
+            },
+        )
+
+    except Exception as e:
+        Log.error(f"{log_tag} Error sending email: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 
 

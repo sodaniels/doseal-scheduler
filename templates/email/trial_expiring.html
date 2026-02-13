@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Your Trial Ends in {{ days_remaining }} Days | {{ app_name }}</title>
+</head>
+
+<body style="margin:0; padding:0; background:#f6f6f6;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f6f6f6; padding:24px;">
+    <tr>
+      <td align="center">
+
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff; border-radius:10px; overflow:hidden; border:1px solid #e5e7eb;">
+          
+          <!-- Header -->
+          <tr>
+            <td style="padding:20px 24px; font-family:Arial, sans-serif; font-weight:bold;">
+              {{ app_name }}
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="padding:24px; font-family:Arial, sans-serif; color:#111827; line-height:1.6;">
+              
+              <h2 style="margin-top:0;">⏰ Your trial is ending soon</h2>
+
+              <p>
+                Hi {{ business_name }},
+              </p>
+
+              <p>
+                Just a quick reminder that your <strong>{{ app_name }}</strong> trial will end in
+                <strong>{{ days_remaining }} day{{ 's' if days_remaining != 1 else '' }}</strong>.
+              </p>
+
+              <p>
+                To keep uninterrupted access to your scheduled posts, connected accounts, and analytics,
+                we recommend upgrading before your trial expires.
+              </p>
+
+              <p style="margin:24px 0;">
+                <a href="{{ upgrade_url }}"
+                   style="background:#2563eb; color:#ffffff; text-decoration:none; padding:12px 18px; border-radius:8px; font-weight:bold;">
+                  Upgrade My Plan
+                </a>
+              </p>
+
+              <p style="color:#6b7280; font-size:13px;">
+                If you take no action, your account will automatically move to limited access when the trial ends.
+              </p>
+
+              <p style="margin-top:24px;">
+                — {{ app_name }} Team
+              </p>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:18px 24px; background:#ffffff; border-top:1px solid #f1f1f1; font-size:12px; color:#6b7280;">
+              Need help? Contact us at
+              <a href="mailto:{{ support_email }}" style="color:#2563eb;">
+                {{ support_email }}
+              </a>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

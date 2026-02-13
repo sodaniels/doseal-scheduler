@@ -27,7 +27,6 @@ from ....utils.rate_limits import (
     trial_convert_limiter,
     read_protected_user_limiter,
     trial_cancel_limiter,
-    subscription_packages_limiter
 )
 
 blp_trial_subscription = Blueprint("trial_subscription", __name__)
