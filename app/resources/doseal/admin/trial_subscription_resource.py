@@ -15,8 +15,15 @@ from ....utils.json_response import prepared_response
 from ....extensions.db import db
 
 from ....models.admin.subscription_model import Subscription
+from ....models.admin.payment import Payment
 from ....models.admin.package_model import Package
 from ...doseal.admin.admin_business_resource import token_required
+from ....utils.rate_limits import (
+    trial_start_limiter,
+    trial_status_limiter,
+    trial_convert_limiter,
+    subscription_packages_limiter
+)
 
 
 blp_trial_subscription = Blueprint("trial_subscription", __name__)
@@ -25,6 +32,7 @@ blp_trial_subscription = Blueprint("trial_subscription", __name__)
 # =========================================
 # START TRIAL SUBSCRIPTION
 # =========================================
+@trial_start_limiter("trial_start")
 @blp_trial_subscription.route("/subscription/trial/start", methods=["POST"])
 class StartTrialResource(MethodView):
     """
@@ -182,6 +190,7 @@ class StartTrialResource(MethodView):
 # =========================================
 # GET TRIAL STATUS
 # =========================================
+@trial_status_limiter("trial_status")
 @blp_trial_subscription.route("/subscription/trial/status", methods=["GET"])
 class TrialStatusResource(MethodView):
     """
@@ -242,6 +251,7 @@ class TrialStatusResource(MethodView):
 # =========================================
 # CONVERT TRIAL TO PAID
 # =========================================
+@trial_convert_limiter("trial_convert")
 @blp_trial_subscription.route("/subscription/trial/convert", methods=["POST"])
 class ConvertTrialResource(MethodView):
     """
@@ -253,12 +263,12 @@ class ConvertTrialResource(MethodView):
     {
         "subscription_id": "...",
         "billing_period": "monthly",
-        "payment_reference": "PAY_123456",
+        "payment_reference": "PAY_123456",  // REQUIRED - must exist and be successful
         "payment_method": "card",
-        "price_paid": 139.00,
-        "currency": "GBP",
         "auto_renew": true
     }
+    
+    Note: price_paid and currency are retrieved from the verified payment record.
     """
     
     @token_required
@@ -267,40 +277,274 @@ class ConvertTrialResource(MethodView):
         
         user_info = g.get("current_user", {}) or {}
         business_id = str(user_info.get("business_id", ""))
+        user_id = str(user_info.get("_id", ""))
         
         log_tag = f"[trial_subscription_resource.py][ConvertTrialResource][post][{client_ip}][{business_id}]"
         
+        start_time = time.time()
+        Log.info(f"{log_tag} Converting trial to paid subscription")
+        
         body = request.get_json(silent=True) or {}
         subscription_id = body.get("subscription_id")
+        payment_reference = body.get("payment_reference")
         
+        # =========================================
+        # 1. VALIDATE REQUIRED FIELDS
+        # =========================================
         if not subscription_id:
             return jsonify({
                 "success": False,
                 "message": "subscription_id is required",
+                "code": "MISSING_SUBSCRIPTION_ID",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        if not payment_reference:
+            return jsonify({
+                "success": False,
+                "message": "payment_reference is required",
+                "code": "MISSING_PAYMENT_REFERENCE",
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
         
         try:
-            # Verify subscription belongs to this business
-            collection = db.get_collection(Subscription.collection_name)
-            subscription = collection.find_one({
+            # =========================================
+            # 2. VERIFY SUBSCRIPTION EXISTS AND BELONGS TO BUSINESS
+            # =========================================
+            subscription_col = db.get_collection(Subscription.collection_name)
+            subscription = subscription_col.find_one({
                 "_id": ObjectId(subscription_id),
                 "business_id": ObjectId(business_id),
             })
             
             if not subscription:
+                Log.info(f"{log_tag} Subscription not found: {subscription_id}")
                 return jsonify({
                     "success": False,
                     "message": "Subscription not found",
+                    "code": "SUBSCRIPTION_NOT_FOUND",
                 }), HTTP_STATUS_CODES["NOT_FOUND"]
             
-            # Convert trial to paid
+            # =========================================
+            # 3. VERIFY SUBSCRIPTION IS A TRIAL
+            # =========================================
+            if not subscription.get("is_trial"):
+                Log.info(f"{log_tag} Subscription is not a trial: {subscription_id}")
+                return jsonify({
+                    "success": False,
+                    "message": "This subscription is not a trial and cannot be converted",
+                    "code": "NOT_A_TRIAL",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            # Check if already converted
+            decrypted_status = Subscription._safe_decrypt(subscription.get("status"))
+            if decrypted_status == Subscription.STATUS_ACTIVE:
+                Log.info(f"{log_tag} Trial already converted: {subscription_id}")
+                return jsonify({
+                    "success": False,
+                    "message": "This trial has already been converted to a paid subscription",
+                    "code": "ALREADY_CONVERTED",
+                }), HTTP_STATUS_CODES["CONFLICT"]
+            
+            # =========================================
+            # 4. VERIFY PAYMENT EXISTS
+            # =========================================
+            payment = Payment.get_by_reference(payment_reference)
+            
+            # Also try by order_id if not found by reference
+            if not payment:
+                payment = Payment.get_by_order_id(payment_reference)
+            
+            # Also try by gateway_transaction_id
+            if not payment:
+                payment = Payment.get_by_gateway_transaction_id(payment_reference)
+            
+            if not payment:
+                Log.info(f"{log_tag} Payment not found: {payment_reference}")
+                return jsonify({
+                    "success": False,
+                    "message": "Payment reference not found. Please ensure the payment was completed.",
+                    "code": "PAYMENT_NOT_FOUND",
+                }), HTTP_STATUS_CODES["NOT_FOUND"]
+            
+            Log.info(f"{log_tag} Payment found: {payment.get('_id')}, status: {payment.get('status')}")
+            
+            # =========================================
+            # 5. VERIFY PAYMENT BELONGS TO THIS BUSINESS
+            # =========================================
+            if str(payment.get("business_id")) != business_id:
+                Log.warning(f"{log_tag} Payment business mismatch. Payment business: {payment.get('business_id')}, Request business: {business_id}")
+                return jsonify({
+                    "success": False,
+                    "message": "Payment does not belong to this account",
+                    "code": "PAYMENT_BUSINESS_MISMATCH",
+                }), HTTP_STATUS_CODES["FORBIDDEN"]
+            
+            # =========================================
+            # 6. VERIFY PAYMENT STATUS IS SUCCESS
+            # =========================================
+            payment_status = payment.get("status")
+            
+            if payment_status == Payment.STATUS_PENDING:
+                Log.info(f"{log_tag} Payment still pending: {payment_reference}")
+                return jsonify({
+                    "success": False,
+                    "message": "Payment is still being processed. Please wait for confirmation.",
+                    "code": "PAYMENT_PENDING",
+                    "data": {
+                        "payment_status": payment_status,
+                        "payment_id": payment.get("_id"),
+                    },
+                }), HTTP_STATUS_CODES["ACCEPTED"]  # 202 - request accepted but not yet completed
+            
+            if payment_status == Payment.STATUS_PROCESSING:
+                Log.info(f"{log_tag} Payment still processing: {payment_reference}")
+                return jsonify({
+                    "success": False,
+                    "message": "Payment is still being processed. Please wait for confirmation.",
+                    "code": "PAYMENT_PROCESSING",
+                    "data": {
+                        "payment_status": payment_status,
+                        "payment_id": payment.get("_id"),
+                    },
+                }), HTTP_STATUS_CODES["ACCEPTED"]
+            
+            if payment_status == Payment.STATUS_FAILED:
+                Log.info(f"{log_tag} Payment failed: {payment_reference}")
+                return jsonify({
+                    "success": False,
+                    "message": "Payment failed. Please try again with a different payment method.",
+                    "code": "PAYMENT_FAILED",
+                    "data": {
+                        "payment_status": payment_status,
+                        "error_message": payment.get("error_message"),
+                    },
+                }), HTTP_STATUS_CODES["PAYMENT_REQUIRED"]
+            
+            if payment_status == Payment.STATUS_CANCELLED:
+                Log.info(f"{log_tag} Payment cancelled: {payment_reference}")
+                return jsonify({
+                    "success": False,
+                    "message": "Payment was cancelled. Please make a new payment.",
+                    "code": "PAYMENT_CANCELLED",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            if payment_status == Payment.STATUS_REFUNDED:
+                Log.info(f"{log_tag} Payment refunded: {payment_reference}")
+                return jsonify({
+                    "success": False,
+                    "message": "This payment has been refunded and cannot be used.",
+                    "code": "PAYMENT_REFUNDED",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            if payment_status != Payment.STATUS_SUCCESS:
+                Log.info(f"{log_tag} Payment not successful: {payment_reference}, status: {payment_status}")
+                return jsonify({
+                    "success": False,
+                    "message": f"Payment has not been completed successfully. Current status: {payment_status}",
+                    "code": "PAYMENT_NOT_SUCCESSFUL",
+                    "data": {
+                        "payment_status": payment_status,
+                    },
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            # =========================================
+            # 7. VERIFY PAYMENT HAS NOT BEEN USED FOR ANOTHER SUBSCRIPTION
+            # =========================================
+            payment_id = payment.get("_id")
+            
+            # Check if this payment is already linked to a subscription
+            existing_subscription_with_payment = subscription_col.find_one({
+                "payment_id": ObjectId(payment_id) if not isinstance(payment_id, ObjectId) else payment_id,
+            })
+            
+            if existing_subscription_with_payment:
+                existing_sub_id = str(existing_subscription_with_payment.get("_id"))
+                
+                # Allow if it's the same subscription being re-processed
+                if existing_sub_id != subscription_id:
+                    Log.warning(f"{log_tag} Payment already used for subscription: {existing_sub_id}")
+                    return jsonify({
+                        "success": False,
+                        "message": "This payment has already been applied to another subscription",
+                        "code": "PAYMENT_ALREADY_USED",
+                        "data": {
+                            "existing_subscription_id": existing_sub_id,
+                        },
+                    }), HTTP_STATUS_CODES["CONFLICT"]
+            
+            # Also check by payment_reference field in subscriptions
+            existing_sub_by_ref = subscription_col.find_one({
+                "payment_reference": payment_reference,
+                "_id": {"$ne": ObjectId(subscription_id)},  # Exclude current subscription
+            })
+            
+            if existing_sub_by_ref:
+                existing_sub_id = str(existing_sub_by_ref.get("_id"))
+                Log.warning(f"{log_tag} Payment reference already used for subscription: {existing_sub_id}")
+                return jsonify({
+                    "success": False,
+                    "message": "This payment reference has already been used for another subscription",
+                    "code": "PAYMENT_REFERENCE_ALREADY_USED",
+                    "data": {
+                        "existing_subscription_id": existing_sub_id,
+                    },
+                }), HTTP_STATUS_CODES["CONFLICT"]
+            
+            # =========================================
+            # 8. VERIFY PAYMENT AMOUNT MATCHES PACKAGE PRICE (Optional but recommended)
+            # =========================================
+            package_id = subscription.get("package_id")
+            if package_id:
+                package = Package.get_by_id(str(package_id))
+                
+                if package:
+                    expected_price = package.get("price")
+                    paid_amount = payment.get("amount", 0)
+                    
+                    # Allow for small floating point differences
+                    if expected_price is not None and abs(float(paid_amount) - float(expected_price)) > 0.01:
+                        Log.warning(f"{log_tag} Payment amount mismatch. Expected: {expected_price}, Paid: {paid_amount}")
+                        # This is a warning, not a blocker - you might have discounts, promotions, etc.
+                        # Uncomment below to make it a hard requirement:
+                        # return jsonify({
+                        #     "success": False,
+                        #     "message": f"Payment amount ({paid_amount}) does not match package price ({expected_price})",
+                        #     "code": "AMOUNT_MISMATCH",
+                        # }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            # =========================================
+            # 9. VERIFY PAYMENT TYPE IS SUBSCRIPTION-RELATED
+            # =========================================
+            payment_type = payment.get("payment_type")
+            valid_payment_types = [
+                Payment.TYPE_SUBSCRIPTION,
+                Payment.TYPE_RENEWAL,
+                Payment.TYPE_PURCHASE,
+            ]
+            
+            if payment_type and payment_type not in valid_payment_types:
+                Log.warning(f"{log_tag} Invalid payment type: {payment_type}")
+                return jsonify({
+                    "success": False,
+                    "message": f"This payment type ({payment_type}) cannot be used for subscription activation",
+                    "code": "INVALID_PAYMENT_TYPE",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            # =========================================
+            # 10. ALL VALIDATIONS PASSED - CONVERT TRIAL TO PAID
+            # =========================================
+            Log.info(f"{log_tag} All validations passed. Converting trial to paid subscription.")
+            
+            # Build payment data from verified payment record
             payment_data = {
                 "billing_period": body.get("billing_period", "monthly"),
-                "payment_reference": body.get("payment_reference"),
-                "payment_method": body.get("payment_method"),
-                "price_paid": body.get("price_paid", 0),
-                "currency": body.get("currency", "GBP"),
+                "payment_reference": payment_reference,
+                "payment_id": str(payment_id),
+                "payment_method": payment.get("payment_method") or body.get("payment_method"),
+                "price_paid": payment.get("amount", 0),  # Use amount from verified payment
+                "currency": payment.get("currency", "GBP"),  # Use currency from verified payment
                 "auto_renew": body.get("auto_renew", True),
+                "gateway": payment.get("gateway"),
+                "gateway_transaction_id": payment.get("gateway_transaction_id"),
             }
             
             updated_subscription = Subscription.convert_trial_to_paid(
@@ -310,29 +554,63 @@ class ConvertTrialResource(MethodView):
             )
             
             if not updated_subscription:
+                Log.error(f"{log_tag} Failed to convert trial to paid")
                 return jsonify({
                     "success": False,
-                    "message": "Failed to convert trial to paid subscription",
+                    "message": "Failed to convert trial to paid subscription. Please contact support.",
+                    "code": "CONVERSION_FAILED",
                 }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+            
+            # =========================================
+            # 11. UPDATE PAYMENT RECORD TO LINK TO SUBSCRIPTION
+            # =========================================
+            try:
+                payment_col = db.get_collection(Payment.collection_name)
+                payment_col.update_one(
+                    {"_id": ObjectId(payment_id)},
+                    {
+                        "$set": {
+                            "subscription_id": ObjectId(subscription_id),
+                            "applied_to_subscription": True,
+                            "applied_at": datetime.utcnow(),
+                            "updated_at": datetime.utcnow(),
+                        }
+                    }
+                )
+                Log.info(f"{log_tag} Payment linked to subscription")
+            except Exception as e:
+                Log.error(f"{log_tag} Failed to update payment record: {e}")
+                # Don't fail the whole operation, subscription is already converted
+            
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} Trial converted successfully in {duration:.2f}s")
             
             return jsonify({
                 "success": True,
-                "message": "Subscription activated successfully!",
+                "message": "Subscription activated successfully! Thank you for your purchase.",
                 "data": {
                     "subscription": updated_subscription,
+                    "payment": {
+                        "payment_id": str(payment_id),
+                        "amount": payment.get("amount"),
+                        "currency": payment.get("currency"),
+                        "payment_method": payment.get("payment_method"),
+                        "gateway": payment.get("gateway"),
+                    },
                 },
             }), HTTP_STATUS_CODES["OK"]
             
         except Exception as e:
-            Log.error(f"{log_tag} Error: {e}")
+            duration = time.time() - start_time
+            Log.error(f"{log_tag} Error after {duration:.2f}s: {e}")
             import traceback
             traceback.print_exc()
             
             return jsonify({
                 "success": False,
-                "message": "Failed to convert trial",
+                "message": "Failed to convert trial. Please contact support.",
+                "code": "INTERNAL_ERROR",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
 
 # =========================================
 # GET AVAILABLE PACKAGES FOR TRIAL

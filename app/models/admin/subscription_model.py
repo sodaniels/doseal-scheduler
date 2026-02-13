@@ -44,6 +44,33 @@ class Subscription:
         "currency",
     ]
     
+    def to_dict(self) -> dict:
+        """
+        Prepare subscription document for MongoDB insertion.
+        Encrypt & hash sensitive fields here.
+        """
+        doc = dict(self.collection_name)
+
+        # ObjectId conversions
+        for field in ("business_id", "package_id", "user_id", "user__id", "previous_subscription_id"):
+            if field in doc and doc[field] and not isinstance(doc[field], ObjectId):
+                doc[field] = ObjectId(doc[field])
+
+        # Encrypt status
+        if "status" in doc:
+            doc["status"] = encrypt_data(doc["status"])
+            doc["hashed_status"] = hash_data(self.data["status"])
+
+        # Encrypt optional fields
+        for field in ("billing_period", "currency", "payment_method"):
+            if field in doc and doc[field]:
+                doc[field] = encrypt_data(str(doc[field]))
+
+        if "price_paid" in doc:
+            doc["price_paid"] = encrypt_data(str(doc["price_paid"]))
+
+        return doc
+
     @classmethod
     def _safe_decrypt(cls, value):
         """Safely decrypt a value, returning original if decryption fails."""
@@ -219,6 +246,27 @@ class Subscription:
             traceback.print_exc()
             return None
     
+    @classmethod
+    def get_current_access_by_business(cls, business_id: str) -> Optional[dict]:
+        """
+        Get current PAID (ACTIVE) subscription.
+        Explicitly excludes trials.
+        """
+        col = db.get_collection(cls.collection_name)
+
+        doc = col.find_one(
+            {
+                "business_id": ObjectId(business_id),
+                "hashed_status": hash_data(cls.STATUS_ACTIVE),
+                "$or": [
+                    {"is_trial": {"$exists": False}},
+                    {"is_trial": False},
+                ],
+            },
+            sort=[("created_at", -1)],
+        )
+
+        return cls._normalise_subscription_doc(doc) if doc else None
     @classmethod
     def get_active_by_business(cls, business_id: str) -> Optional[dict]:
         """
@@ -640,3 +688,88 @@ class Subscription:
         except Exception as e:
             Log.error(f"{log_tag} Error: {e}")
             return False
+    
+    
+    @classmethod
+    def mark_all_access_subscriptions_inactive(cls, business_id: str) -> int:
+        """
+        Expire all ACTIVE or TRIAL subscriptions for a business.
+        Used before creating a new term.
+        """
+        log_tag = f"[Subscription][mark_all_access_subscriptions_inactive][{business_id}]"
+
+        try:
+            col = db.get_collection(cls.collection_name)
+            now = datetime.utcnow()
+
+            res = col.update_many(
+                {
+                    "business_id": ObjectId(business_id),
+                    "hashed_status": {
+                        "$in": [
+                            hash_data(cls.STATUS_ACTIVE),
+                            hash_data(cls.STATUS_TRIAL),
+                        ]
+                    },
+                },
+                {
+                    "$set": {
+                        "status": encrypt_data(cls.STATUS_EXPIRED),
+                        "hashed_status": hash_data(cls.STATUS_EXPIRED),
+                        "updated_at": now,
+                    }
+                },
+            )
+
+            Log.info(f"{log_tag} expired={res.modified_count}")
+            return res.modified_count
+
+        except Exception as e:
+            Log.error(f"{log_tag} error: {e}", exc_info=True)
+            return 0
+        
+        
+    @classmethod
+    def payment_reference_exists(cls, payment_reference: str) -> bool:
+        if not payment_reference:
+            return False
+
+        col = db.get_collection(cls.collection_name)
+        return bool(col.find_one({"payment_reference": payment_reference}))
+    
+    @classmethod
+    def insert_one(cls, doc: dict):
+        col = db.get_collection(cls.collection_name)
+        res = col.insert_one(doc)
+        return str(res.inserted_id)
+    
+    def save(self, return_id: bool = False):
+        col = db.get_collection(self.collection_name)
+        data = self.to_dict()
+        res = col.insert_one(data)
+        return str(res.inserted_id) if return_id else True
+    
+    @classmethod
+    def get_by_id(cls, subscription_id: str, business_id: str) -> Optional[dict]:
+        log_tag = f"[Subscription][get_by_id][{subscription_id}]"
+
+        try:
+            col = db.get_collection(cls.collection_name)
+            doc = col.find_one({
+                "_id": ObjectId(subscription_id),
+                "business_id": ObjectId(business_id),
+            })
+
+            return cls._normalise_subscription_doc(doc) if doc else None
+
+        except Exception as e:
+            Log.error(f"{log_tag} error: {e}")
+            return None
+            
+    
+    
+    
+    
+    
+    
+    

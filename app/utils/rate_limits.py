@@ -1148,5 +1148,144 @@ def social_login_callback_limiter(
         error_message=error_message,
     )
 
+#--------TRIAL ENDPOINTS--------------
+def trial_start_limiter(
+    limit_str: str = "1 per day; 2 per hour; 5 per minute",
+    scope: str | None = None,
+):
+    """
+    Rate limiter for starting a trial subscription.
+
+    Covers:
+    - POST /subscription/trial/start
+
+    Default:
+    - 1 per day (hard business rule)
+    - 2 per hour (retry protection)
+    - 5 per minute (burst protection)
+
+    Rationale:
+    - Trial abuse prevention
+    - Protects against logic bugs & replay
+    - IP-based is acceptable since token_required is enforced
+    """
+    scope = scope or "trial-start-ip"
+    error_message = "Too many trial start attempts. Please try again later."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=default_ip_key_func,
+        methods=["POST"],
+        error_message=error_message,
+    )
+
+def trial_status_limiter(
+    limit_str: str = "60 per minute; 1000 per day",
+    scope: str | None = None,
+):
+    """
+    Rate limiter for checking trial status.
+
+    Covers:
+    - GET /subscription/trial/status
+
+    Rationale:
+    - Read-only
+    - Safe to allow polling from frontend
+    """
+    scope = scope or "trial-status-ip"
+    error_message = "Too many trial status checks. Please slow down."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=default_ip_key_func,
+        methods=["GET"],
+        error_message=error_message,
+    )
+
+def trial_convert_limiter(
+    limit_str: str = "3 per hour; 10 per day",
+    scope: str | None = None,
+):
+    """
+    Rate limiter for converting a trial to a paid subscription.
+
+    Covers:
+    - POST /subscription/trial/convert
+
+    Rationale:
+    - Payment-adjacent endpoint
+    - Prevents double-submit & replay
+    - Keeps conversion idempotent
+    """
+    scope = scope or "trial-convert-ip"
+    error_message = "Too many subscription conversion attempts. Please try again later."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=default_ip_key_func,
+        methods=["POST"],
+        error_message=error_message,
+    )
+
+def subscription_packages_limiter(
+    limit_str: str = "120 per minute; 2000 per day",
+    scope: str | None = None,
+):
+    """
+    Rate limiter for listing available subscription packages.
+
+    Covers:
+    - GET /subscription/packages
+
+    Rationale:
+    - Mostly static data
+    - Used by pricing & onboarding screens
+    """
+    scope = scope or "subscription-packages-ip"
+    error_message = "Too many package requests. Please try again later."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=default_ip_key_func,
+        methods=["GET"],
+        error_message=error_message,
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
