@@ -10,7 +10,7 @@ from ...models.admin.subscription_model import Subscription
 from ...utils.logger import Log
 from ...extensions.db import db
 from ...utils.plan.plan_change import PlanChangeService
-from ...utils.crypt import hash_data, encrypt_data
+from ...utils.crypt import hash_data, encrypt_data, decrypt_data
 from ...utils.json_response import prepared_response
 
 
@@ -30,7 +30,71 @@ class SubscriptionService:
     # ---------------------------------------------------------
     # INTERNAL HELPERS
     # ---------------------------------------------------------
+    # -------------------------
+    # Fields to decrypt
+    # -------------------------
+    FIELDS_TO_DECRYPT = [
+        "status",
+        "cancellation_reason",
+        "suspension_reason",
+        "billing_period",
+        "currency",
+    ]
+    
+    # -------------------------
+    # Trial Constants
+    # -------------------------
+    DEFAULT_TRIAL_DAYS = 30
+    
+    
+    
+    @classmethod
+    def _safe_decrypt(cls, value):
+        """Safely decrypt a value, returning original if decryption fails."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        try:
+            return decrypt_data(value)
+        except Exception:
+            return value
 
+    @classmethod
+    def _normalise_subscription_doc(cls, doc: dict) -> Optional[dict]:
+        """Normalize and decrypt subscription document."""
+        if not doc:
+            return None
+        
+        if doc.get("_id"):
+            doc["_id"] = str(doc["_id"])
+        
+        if doc.get("business_id"):
+            doc["business_id"] = str(doc["business_id"])
+        
+        if doc.get("package_id"):
+            doc["package_id"] = str(doc["package_id"])
+        
+        if doc.get("user_id"):
+            doc["user_id"] = str(doc["user_id"])
+        
+        # Decrypt encrypted fields
+        for field in cls.FIELDS_TO_DECRYPT:
+            if field in doc:
+                doc[field] = cls._safe_decrypt(doc[field])
+        
+        # Decrypt price_paid if present
+        if doc.get("price_paid"):
+            try:
+                doc["price_paid"] = float(cls._safe_decrypt(doc["price_paid"]))
+            except:
+                doc["price_paid"] = 0.0
+        
+        # Remove hashed fields from response
+        doc.pop("hashed_status", None)
+        
+        return doc
+    
     @staticmethod
     def _compute_end_date(start: datetime, billing_period: str):
         bp = (billing_period or "").lower()
