@@ -6,7 +6,7 @@ from bson import ObjectId
 from typing import Optional, Dict, Any, List, Union
 from flask import jsonify
 
-from build.lib.tests import business
+from ...models.business_model import Business
 
 from ...models.base_model import BaseModel
 from ...extensions.db import db
