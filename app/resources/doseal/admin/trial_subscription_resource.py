@@ -8,7 +8,7 @@ from flask import request, jsonify, g
 from flask.views import MethodView
 from bson import ObjectId
 
-from build.lib.app.utils.crypt import encrypt_data, hash_data
+from ....utils.crypt import encrypt_data, hash_data
 
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
