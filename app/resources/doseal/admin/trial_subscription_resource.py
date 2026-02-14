@@ -223,7 +223,7 @@ class StartTrialResource(MethodView):
 # GET TRIAL STATUS
 # =========================================
 @trial_status_limiter("trial_status")
-@blp_trial_subscription.route("/subscription/trial/status", methods=["GET"])
+@blp_trial_subscription.route("/subscription/status", methods=["GET"])
 class TrialStatusResource(MethodView):
     """
     Get current trial status for the authenticated user's business.

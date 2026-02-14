@@ -95,15 +95,9 @@ TRANSACTION_BANK_REQUIRED_FIELDS = [
 ALLOWED_IPS = [
     '::1',  # localhost IPv6
     '127.0.0.1', # localhost IPv4
-    '172.20.0.1', # Docker bridge network IP (host's view)
-    '198.199.83.148', #Shop IP
-    '146.190.209.15', #Instntmny IP
-    '154.160.15.53', #Zeepay network
+    # '172.20.0.1', # Docker bridge network IP (host's view)
     '82.28.252.83', #Samuel's house IP,
-    '81.134.210.199', #Zeepay UK Network
-    '20.121.105.0/24', #Intermex Sandbox IP
-    '20.237.11.39', #Intermex Sandbox IP
-    '20.185.189.41', #Intermex Production IP
+    '89.107.59.176', #Samuel's Server IP,
 ]
 
 AUTOMATED_TEST_USERNAMES = [

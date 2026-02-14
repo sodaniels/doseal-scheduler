@@ -124,7 +124,7 @@ class SubscriptionService:
         payment_reference=None,
         auto_renew=True,
         payment_done=False,
-        processing_callback=False
+        addon_users=False
     ):
         log_tag = f"[SubscriptionService][create_subscription][{business_id}]"
 
@@ -179,6 +179,7 @@ class SubscriptionService:
                 last_payment_date=start if payment_reference else None,
                 next_payment_date=next_payment_date,
                 term_number=1,
+                addon_users=addon_users,
             )
 
             sub_id = Subscription.insert_one(sub.to_dict())

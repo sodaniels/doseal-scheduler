@@ -1,5 +1,6 @@
 # resources/payment_webhook_resource.py
 
+import json, os
 import os, ast
 from datetime import datetime
 from flask import request, g, jsonify
@@ -30,6 +31,8 @@ from ....services.email_service import (
 from ....utils.invoice.generate_invoice import generate_invoice_pdf_bytes
 from ....utils.media.cloudinary_client import upload_invoice_and_get_asset
 from ....services.email_service import send_payment_confirmation_email
+from ....decorators.ip_decorator import restrict_ip
+from ....constants.service_code import ALLOWED_IPS
 
 
 payment_webhook_blp = Blueprint("payment_webhooks", __name__, description="Payment gateway webhooks")
@@ -41,7 +44,7 @@ class HubtelWebhook(MethodView):
 
     def post(self):
         client_reference = None
-        log_tag = "[HubtelWebhook][post]"
+        log_tag = "[payment_webhook_resource.py][HubtelWebhook][post]"
         client_ip = request.remote_addr
 
         try:
@@ -112,17 +115,34 @@ class HubtelWebhook(MethodView):
                 "updated_at": datetime.utcnow(),
             }
             
-            amount_detail = ast.literal_eval(payment.get("amount_detail"))
+            # ---------------------------------------------------------
+            # 4.1) Parse amount_detail safely
+            # ---------------------------------------------------------
+            amount_detail_raw = payment.get("amount_detail")
+            amount_detail = {}
             
-            addon_users = 1 + int(amount_detail.get("addon_users"))
+            if amount_detail_raw:
+                if isinstance(amount_detail_raw, dict):
+                    amount_detail = amount_detail_raw
+                elif isinstance(amount_detail_raw, str):
+                    try:
+                        # Try JSON first (safer than ast.literal_eval)
+                        amount_detail = json.loads(amount_detail_raw)
+                    except json.JSONDecodeError:
+                        try:
+                            # Fallback to ast.literal_eval for Python dict strings
+                            import ast
+                            amount_detail = ast.literal_eval(amount_detail_raw)
+                        except (ValueError, SyntaxError) as e:
+                            Log.warning(f"{log_tag} Failed to parse amount_detail: {e}")
+                            amount_detail = {}
             
-            package_amount = amount_detail.get("package_amount")
-            currency_symbol = amount_detail.get("from_currency")
-            
-            # return jsonify(amount_detail)
+            addon_users = 1 + int(amount_detail.get("addon_users") or 0)
+            package_amount = amount_detail.get("package_amount") or 0
+            currency_symbol = amount_detail.get("from_currency") or payment.get("currency") or "USD"
             total_from_amount = amount_detail.get("total_from_amount") or 0
 
-            # enrich metadata
+            # Enrich metadata
             if parsed.get("payment_details") is not None:
                 existing_metadata = payment.get("metadata") or {}
                 if not isinstance(existing_metadata, dict):
@@ -141,12 +161,27 @@ class HubtelWebhook(MethodView):
             if parsed.get("is_success") is True:
                 Log.info(f"{log_tag} Payment SUCCESS tx_id={client_reference}")
                 
-                #email
+                # 5.1 Mark payment success FIRST (critical)
+                Payment.update_status(
+                    payment_id,
+                    Payment.STATUS_SUCCESS,
+                    gateway_transaction_id=parsed.get("transaction_id"),
+                )
+
+                # 5.2 Update payment extra fields
+                Payment.update(
+                    payment_id,
+                    business_id=business_id,
+                    processing_callback=True,
+                    completed_at=datetime.utcnow(),
+                    **update_data,
+                )
+                
+                # 5.3 Generate and send invoice email
                 try:
                     package = Package.get_by_id(str(payment.get("package_id"))) or {}
 
                     invoice_number = payment.get("reference") or client_reference
-                    business_id = str(payment.get("business_id"))
                     user__id = str(payment.get("user__id"))
 
                     invoice_bytes = generate_invoice_pdf_bytes(
@@ -155,13 +190,13 @@ class HubtelWebhook(MethodView):
                         email=payment.get("customer_email") or "",
                         plan_name=package.get("name") or "Subscription",
                         amount=float(package_amount or 0),
-                        currency=str(currency_symbol or payment.get("currency") or ""),
+                        currency=str(currency_symbol or ""),
                         payment_method=str(payment.get("payment_method") or "hubtel"),
                         receipt_number=str(payment.get("customer_phone") or ""),
-                        paid_date=str(payment.get("completed_at") or ""),
+                        paid_date=str(datetime.utcnow()),
                         addon_users=int(amount_detail.get("addon_users") or 0),
-                        package_amount=float(amount_detail.get("package_amount") or 0),
-                        total_from_amount=float(amount_detail.get("total_from_amount") or 0),
+                        package_amount=float(package_amount or 0),
+                        total_from_amount=float(total_from_amount or 0),
                     )
 
                     # Upload invoice to Cloudinary (optional but recommended)
@@ -179,64 +214,55 @@ class HubtelWebhook(MethodView):
                             business_id=business_id,
                             invoice_asset=invoice_asset,
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        Log.warning(f"{log_tag} Failed to save invoice asset: {e}")
 
                     send_payment_confirmation_email(
                         email=payment.get("customer_email"),
                         fullname=payment.get("customer_name"),
-                        currency=currency_symbol or payment.get("currency"),
+                        currency=currency_symbol,
                         receipt_number=payment.get("customer_phone"),
                         invoice_number=invoice_number,
                         payment_method=payment.get("payment_method"),
-                        paid_date=str(payment.get("completed_at") or ""),
-                        plan_name=(package or {}).get("name") or "Subscription",
+                        paid_date=str(datetime.utcnow()),
+                        plan_name=package.get("name") or "Subscription",
                         addon_users=int(amount_detail.get("addon_users") or 0),
-                        package_amount=float(amount_detail.get("package_amount") or 0),
+                        package_amount=float(package_amount or 0),
                         amount=float(package_amount or 0),
                         total_from_amount=float(total_from_amount or 0),
-                        invoice_pdf_bytes=invoice_bytes,         # ✅ Gmail shows attachment
-                        invoice_url=(invoice_asset or {}).get("url"),  # ✅ fallback link
+                        invoice_pdf_bytes=invoice_bytes,
+                        invoice_url=(invoice_asset or {}).get("url"),
                     )
 
                 except Exception as e:
                     Log.warning(f"{log_tag} Error sending payment confirmation (ignored): {e}")
+                    import traceback
+                    traceback.print_exc()
 
-
-                # 5.1 Mark payment success FIRST (critical)
-                Payment.update_status(
-                    payment_id,
-                    Payment.STATUS_SUCCESS,
-                    gateway_transaction_id=parsed.get("transaction_id"),
-                )
-
-                # 5.2 Update payment extra fields
-                Payment.update(
-                    payment_id,
-                    business_id=business_id,
-                    processing_callback=True,
-                    completed_at=datetime.utcnow(),
-                    **update_data,
-                )
-
-                # 5.3 Create or renew subscription
+                # 5.4 Create or renew subscription
                 metadata = payment.get("metadata") or {}
                 if not isinstance(metadata, dict):
-                    metadata = {}
+                    try:
+                        metadata = json.loads(metadata) if isinstance(metadata, str) else {}
+                    except:
+                        metadata = {}
 
-                old_package_id = metadata.get("old_package_id")
+                old_package_id = metadata.get("old_package_id") or payment.get("old_package_id")
                 package_id = metadata.get("package_id") or payment.get("package_id")
-                billing_period = metadata.get("billing_period", "monthly")
+                billing_period = metadata.get("billing_period") or amount_detail.get("billing_period") or "monthly"
 
                 user_id = metadata.get("user_id") or payment.get("user_id")
                 user__id = metadata.get("user__id") or payment.get("user__id")
 
-                # choose a consistent payment_reference for subscriptions
-                # (client_reference is usually best, because it’s YOUR order id)
+                # Use client_reference as payment_reference (it's YOUR order id)
                 payment_reference = client_reference
 
                 if not old_package_id:
+                    # ---------------------------------------------------------
+                    # 5.4.1 NEW SUBSCRIPTION
+                    # ---------------------------------------------------------
                     Log.info(f"{log_tag} Creating subscription business={business_id} package={package_id}")
+                    
                     success, subscription_id, error = SubscriptionService.create_subscription(
                         business_id=business_id,
                         user_id=user_id,
@@ -245,6 +271,7 @@ class HubtelWebhook(MethodView):
                         payment_method=PAYMENT_METHODS["HUBTEL"],
                         payment_reference=payment_reference,
                         payment_done=True,
+                        addon_users=addon_users,
                     )
 
                     if not success:
@@ -256,9 +283,14 @@ class HubtelWebhook(MethodView):
                             notes=f"Payment successful but subscription failed: {error}",
                             updated_at=datetime.utcnow(),
                         )
-                        return {"code": 500, "message": f"Payment successful but subscription failed: {error}"}, 500
+                        # Return 200 to Hubtel to acknowledge receipt, but log the error
+                        return {
+                            "code": 200,
+                            "message": "Payment processed but subscription creation failed",
+                            "error": error,
+                        }, 200
 
-                    # update business “subscribed_to_package”
+                    # Update business "subscribed_to_package"
                     try:
                         Business.update_account_status_by_business_id(
                             business_id,
@@ -269,8 +301,14 @@ class HubtelWebhook(MethodView):
                     except Exception as e:
                         Log.warning(f"{log_tag} Error updating account status (ignored): {e}")
 
+                    Log.info(f"{log_tag} Subscription created successfully: {subscription_id}")
+
                 else:
+                    # ---------------------------------------------------------
+                    # 5.4.2 PLAN CHANGE / RENEWAL
+                    # ---------------------------------------------------------
                     Log.info(f"{log_tag} Plan change/renew flow old_package_id={old_package_id}")
+                    
                     success, subscription_id, error = SubscriptionService.apply_or_renew_from_payment(
                         business_id=business_id,
                         user_id=user_id,
@@ -279,9 +317,6 @@ class HubtelWebhook(MethodView):
                         billing_period=billing_period,
                         payment_method=PAYMENT_METHODS["HUBTEL"],
                         payment_reference=payment_reference,
-                        payment_id=payment_id,
-                        processing_callback=True,
-                        source="hubtel_callback",
                     )
 
                     if not success:
@@ -293,14 +328,25 @@ class HubtelWebhook(MethodView):
                             notes=f"Payment successful but subscription failed: {error}",
                             updated_at=datetime.utcnow(),
                         )
-                        return {"code": 500, "message": f"Payment successful but subscription failed: {error}"}, 500
+                        # Return 200 to Hubtel to acknowledge receipt
+                        return {
+                            "code": 200,
+                            "message": "Payment processed but subscription renewal failed",
+                            "error": error,
+                        }, 200
 
-                # 5.4 Send receipt email (non-blocking)
-                
-                
-                
-                
-                
+                    Log.info(f"{log_tag} Subscription renewed/changed successfully: {subscription_id}")
+
+                # ---------------------------------------------------------
+                # 5.5 SUCCESS RESPONSE
+                # ---------------------------------------------------------
+                return {
+                    "code": 200,
+                    "message": "Callback processed successfully",
+                    "payment_status": Payment.STATUS_SUCCESS,
+                    "subscription_id": subscription_id if 'subscription_id' in locals() else None,
+                }, 200
+
             # ---------------------------------------------------------
             # 6) Failure path
             # ---------------------------------------------------------
@@ -317,25 +363,35 @@ class HubtelWebhook(MethodView):
                 payment_id,
                 business_id=business_id,
                 processing_callback=True,
-                completed_at=datetime.utcnow(),
+                failed_at=datetime.utcnow(),
                 **update_data,
             )
 
-            # Optional: send failed payment email (if you want)
-            # try:
-            #     send_payment_failed_email(...)
-            # except Exception:
-            #     pass
+            # Optional: send failed payment email
+            try:
+                if payment.get("customer_email"):
+                    pass
+                    # send_payment_failed_email(
+                    #     email=payment.get("customer_email"),
+                    #     fullname=payment.get("customer_name"),
+                    #     amount=float(payment.get("amount") or 0),
+                    #     currency=currency_symbol,
+                    #     error_message=error_message,
+                    # )
+            except Exception as e:
+                Log.warning(f"{log_tag} Error sending failed payment email (ignored): {e}")
 
             return {
                 "code": 200,
                 "message": "Callback processed - Payment failed",
-                "payment_status": parsed.get("status"),
+                "payment_status": Payment.STATUS_FAILED,
                 "error": error_message,
             }, 200
 
         except Exception as e:
             Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            import traceback
+            traceback.print_exc()
 
             if client_reference:
                 try:
@@ -349,11 +405,11 @@ class HubtelWebhook(MethodView):
                             notes=f"Callback error: {str(e)}",
                             updated_at=datetime.utcnow(),
                         )
-                except Exception:
-                    pass
+                except Exception as update_error:
+                    Log.error(f"{log_tag} Failed to update payment on error: {update_error}")
 
-            return {"code": 500, "message": f"Error processing callback: {str(e)}"}, 500
-        
+            # Return 200 to acknowledge receipt (Hubtel will keep retrying on non-200)
+            return {"code": 200, "message": f"Error processing callback: {str(e)}"}, 200   
         
 
 @payment_webhook_blp.route("/webhooks/payment/asoriba", methods=["GET", "POST"])

@@ -175,7 +175,7 @@ def register_social_routes(app, api):
 
     # Callback endpoints (with IP restriction)
     app.add_url_rule(
-        '/api/v1/transactions/callback/zeemoney',
+        '/api/v1/webhooks/payment/hubtel',
         'process_volume_transaction_callback',
         restrict_ip(ALLOWED_IPS)(process_volume_transaction_callback),
         methods=['POST']

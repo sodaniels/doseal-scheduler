@@ -71,6 +71,7 @@ class Subscription(BaseModel):
         cancelled_at=None,
         suspension_reason=None,
         suspended_at=None,
+        addon_users=0,
 
         # NEW: term tracking
         previous_subscription_id: Optional[Union[str, ObjectId]] = None,
@@ -127,6 +128,7 @@ class Subscription(BaseModel):
         self.cancelled_at = cancelled_at
         self.suspension_reason = encrypt_data(suspension_reason) if suspension_reason else None
         self.suspended_at = suspended_at
+        self.addon_users = addon_users if addon_users else 0
 
         # Timestamps
         self.created_at = datetime.utcnow()
@@ -147,6 +149,7 @@ class Subscription(BaseModel):
             "status": self.status,
             "hashed_status": self.hashed_status,
             "auto_renew": self.auto_renew,
+            "addon_users": self.addon_users,
 
             "created_at": self.created_at,
             "updated_at": self.updated_at,
