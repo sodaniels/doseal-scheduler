@@ -137,7 +137,7 @@ class HubtelWebhook(MethodView):
                             Log.warning(f"{log_tag} Failed to parse amount_detail: {e}")
                             amount_detail = {}
             
-            addon_users = 1 + int(amount_detail.get("addon_users") or 0)
+            addon_users = int(amount_detail.get("addon_users") or 0)
             package_amount = amount_detail.get("package_amount") or 0
             currency_symbol = amount_detail.get("from_currency") or payment.get("currency") or "USD"
             total_from_amount = amount_detail.get("total_from_amount") or 0
@@ -271,6 +271,7 @@ class HubtelWebhook(MethodView):
                         payment_method=PAYMENT_METHODS["HUBTEL"],
                         payment_reference=payment_reference,
                         payment_done=True,
+                        amount_detail=amount_detail,
                         addon_users=addon_users,
                     )
 

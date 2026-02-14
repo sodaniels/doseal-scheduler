@@ -124,7 +124,8 @@ class SubscriptionService:
         payment_reference=None,
         auto_renew=True,
         payment_done=False,
-        addon_users=False
+        addon_users=False,
+        amount_detail=None
     ):
         log_tag = f"[SubscriptionService][create_subscription][{business_id}]"
 
@@ -178,6 +179,7 @@ class SubscriptionService:
                 payment_reference=payment_reference,
                 last_payment_date=start if payment_reference else None,
                 next_payment_date=next_payment_date,
+                amount_detail=amount_detail,
                 term_number=1,
                 addon_users=addon_users,
             )
