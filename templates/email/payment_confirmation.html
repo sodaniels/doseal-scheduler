@@ -104,16 +104,25 @@
             <td class="value">{{ plan_name|default("—") }}</td>
           </tr>
           <tr>
-            <td class="label">Amount paid</td>
+            <td class="label">Package Amount</td>
             <td class="value">{{ currency|default("") }} {{ amount|default("—") }}</td>
           </tr>
 
-          {% if total_from_amount %}
+           {% if addon_users > 0 %}
+          <tr>
+            <td class="label">Addon Users</td>
+            <td class="value">{{ addon_users }}</td>
+          </tr>
+          {% endif %}
+
+           {% if total_from_amount %}
           <tr>
             <td class="label">Total (for period)</td>
             <td class="value">{{ currency|default("") }} {{ total_from_amount }}</td>
           </tr>
           {% endif %}
+
+         
 
           <tr>
             <td class="label">Payment method</td>
