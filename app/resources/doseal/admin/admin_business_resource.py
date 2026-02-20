@@ -1232,7 +1232,7 @@ class BusinessRegistrationInitiateEmailVerificationResource(MethodView):
 @blp_business_auth.route("/me", methods=["GET"])
 class CurrentUserResource(MethodView):
     
-    @profile_retrieval_limiter("me")
+    # @profile_retrieval_limiter("me")
     @token_required
     @blp_business_auth.response(200)
     @blp_business_auth.doc(
@@ -1326,6 +1326,7 @@ class CurrentUserResource(MethodView):
             "fullname": decrypte_full_name,
             "admin_id": str(user.get("_id")),
             "business_id": target_business_id,
+            "tenant_id": decrypt_data(decrypt_data(user.get("tenant_id"))),
             "email": business.get("email"),
             "account_status": business.get("account_status"),
             "profile": business_info,
