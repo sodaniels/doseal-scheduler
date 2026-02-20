@@ -56,6 +56,37 @@ def user_key_func():
         return f"user:{user_id}"
     return get_remote_address()
 
+def ip_key_func():
+    """
+    Rate limit key function based on the client's IP address.
+
+    Handles:
+    - Standard remote_addr
+    - X-Forwarded-For header (proxies / load balancers)
+    - X-Real-IP header (nginx)
+
+    IMPORTANT: If your app sits behind a trusted proxy/load balancer,
+    ensure you have ProxyFix middleware configured so request.remote_addr
+    reflects the real client IP and not the proxy's IP.
+
+    Example (in app factory):
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    """
+    # Prefer X-Forwarded-For if present (set by proxies/load balancers)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For can be a comma-separated list: "client, proxy1, proxy2"
+        # Take the first (leftmost) IP — that's the original client
+        return forwarded_for.split(",")[0].strip()
+
+    # Fallback to X-Real-IP (common in nginx setups)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+
+    # Final fallback to direct remote address
+    return request.remote_addr
 
 # ---------- RATE LIMIT BREACH HANDLER ----------
 
@@ -1284,7 +1315,92 @@ def trial_cancel_limiter(
     )
 
 
+def forgot_password_ip_limiter(
+    entity_name: str = "forgot-password",
+    limit_str: str = "5 per 15 minutes; 15 per hour; 30 per day",
+):
+    """
+    Per-IP limit for forgot-password endpoints.
 
+    Default: 5 per 15 minutes; 15 per hour; 30 per day (per IP)
+
+    Rationale:
+    - 5/15min prevents rapid enumeration of valid accounts via reset requests
+    - 15/hour limits automated account discovery attacks
+    - 30/day provides daily cap against persistent enumeration bots
+
+    CRITICAL: Prevents attackers from discovering valid accounts by spamming
+    reset requests and observing different responses.
+
+    Example:
+        decorators = [forgot_password_ip_limiter()]
+        decorators = [forgot_password_ip_limiter("admin-forgot-password", "3 per 15 minutes; 10 per hour")]
+    """
+    scope = f"{entity_name}-ip"
+    error_message = f"Too many {entity_name} attempts from this IP. Please try again later."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=ip_key_func,
+        methods=["POST"],
+        error_message=error_message,
+    )
+
+
+def forgot_password_user_limiter(
+    entity_name: str = "forgot-password",
+    limit_str: str = "3 per 15 minutes; 5 per hour; 10 per day",
+    scope: str | None = None,
+):
+    """
+    Per-username/phone limit for forgot-password endpoints.
+
+    Default: 3 per 15 minutes; 5 per hour; 10 per day (per account)
+
+    Rationale:
+    - 3/15min allows genuine retry attempts (e.g. email not received) without
+      enabling rapid abuse of the reset flow
+    - 5/hour protects against persistent targeting of a specific account
+    - 10/day is a strict daily cap — legitimate users rarely need more than
+      1-2 resets per day
+
+    CRITICAL: Prevents attackers from flooding a specific user's inbox or
+    phone with reset messages (SMS/email bombing).
+
+    Example:
+        decorators = [forgot_password_user_limiter()]
+        decorators = [forgot_password_user_limiter("admin-forgot-password", "2 per 15 minutes; 3 per hour")]
+    """
+    scope = scope or f"{entity_name}-user"
+    error_message = f"Too many {entity_name} attempts for this account. Please try again later."
+
+    return limiter.shared_limit(
+        limit_str,
+        scope=scope,
+        key_func=login_key_func,
+        methods=["POST"],
+        error_message=error_message,
+    )
+
+
+def forgot_password_rate_limiter(
+    entity_name: str = "forgot-password",
+    limit_str: str = "3 per 15 minutes; 5 per hour; 10 per day",
+):
+    """
+    Backwards-compatible helper for forgot-password endpoints.
+
+    Returns a per-user shared limit by default.
+
+    IMPORTANT: For production, use BOTH decorators:
+        decorators = [forgot_password_ip_limiter(), forgot_password_user_limiter()]
+
+    This provides defense-in-depth against:
+    - Distributed enumeration attacks (IP limiter)
+    - SMS/email bombing of specific accounts (user limiter)
+    """
+    return forgot_password_user_limiter(entity_name, limit_str)
 
 
 

@@ -15,6 +15,13 @@ class LoginInitiateSchema(Schema):
     email = fields.Email(required=True, error_messages={"invalid": "Invalid email address"})
     password = fields.Str(required=True, load_only=True, error_messages={"required": "password is required"})
 
+class ForgotPasswordInitiateSchema(Schema):
+    email = fields.Email(required=True, error_messages={"invalid": "Invalid email address"})
+    return_url = fields.Url(
+        required=False, 
+        allow_none=True,
+        error_messages={"invalid": "Invalid URL"}
+    )
 
 class LoginExecuteSchema(Schema):
     email = fields.Email(required=True, error_messages={"invalid": "Invalid email address"})

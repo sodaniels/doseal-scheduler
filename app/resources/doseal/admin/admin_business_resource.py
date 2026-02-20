@@ -24,7 +24,8 @@ from ....schemas.login_schema import (
     LoginInitiateSchema,
     LoginExecuteSchema,
     LoginExecuteResponseSchema,
-    LoginInitiateResponseSchema
+    LoginInitiateResponseSchema,
+    ForgotPasswordInitiateSchema,
 )
 from ....schemas.social.change_password_schema import ChangePasswordSchema
 from ....schemas.social.email_verification_schema import BusinessEmailVerificationSchema
@@ -54,7 +55,8 @@ from ....services.email_service import (
     send_user_registration_email,
     send_new_contact_sale_email,
     send_password_changed_email,
-    send_otp_email
+    send_otp_email,
+    send_forgot_password_email
 )
 
 from ....utils.generators import (
@@ -71,7 +73,8 @@ from ....utils.file_upload import upload_file
 from ....utils.rate_limits import (
     login_ip_limiter, login_user_limiter,
     register_rate_limiter, logout_rate_limiter,
-    profile_retrieval_limiter 
+    profile_retrieval_limiter,
+    forgot_password_rate_limiter,
 )
 from ....utils.generators import generate_registration_verification_token
 from ....utils.helpers import resolve_target_business_id_from_payload
@@ -629,7 +632,7 @@ class LoginBusinessInitiateResource(MethodView):
         server_app_key = os.getenv("X_APP_KEY")
         
         if app_key != server_app_key:
-            Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
+            Log.info(f"[admin_business_resource.py][get_countries][{client_ip}] invalid x-app-ky header")
             response = {
                 "success": False,
                 "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
@@ -840,7 +843,7 @@ class LoginBusinessExecuteResource(MethodView):
         server_app_key = os.getenv("X_APP_KEY")
         
         if app_key != server_app_key:
-            Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
+            Log.info(f"[admin_business_resource.py][get_countries][{client_ip}] invalid x-app-ky header")
             response = {
                 "success": False,
                 "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
@@ -1436,3 +1439,172 @@ class LogoutResource(MethodView):
             Log.error(f"{log_tag}[{client_ip}]: logout error: {e}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred. {str(e)}")
          
+
+#-------------------------------------------------------
+# FORGOT PASSWORD INITIATE
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/forgot-password/initiate", methods=["POST"])
+class ForgotPasswordInitiateResource(MethodView):
+    @login_ip_limiter("forgot-password")
+    @login_user_limiter("forgot-password")
+    @blp_business_auth.arguments(ForgotPasswordInitiateSchema, location="form")
+    @blp_business_auth.response(200, ForgotPasswordInitiateSchema)
+    @blp_business_auth.doc(
+        summary="Login (Step 1): Initiate OTP",
+        description=(
+            "Step 1 of login.\n\n"
+            "Validates email + password, then sends a 6-digit OTP to the user's email.\n"
+            "OTP expires in 5 minutes.\n\n"
+            "Step 2: Call `/auth/login/execute` with email + otp."
+        ),
+        parameters=[
+            {
+                "in": "header",
+                "name": "x-app-key",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application key required to access this endpoint.",
+            },
+            {
+                "in": "header",
+                "name": "x-app-secret",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application secret required to access this endpoint.",
+            }
+        ],
+        requestBody={
+            "required": True,
+            "content": {
+                "application/x-www-form-urlencoded": {
+                    "schema": LoginInitiateSchema,
+                    "example": {
+                        "email": "johndoe@example.com",
+                        "password": "SecurePass123"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "OTP sent to email",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "OTP has been sent to email",
+                            "message_to_show": "We sent an OTP to your email address. Please provide it to proceed."
+                        }
+                    }
+                },
+            },
+            401: {
+                "description": "Unauthorized (invalid app key OR invalid email/password OR revoked access)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid email or password"
+                        }
+                    }
+                },
+            },
+            429: {
+                "description": "Rate limited (too many attempts)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 429,
+                            "message": "Too many requests. Please try again later."
+                        }
+                    }
+                },
+            },
+            500: {
+                "description": "Internal server error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "Internal error"
+                        }
+                    }
+                },
+            },
+        },
+    )
+    
+    def post(self, item_data):
+        client_ip = request.remote_addr
+        log_tag = '[admin_business_resource.py][ForgotPasswordInitiateResource][post]'
+        Log.info(f"{log_tag} [{client_ip}][{item_data['email']}] initiating forgot password request")
+        
+        client_ip = request.remote_addr
+    
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"{log_tag} [{client_ip}] invalid x-app-key header")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized request."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        
+        email = item_data.get("email")
+    
+        # Check if the user exists based on email
+        user = User.get_user_by_email(email)
+        if user is None:
+           Log.info(f"{log_tag} [{client_ip}][{email}]: Email address does not exist")
+           return prepared_response(
+                False,
+                "UNAUTHORIZED",
+                "Email address does not exist",
+            )
+
+        try:
+            return_url= item_data.get("return_url") or os.getenv("FRONT_END_BASE_URL") + '/reset-password'
+            token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
+            reset_token = generate_confirm_email_token(return_url, token)
+
+            update_code = User.update_auth_code(email, token)
+            
+            fullname = decrypt_data(user.get("fullname"))
+            
+            if update_code:
+                Log.info(f"{log_tag}\t reset_token: {reset_token}")
+                try:
+                    result = send_forgot_password_email(
+                        email=email, 
+                        reset_token=reset_token,
+                        fullname=fullname if fullname else email,
+                        ip_address=request.remote_addr,
+                        user_agent=request.headers.get("User-Agent"),
+                    )
+                    Log.info(f"Email sent result={result}")
+                    if result.get("ok"):
+                        return jsonify(
+                            success=True,
+                            status_code=200,
+                            message="A link to reset your password has been sent to your email address.",
+                            message_to_show="We sent a password reset link to your email address. Please check your email and click on the link to proceed."
+                        )
+                except Exception as e:
+                    Log.error(f"Email sending failed: {e}")
+                    return prepared_response(False, "INTERNAL_SERVER_ERROR", f"Email sending failed: {str(e)}")
+            else:
+                Log.info(f"{log_tag} Failed to update auth code for email: {email}")
+                return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to initiate forgot password process.")
+        except Exception as e:
+            Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
+            
+        
+        

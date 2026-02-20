@@ -1131,4 +1131,114 @@ def send_trial_expired_email(business_id: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+# services/email_service.py
+
+# =========================================================
+# FORGOT PASSWORD EMAIL
+# =========================================================
+def send_forgot_password_email(
+    email: str,
+    reset_token: str,
+    fullname: str = None,
+    ip_address: str = None,
+    user_agent: str = None
+) -> Dict[str, Any]:
+    """
+    Send password reset email with reset link.
+    
+    Args:
+        email: User's email address
+        reset_token: Password reset token
+        fullname: User's full name (optional)
+        ip_address: IP address of request (optional)
+        user_agent: User agent string (optional)
+        
+    Returns:
+        Dict with success status and message_id
+    """
+    log_tag = f"[email_service][send_forgot_password_email][{email}]"
+
+    try:
+        cfg = load_email_config()
+        svc = EmailService(cfg)
+
+        app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+        support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
+        frontend_url = os.getenv("FRONT_END_BASE_URL", "https://app.schedulefy.org")
+
+        # Build reset URL with token
+        reset_url = f"{frontend_url}/reset-password?token={reset_token}"
+
+        # ✅ Token expiry time - 5 minutes
+        expiry_minutes = int(os.getenv("PASSWORD_RESET_EXPIRY_MINUTES", "5"))
+        
+        subject = f"Reset your {app_name} password"
+
+        # Simple expiry text (always in minutes for short durations)
+        expiry_text = f"{expiry_minutes} minutes"
+
+        text_fallback = (
+            f"Hi{', ' + fullname if fullname else ''},\n\n"
+            f"We received a request to reset your password for {email}.\n\n"
+            f"Click the link below to reset your password:\n"
+            f"{reset_url}\n\n"
+            f"⏱️ This link will expire in {expiry_text}.\n\n"
+            f"If you didn't request this, you can safely ignore this email.\n\n"
+            f"If you need help, contact {support_email}\n\n"
+            f"— {app_name}"
+        )
+
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/forgot_password.html",
+            context={
+                "email": email,
+                "fullname": fullname,
+                "app_name": app_name,
+                "reset_url": reset_url,
+                "expiry_minutes": expiry_minutes,
+                "support_email": support_email,
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+            },
+            text_fallback=text_fallback,
+            tags=["password", "password-reset", "forgot-password"],
+            meta={
+                "email_type": "forgot_password",
+                "email": email,
+            },
+        )
+
+    except Exception as e:
+        Log.error(f"{log_tag} Error sending email: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
