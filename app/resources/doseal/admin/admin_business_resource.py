@@ -1846,15 +1846,14 @@ class ResetPasswordExecute(MethodView):
                     "BAD_REQUEST",
                     "Invalid or expired reset token. Please request a new password reset link."
                 )
-                
-            Log.info(f"{log_tag} token_data: {token_data}")
             
             # Get user details from token
-            # email = token_data.get("email")
+            email = token_data.get("email")
             user_id = token_data.get("user_id")
+            business_id = token_data.get("business_id")
             
             # Update user password
-            success = User.update_password(user_id, new_password)
+            success = User.update_password(user_id=user_id, business_id=business_id, new_password=new_password)
             
             if success:
                 # Mark token as used
@@ -1862,8 +1861,22 @@ class ResetPasswordExecute(MethodView):
                 
                 Log.info(f"{log_tag} Password reset successful for user: {user_id}")
                 
-                # TODO: Send password changed confirmation email
-                # send_password_changed_email(email)
+                
+                try:
+                    #send email about password change
+                    business = Business.get_business_by_id(business_id)
+                    fullname = business.get("business_name") if business.get("business_name") else None
+                    
+                    update_passsword = send_password_changed_email(
+                        email=email,
+                        fullname=fullname if business else email,
+                        changed_at=datetime.now(),
+                        ip_address=request.remote_addr,
+                        user_agent=request.headers.get("User-Agent"),
+                    )
+                    Log.error(f"{log_tag} change password email update: {update_passsword}")
+                except Exception as e:
+                    Log.error(f"{log_tag} error sending change password emails: {e}")
                 
                 return prepared_response(
                     True,
