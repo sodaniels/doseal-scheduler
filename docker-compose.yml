@@ -153,29 +153,29 @@ services:
   # ----------------------------
   # OLLAMA (LLM ENGINE)
   # ----------------------------
-  ollama:
-    image: ollama/ollama:latest
-    container_name: doseal_ollama
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: doseal_ollama
 
-    # 🔐 Bind only to localhost (safe)
-    ports:
-      - "127.0.0.1:11434:11434"
+  #   # 🔐 Bind only to localhost (safe)
+  #   ports:
+  #     - "127.0.0.1:11434:11434"
 
-    volumes:
-      - ollama_data:/root/.ollama
+  #   volumes:
+  #     - ollama_data:/root/.ollama
 
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
+  #   environment:
+  #     OLLAMA_HOST: 0.0.0.0:11434 
 
-    restart: unless-stopped
+  #   restart: unless-stopped
 
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/v1/models"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:11434/v1/models"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 30
 
 
 volumes:
   redis_data:
-  ollama_data:
+  # ollama_data: //uncomment if using Ollama with local storage
