@@ -1138,7 +1138,7 @@ def send_trial_expired_email(business_id: str) -> Dict[str, Any]:
 # =========================================================
 def send_forgot_password_email(
     email: str,
-    reset_token: str,
+    reset_url: str,
     fullname: str = None,
     ip_address: str = None,
     user_agent: str = None
@@ -1148,7 +1148,7 @@ def send_forgot_password_email(
     
     Args:
         email: User's email address
-        reset_token: Password reset token
+        reset_url: Full password reset URL (includes callback endpoint and token)
         fullname: User's full name (optional)
         ip_address: IP address of request (optional)
         user_agent: User agent string (optional)
@@ -1164,12 +1164,8 @@ def send_forgot_password_email(
 
         app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
         support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
-        frontend_url = os.getenv("FRONT_END_BASE_URL", "https://app.schedulefy.org")
 
-        # Build reset URL with token
-        reset_url = f"{frontend_url}/reset-password?token={reset_token}"
-
-        # ✅ Token expiry time - 5 minutes
+        # Token expiry time - 5 minutes
         expiry_minutes = int(os.getenv("PASSWORD_RESET_EXPIRY_MINUTES", "5"))
         
         subject = f"Reset your {app_name} password"
@@ -1183,7 +1179,9 @@ def send_forgot_password_email(
             f"Click the link below to reset your password:\n"
             f"{reset_url}\n\n"
             f"⏱️ This link will expire in {expiry_text}.\n\n"
-            f"If you didn't request this, you can safely ignore this email.\n\n"
+            f"If you didn't request this, you can safely ignore this email. "
+            f"Your password will not be changed unless you click the link above.\n\n"
+            f"For security reasons, this link can only be used once.\n\n"
             f"If you need help, contact {support_email}\n\n"
             f"— {app_name}"
         )
@@ -1213,7 +1211,6 @@ def send_forgot_password_email(
     except Exception as e:
         Log.error(f"{log_tag} Error sending email: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
-
 
 
 

@@ -297,7 +297,7 @@ class ExecutePayment(MethodView):
         checksum = json_data.get("checksum", None)
         checksum_hash_transformed = str.lower(checksum)
         
-        payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY")
+        payment_method = os.getenv("DEFAULT_PAYMENT_GATEWAY", "asoriba")
         
         log_tag = make_log_tag(
             "payment_resource.py",

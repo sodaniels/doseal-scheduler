@@ -76,7 +76,7 @@ def get_confirm_account_():
     return_url = request.args.get('return_url')
     
     try:
-        Log.info(f"[sessionsinternal_controller_controller.py][get_confirm_account] IP: {client_ip}")
+        Log.info(f"[callback_controller.py][get_confirm_account] IP: {client_ip}")
         user_from_auth = User.get_auth_code(auth_value)
         Log.info(f"user_from_auth: {user_from_auth}")
         
@@ -92,7 +92,7 @@ def get_confirm_account_():
             
             if update_status:
                 # Redirect to return_url with success status
-                Log.info(f"[sessionsinternal_controller_controller.py][get_confirm_account] IP: {client_ip} \t user status update successful")
+                Log.info(f"[callback_controller.py][get_confirm_account] IP: {client_ip} \t user status update successful")
                 
                 return_url_from_business = decrypt_data(business.get("return_url"))
                 query_params = {"status": "Successful"}
@@ -102,25 +102,122 @@ def get_confirm_account_():
                 return redirect(f"{return_url_payload}")
             else:
                 # Redirect to return_url with failed status
-                Log.info(f"[sessionsinternal_controller_controller.py][get_confirm_account] IP: {client_ip} \t user status update failed")
+                Log.info(f"[callback_controller.py][get_confirm_account] IP: {client_ip} \t user status update failed")
                 
                 query_params = {"status": "Failed"}
                 return_url_payload = generate_return_url_with_payload(return_url, query_params)
                 return redirect(f"{return_url_payload}")
         else:
             # Redirect to return_url with failed status
-            Log.info(f"[sessionsinternal_controller_controller.py][get_confirm_account] IP: {client_ip} \t user status update failed")
+            Log.info(f"[callback_controller.py][get_confirm_account] IP: {client_ip} \t user status update failed")
             
             query_params = {"status": "Failed", "message": "Registration code expired"}
             return_url_payload = generate_return_url_with_payload(return_url, query_params)
             return redirect(f"{return_url_payload}")
     except Exception as e:
-        Log.info(f"[sessionsinternal_controller_controller.py][get_confirm_account][{client_ip}] error : {e}")
+        Log.info(f"[callback_controller.py][get_confirm_account][{client_ip}] error : {e}")
         # Redirect to return_url with failed status
         
         query_params = {"status": "Failed", "message": "Registration code expired"}
         return_url_payload = generate_return_url_with_payload(return_url, query_params)
         return redirect(f"{return_url_payload}")
+   
+
+#get forgot password callback
+def get_forgot_password():
+    """
+    Handle password reset callback from email link.
+    
+    Validates the reset token and redirects to frontend with status.
+    
+    Query Parameters:
+        token (String): The password reset token
+        return_url (String): Frontend URL to redirect after validation
+    
+    Returns:
+        Redirect to return_url with status query params
+    """
+    client_ip = request.remote_addr
+    reset_token = request.args.get('token')
+    return_url = request.args.get('return_url')
+    
+    log_tag = f"[callback_controller.py][get_forgot_password][{client_ip}]"
+    
+    try:
+        Log.info(f"{log_tag} Password reset callback received")
+        
+        # Validate required parameters
+        if not reset_token:
+            Log.warning(f"{log_tag} No token provided")
+            query_params = {
+                "status": "Failed",
+                "message": "Invalid reset link"
+            }
+            return_url_payload = generate_return_url_with_payload(return_url, query_params)
+            return redirect(return_url_payload)
+        
+        if not return_url:
+            Log.warning(f"{log_tag} No return_url provided")
+            return {"error": "return_url is required"}, 400
+        
+        # Get token from database
+        from ..extensions.db import db
+        collection = db.get_collection("password_reset_tokens")
+        
+        token_doc = collection.find_one({
+            "token": reset_token,
+            "used": False,
+            "expires_at": {"$gt": datetime.utcnow()}
+        })
+        
+        if not token_doc:
+            Log.warning(f"{log_tag} Invalid or expired token")
+            query_params = {
+                "status": "Failed",
+                "message": "Password reset link is invalid or has expired"
+            }
+            return_url_payload = generate_return_url_with_payload(return_url, query_params)
+            return redirect(return_url_payload)
+        
+        # Get user details
+        email = token_doc.get("email")
+        user_id = token_doc.get("user_id")
+        
+        Log.info(f"{log_tag} Valid token found for email: {email}")
+        
+        # Get user to verify they still exist
+        user = User.get_by_email(email)
+        
+        if not user:
+            Log.warning(f"{log_tag} User not found for email: {email}")
+            query_params = {
+                "status": "Failed",
+                "message": "User account not found"
+            }
+            return_url_payload = generate_return_url_with_payload(return_url, query_params)
+            return redirect(return_url_payload)
+        
+        # Token is valid - redirect to frontend reset password form
+        Log.info(f"{log_tag} Token validated successfully, redirecting to reset form")
+        
+        query_params = {
+            "status": "Success",
+            "token": reset_token,
+            "email": email
+        }
+        return_url_payload = generate_return_url_with_payload(return_url, query_params)
+        
+        return redirect(return_url_payload)
+        
+    except Exception as e:
+        Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+        
+        query_params = {
+            "status": "Failed",
+            "message": "An error occurred processing your request"
+        }
+        return_url_payload = generate_return_url_with_payload(return_url, query_params)
+        return redirect(return_url_payload)
     
 # callback to update DR transaction and trigger DR creation
 def process_volume_transaction_callback():

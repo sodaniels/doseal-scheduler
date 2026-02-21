@@ -26,6 +26,7 @@ from ....schemas.login_schema import (
     LoginExecuteResponseSchema,
     LoginInitiateResponseSchema,
     ForgotPasswordInitiateSchema,
+    ResetPasswordSchema,
 )
 from ....schemas.social.change_password_schema import ChangePasswordSchema
 from ....schemas.social.email_verification_schema import BusinessEmailVerificationSchema
@@ -35,6 +36,7 @@ from ....models.business_model import Client, Token
 from ....models.user_model import User
 from ....models.admin.super_superadmin_model import Role
 from ....models.notifications.notification_settings import NotificationSettings
+from ....models.social.password_reset_token import PasswordResetToken
 
 
 from ....utils.logger import Log # import logging
@@ -61,7 +63,7 @@ from ....services.email_service import (
 
 from ....utils.generators import (
     generate_reset_token,
-    generate_confirm_email_token
+    generate_confirm_email_token,
 )
 
 from ....utils.helpers import (
@@ -79,6 +81,7 @@ from ....utils.rate_limits import (
 from ....utils.generators import generate_registration_verification_token
 from ....utils.helpers import resolve_target_business_id_from_payload
 from ....services.seeders.social_role_seeder import SocialRoleSeeder
+from ....utils.url_utils import generate_forgot_password_token
 
 SECRET_KEY = os.getenv("SECRET_KEY") 
 
@@ -1443,19 +1446,19 @@ class LogoutResource(MethodView):
 #-------------------------------------------------------
 # FORGOT PASSWORD INITIATE
 #-------------------------------------------------------
-@blp_business_auth.route("/auth/forgot-password/initiate", methods=["POST"])
+@blp_business_auth.route("/auth/forgot-password", methods=["POST"])
 class ForgotPasswordInitiateResource(MethodView):
     @login_ip_limiter("forgot-password")
     @login_user_limiter("forgot-password")
     @blp_business_auth.arguments(ForgotPasswordInitiateSchema, location="form")
-    @blp_business_auth.response(200, ForgotPasswordInitiateSchema)
+    @blp_business_auth.response(200)
     @blp_business_auth.doc(
-        summary="Login (Step 1): Initiate OTP",
+        summary="Forgot Password: Initiate Reset",
         description=(
-            "Step 1 of login.\n\n"
-            "Validates email + password, then sends a 6-digit OTP to the user's email.\n"
-            "OTP expires in 5 minutes.\n\n"
-            "Step 2: Call `/auth/login/execute` with email + otp."
+            "Initiates password reset process.\n\n"
+            "Validates email and sends a password reset link to the user's email.\n"
+            "Reset link expires in 5 minutes.\n\n"
+            "Next step: User clicks link in email and provides new password."
         ),
         parameters=[
             {
@@ -1477,36 +1480,36 @@ class ForgotPasswordInitiateResource(MethodView):
             "required": True,
             "content": {
                 "application/x-www-form-urlencoded": {
-                    "schema": LoginInitiateSchema,
+                    "schema": ForgotPasswordInitiateSchema,
                     "example": {
                         "email": "johndoe@example.com",
-                        "password": "SecurePass123"
+                        "return_url": "https://app.example.com/reset-password"
                     }
                 }
             }
         },
         responses={
             200: {
-                "description": "OTP sent to email",
+                "description": "Reset link sent to email",
                 "content": {
                     "application/json": {
                         "example": {
                             "success": True,
                             "status_code": 200,
-                            "message": "OTP has been sent to email",
-                            "message_to_show": "We sent an OTP to your email address. Please provide it to proceed."
+                            "message": "Password reset link sent to email",
+                            "message_to_show": "We sent a password reset link to your email address. Please check your email and click on the link to proceed."
                         }
                     }
                 },
             },
             401: {
-                "description": "Unauthorized (invalid app key OR invalid email/password OR revoked access)",
+                "description": "Unauthorized (invalid app key OR email not found)",
                 "content": {
                     "application/json": {
                         "example": {
                             "success": False,
                             "status_code": 401,
-                            "message": "Invalid email or password"
+                            "message": "Email address does not exist"
                         }
                     }
                 },
@@ -1530,81 +1533,355 @@ class ForgotPasswordInitiateResource(MethodView):
                         "example": {
                             "success": False,
                             "status_code": 500,
-                            "message": "Internal error"
+                            "message": "Failed to send password reset email"
                         }
                     }
                 },
             },
         },
     )
-    
     def post(self, item_data):
-        client_ip = request.remote_addr
-        log_tag = '[admin_business_resource.py][ForgotPasswordInitiateResource][post]'
-        Log.info(f"{log_tag} [{client_ip}][{item_data['email']}] initiating forgot password request")
+        """Initiate forgot password process."""
         
         client_ip = request.remote_addr
-    
-        # Check if x-app-ky header is present and valid
+        email = item_data.get("email")
+        
+        log_tag = f'[admin_business_resource.py][ForgotPasswordInitiateResource][post][{client_ip}][{email}]'
+        Log.info(f"{log_tag} Initiating forgot password request")
+        
+        # Check x-app-key header
         app_key = request.headers.get('x-app-key')
         server_app_key = os.getenv("X_APP_KEY")
         
         if app_key != server_app_key:
-            Log.info(f"{log_tag} [{client_ip}] invalid x-app-key header")
-            response = {
-                "success": False,
-                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
-                "message": "Unauthorized request."
-            }
-            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
-        
-        email = item_data.get("email")
-    
-        # Check if the user exists based on email
-        user = User.get_user_by_email(email)
-        if user is None:
-           Log.info(f"{log_tag} [{client_ip}][{email}]: Email address does not exist")
-           return prepared_response(
+            Log.warning(f"{log_tag} Invalid x-app-key header")
+            return prepared_response(
                 False,
                 "UNAUTHORIZED",
-                "Email address does not exist",
+                "Unauthorized request"
+            )
+        
+        try:
+            # Check if user exists
+            user = User.get_user_by_email(email)
+            
+            if user is None:
+                Log.warning(f"{log_tag} Email address does not exist")
+                # Security: Return success even if email doesn't exist
+                # to prevent email enumeration attacks
+                return jsonify(
+                    success=True,
+                    status_code=200,
+                    message="If an account exists with this email, a reset link has been sent.",
+                    message_to_show="If an account exists with this email, you will receive a password reset link shortly."
+                ), 200
+            
+            # Get return URL (frontend reset password page)
+            return_url = item_data.get("return_url") or os.getenv("FRONT_END_BASE_URL") + '/reset-password'
+            
+            # Create password reset token (5 minutes expiry)
+            success, reset_token, error = PasswordResetToken.create_token(
+                email=email,
+                user_id=user.get("_id"),
+                business_id=str(user.get("business_id")),
+                expiry_minutes=5
+            )
+            
+            if not success:
+                Log.error(f"{log_tag} Failed to create reset token: {error}")
+                return prepared_response(
+                    False,
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to initiate password reset"
+                )
+            
+            # Generate full reset URL with token
+            reset_url = generate_forgot_password_token(return_url, reset_token)
+            
+            # Get user details
+            fullname = decrypt_data(user.get("fullname")) if user.get("fullname") else None
+            
+            Log.info(f"{log_tag} Sending password reset email")
+            
+            # Send email
+            email_result = send_forgot_password_email(
+                email=email,
+                reset_url=reset_url,
+                fullname=fullname if fullname else email,
+                ip_address=client_ip,
+                user_agent=request.headers.get("User-Agent", "Unknown")
+            )
+            
+            Log.info(f"{log_tag} Email sending result: {email_result}")
+            
+            if email_result.get("ok"):
+                Log.info(f"{log_tag} Password reset email sent successfully")
+                return jsonify(
+                    success=True,
+                    status_code=200,
+                    message="Password reset link sent to email",
+                    message_to_show="We sent a password reset link to your email address. Please check your email and click on the link to proceed. The link will expire in 5 minutes."
+                ), 200
+            else:
+                Log.error(f"{log_tag} Email sending failed: {email_result.get('error')}")
+                return prepared_response(
+                    False,
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to send password reset email"
+                )
+                
+        except Exception as e:
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            return prepared_response(
+                False,
+                "INTERNAL_SERVER_ERROR",
+                "An error occurred processing your request"
             )
 
+#-------------------------------------------------------
+# RESET PASSWORD (Callback from Email Link)
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/reset-password/callback", methods=["GET"])
+class ResetPasswordCallback(MethodView):
+    """Handle password reset callback from email link."""
+    
+    @blp_business_auth.doc(
+        summary="Password Reset Callback",
+        description=(
+            "Validates the reset token from email link and redirects to frontend.\n\n"
+            "This endpoint is called when user clicks the reset link in their email.\n"
+            "It validates the token and redirects to the frontend reset password form."
+        ),
+        parameters=[
+            {
+                "in": "query",
+                "name": "token",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Password reset token from email",
+            },
+            {
+                "in": "query",
+                "name": "return_url",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Frontend URL to redirect after validation",
+            }
+        ],
+        responses={
+            302: {
+                "description": "Redirect to frontend with status",
+            },
+        },
+    )
+    def get(self):
+        """Validate token and redirect to frontend."""
+        
+        from flask import redirect
+        from ....utils.url_utils import generate_return_url_with_payload
+        
+        client_ip = request.remote_addr
+        reset_token = request.args.get('token')
+        return_url = request.args.get('return_url') or os.getenv("FRONT_END_BASE_URL") + '/reset-password'
+        
+        log_tag = f"[admin_business_resource.py][ResetPasswordCallback][get][{client_ip}]"
+        
         try:
-            return_url= item_data.get("return_url") or os.getenv("FRONT_END_BASE_URL") + '/reset-password'
-            token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
-            reset_token = generate_confirm_email_token(return_url, token)
-
-            update_code = User.update_auth_code(email, token)
+            Log.info(f"{log_tag} Password reset callback received")
             
-            fullname = decrypt_data(user.get("fullname"))
+            # Validate required parameters
+            if not reset_token:
+                Log.warning(f"{log_tag} No token provided")
+                query_params = {
+                    "status": "Failed",
+                    "message": "Invalid reset link - no token provided"
+                }
+                return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+                return redirect(return_url_with_params)
             
-            if update_code:
-                Log.info(f"{log_tag}\t reset_token: {reset_token}")
-                try:
-                    result = send_forgot_password_email(
-                        email=email, 
-                        reset_token=reset_token,
-                        fullname=fullname if fullname else email,
-                        ip_address=request.remote_addr,
-                        user_agent=request.headers.get("User-Agent"),
-                    )
-                    Log.info(f"Email sent result={result}")
-                    if result.get("ok"):
-                        return jsonify(
-                            success=True,
-                            status_code=200,
-                            message="A link to reset your password has been sent to your email address.",
-                            message_to_show="We sent a password reset link to your email address. Please check your email and click on the link to proceed."
-                        )
-                except Exception as e:
-                    Log.error(f"Email sending failed: {e}")
-                    return prepared_response(False, "INTERNAL_SERVER_ERROR", f"Email sending failed: {str(e)}")
-            else:
-                Log.info(f"{log_tag} Failed to update auth code for email: {email}")
-                return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to initiate forgot password process.")
+            # Validate token
+            token_data = PasswordResetToken.validate_token(reset_token)
+            
+            if not token_data:
+                Log.warning(f"{log_tag} Invalid or expired token")
+                query_params = {
+                    "status": "Failed",
+                    "message": "Password reset link is invalid or has expired. Please request a new one."
+                }
+                return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+                return redirect(return_url_with_params)
+            
+            # Get user to verify they still exist
+            email = token_data.get("email")
+            user = User.get_user_by_email(email)
+            
+            if not user:
+                Log.warning(f"{log_tag} User not found for email: {email}")
+                query_params = {
+                    "status": "Failed",
+                    "message": "User account not found"
+                }
+                return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+                return redirect(return_url_with_params)
+            
+            # Token is valid - redirect to frontend with token
+            Log.info(f"{log_tag} Token validated successfully for email: {email}")
+            
+            query_params = {
+                "status": "Success",
+                "token": reset_token,
+                "email": email
+            }
+            return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+            
+            return redirect(return_url_with_params)
+            
         except Exception as e:
-            Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
             
+            query_params = {
+                "status": "Failed",
+                "message": "An error occurred processing your request"
+            }
+            return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+            return redirect(return_url_with_params)
+
+
+#-------------------------------------------------------
+# RESET PASSWORD (Execute)
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/reset-password", methods=["POST"])
+class ResetPasswordExecute(MethodView):
+    """Execute password reset with new password."""
+    
+    @login_ip_limiter("reset-password")
+    @blp_business_auth.arguments(ResetPasswordSchema, location="form")
+    @blp_business_auth.response(200)
+    @blp_business_auth.doc(
+        summary="Reset Password: Execute",
+        description=(
+            "Executes password reset with new password.\n\n"
+            "User provides the reset token (from email) and their new password.\n"
+            "Token is validated and password is updated if valid."
+        ),
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": ResetPasswordSchema,
+                    "example": {
+                        "token": "xxxxxxxxxxxxxxxxxxxxx",
+                        "password": "NewSecurePass123"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "Password reset successful",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Password reset successful"
+                        }
+                    }
+                },
+            },
+            400: {
+                "description": "Invalid token or weak password",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid or expired reset token"
+                        }
+                    }
+                },
+            },
+            500: {
+                "description": "Internal server error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "Failed to update password"
+                        }
+                    }
+                },
+            },
+        },
+    )
+    def post(self, json_data):
+        """Reset user password with new password."""
         
+        client_ip = request.remote_addr
+        log_tag = f"[admin_business_resource.py][ResetPasswordExecute][post][{client_ip}]"
         
+        try:
+            token = json_data.get("token")
+            new_password = json_data.get("password")
+            
+            Log.info(f"{log_tag} Password reset attempt")
+            
+            # Validate password strength
+            if len(new_password) < 8:
+                Log.warning(f"{log_tag} Password too short")
+                return prepared_response(
+                    False,
+                    "BAD_REQUEST",
+                    "Password must be at least 8 characters"
+                )
+            
+            # Validate token
+            token_data = PasswordResetToken.validate_token(token)
+            
+            if not token_data:
+                Log.warning(f"{log_tag} Invalid or expired token")
+                return prepared_response(
+                    False,
+                    "BAD_REQUEST",
+                    "Invalid or expired reset token. Please request a new password reset link."
+                )
+                
+            Log.info(f"{log_tag} token_data: {token_data}")
+            
+            # Get user details from token
+            # email = token_data.get("email")
+            user_id = token_data.get("user_id")
+            
+            # Update user password
+            success = User.update_password(user_id, new_password)
+            
+            if success:
+                # Mark token as used
+                PasswordResetToken.mark_token_used(token)
+                
+                Log.info(f"{log_tag} Password reset successful for user: {user_id}")
+                
+                # TODO: Send password changed confirmation email
+                # send_password_changed_email(email)
+                
+                return prepared_response(
+                    True,
+                    "OK",
+                    "Password reset successful. You can now log in with your new password."
+                )
+            else:
+                Log.error(f"{log_tag} Failed to update password for user: {user_id}")
+                return prepared_response(
+                    False,
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to update password. Please try again."
+                )
+                
+        except Exception as e:
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            return prepared_response(
+                False,
+                "INTERNAL_SERVER_ERROR",
+                "An error occurred while resetting your password"
+            )

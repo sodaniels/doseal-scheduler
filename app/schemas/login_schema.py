@@ -16,11 +16,35 @@ class LoginInitiateSchema(Schema):
     password = fields.Str(required=True, load_only=True, error_messages={"required": "password is required"})
 
 class ForgotPasswordInitiateSchema(Schema):
-    email = fields.Email(required=True, error_messages={"invalid": "Invalid email address"})
-    return_url = fields.Url(
-        required=False, 
+    """Schema for initiating forgot password."""
+    
+    email = fields.Email(
+        required=True,
+        error_messages={"required": "Email is required"}
+    )
+    
+    return_url = fields.Str(
+        required=False,
         allow_none=True,
-        error_messages={"invalid": "Invalid URL"}
+        load_default=None
+    )
+
+
+class ResetPasswordSchema(Schema):
+    """Schema for resetting password."""
+    
+    token = fields.Str(
+        required=True,
+        error_messages={"required": "Reset token is required"}
+    )
+    
+    password = fields.Str(
+        required=True,
+        validate=validate.Length(min=8),
+        error_messages={
+            "required": "Password is required",
+            "invalid": "Password must be at least 8 characters"
+        }
     )
 
 class LoginExecuteSchema(Schema):
