@@ -71,6 +71,8 @@ from ....models.admin.super_superadmin_model import (
 )
 from ....models.business_model import Business
 from ....models.user_model import User
+from ....utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
+
 
 blp_admin_role = Blueprint("Admin Role", __name__,  description="Admin Role Management")
 blp_admin_expense = Blueprint("Admin Expense", __name__,  description="Admin Expense Management")
@@ -1564,12 +1566,33 @@ class AdminResource(MethodView):
                 return prepared_response(False, "BAD_REQUEST", f"Error uploading image. {str(e)}")
 
         # ----------------- UNIQUENESS CHECKS (EMAIL, PHONE) ----------------- #
+        should_reserve_quota = False
         Log.info(f"{log_tag} [{client_ip}] checking if admin (email) already exists")
         if Admin.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):
             if actual_path:
                 os.remove(actual_path)
             Log.info(f"{log_tag} [{client_ip}] checking if admin (phone) already exists")    
             return prepared_response(False, "CONFLICT", "Admin account already exists")
+        else:
+            # If admin doesn't exist, we will proceed with the creation and reserve quota for it (if applicable)
+            should_reserve_quota = True
+            
+        # ---- PLAN ENFORCER ----
+        enforcer = QuotaEnforcer(target_business_id)
+
+        # ✅ Reserve quota ONLY if this is a brand new connection
+        if should_reserve_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="max_users",
+                    limit_key="max_users",
+                    qty=1,
+                    period="billing",
+                    reason="max_users:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} plan limit reached: {e.meta}")
+                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
 
         # Hash password before passing into Admin and User
@@ -1580,6 +1603,23 @@ class AdminResource(MethodView):
 
         # ----------------- CREATE ADMIN ----------------- #
         item = Admin(**item_data)
+        
+        
+        #check if business has addon users
+        try:
+            business_admins = Admin.get_by_business_id(target_business_id)
+            if business_admins and len(business_admins) > 0:
+                Log.info(f"{log_tag} business has {len(business_admins)} existing admin(s)")
+                for admin in business_admins:
+                    if admin.get("is_addon_user"):
+                        Log.info(f"{log_tag} found existing addon user: {admin.get('email')}")
+                        return prepared_response(
+                            False,
+                            "CONFLICT",
+                            "Cannot create new admin because this business already has an addon user."
+                        )
+        except Exception as e:
+            Log.info(f"{log_tag} error checking addon users: {e}")
 
         try:
             Log.info(f"{log_tag} [{client_ip}][{item_data['email']}][committing system user]")
@@ -1617,6 +1657,9 @@ class AdminResource(MethodView):
                     user_client_id = user.save()
                     Log.info(f"{log_tag} user_client_id: {user_client_id}")
             except Exception as e:
+                Log.info(f"{log_tag} Failed to upsert: {e}")
+                if should_reserve_quota:
+                    enforcer.release(counter_name="max_users", qty=1, period="billing")
                 Log.error(f"{log_tag}[{client_ip}][{system_user_id}] error creating User record: {str(e)}")
 
             if system_user_id is not None:
