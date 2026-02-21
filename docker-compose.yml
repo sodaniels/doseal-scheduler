@@ -25,13 +25,17 @@ services:
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379/0
 
-      APP_LOG_DIR: /app/storage/logs
+      # ✅ Ollama (IMPORTANT)
+      OLLAMA_HOST: http://ollama:11434
 
+      APP_LOG_DIR: /app/storage/logs
       PORT: 9090
 
     depends_on:
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_started
 
     command: >
       sh -c "
@@ -72,11 +76,16 @@ services:
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379/0
 
+      # ✅ Ollama
+      OLLAMA_HOST: http://ollama:11434
+
       APP_LOG_DIR: /app/storage/logs
 
     depends_on:
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_started
 
     command: >
       sh -c "rq worker publish --url redis://redis:6379/0"
@@ -94,19 +103,31 @@ services:
     build:
       context: .
       dockerfile: docker/app.Dockerfile
+
     env_file:
       - .env
+
     environment:
       REDIS_URL: redis://redis:6379/0
       REDIS_HOST: redis
       REDIS_PORT: 6379
+
+      # ✅ Ollama (if scheduler uses LLM jobs)
+      OLLAMA_HOST: http://ollama:11434
+
       APP_LOG_DIR: /app/storage/logs
+
     depends_on:
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_started
+
     command: >
       sh -c "rqscheduler --url redis://redis:6379/0"
+
     restart: always
+
 
   # ----------------------------
   # REDIS
@@ -129,5 +150,22 @@ services:
       retries: 30
 
 
+  # ----------------------------
+  # OLLAMA
+  # ----------------------------
+  ollama:
+    image: ollama/ollama
+    container_name: doseal_ollama
+
+    ports:
+      - "127.0.0.1:11434:11434"  # Optional: host access for debugging
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    restart: unless-stopped
+
+
 volumes:
   redis_data:
+  ollama_data:
