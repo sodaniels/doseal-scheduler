@@ -158,7 +158,7 @@ services:
     container_name: doseal_ollama
 
     ports:
-      - "127.0.0.1:11434:11434"  # Optional: host access for debugging
+      - "127.0.0.1:11434:11434"
 
     volumes:
       - ollama_data:/root/.ollama

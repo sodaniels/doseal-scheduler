@@ -271,42 +271,91 @@ class HFClient(BaseLLMClient):
 
 
 # ---------------------------------------------------------------------
-# Ollama (local)
+# Ollama (OpenAI-compatible API)
 # ---------------------------------------------------------------------
 @dataclass
 class OllamaClient(BaseLLMClient):
-    api_url: str = "http://localhost:11434"
-    model: str = "llama2"
+    api_url: str = "http://ollama:11434"  # Docker service name
+    model: str = "llama3.2"
     provider: str = "ollama"
 
-    def generate_text(self, *, system: str, prompt: str, trace_id: str, **kwargs) -> str:
+    def generate_text(
+        self,
+        *,
+        system: str,
+        prompt: str,
+        trace_id: str,
+        **kwargs,
+    ) -> str:
         timeout = int(kwargs.get("timeout", DEFAULT_TIMEOUT_SECONDS))
-        body = {
+
+        url = f"{self.api_url}/v1/chat/completions"
+
+        payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            "stream": False,
-            "options": kwargs.get("options", {}),
+            "temperature": kwargs.get("temperature", 0.2),
+        }
+
+        headers = {
+            "Content-Type": "application/json",
         }
 
         try:
-            resp = requests.post(f"{self.api_url}/api/chat", json=body, timeout=timeout)
+            resp = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=timeout,
+            )
+
+            # --- hard failure signals (important for debugging) ---
+            if resp.status_code == 404:
+                raise RuntimeError(
+                    f"Ollama endpoint not found: {url} "
+                    "(Is Ollama running with OpenAI-compatible API?)"
+                )
+
             resp.raise_for_status()
+
+            # --- content-type guard ---
+            if not resp.headers.get("content-type", "").startswith("application/json"):
+                raise RuntimeError(
+                    f"Ollama returned non-JSON response: {resp.text[:300]}"
+                )
+
             data = resp.json()
-            return (data.get("message", {}).get("content", "") or "").strip()
+
+            return (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
 
         except requests.exceptions.ConnectionError:
-            Log.error(f"[llm_router][{trace_id}][ollama] Cannot connect to {self.api_url}. Is Ollama running?")
-            return ""
-        except requests.exceptions.Timeout:
-            Log.warning(f"[llm_router][{trace_id}][ollama] Request timeout model={self.model}")
-            return ""
-        except Exception as e:
-            Log.warning(f"[llm_router][{trace_id}][ollama] request failed: {e}")
+            Log.error(
+                f"[llm_router][{trace_id}][ollama] "
+                f"Cannot connect to {self.api_url}. Is Ollama running?"
+            )
             return ""
 
+        except requests.exceptions.Timeout:
+            Log.warning(
+                f"[llm_router][{trace_id}][ollama] "
+                f"Request timeout model={self.model}"
+            )
+            return ""
+
+        except Exception as e:
+            Log.warning(
+                f"[llm_router][{trace_id}][ollama] generate_text failed: {e}",
+                exc_info=True,
+            )
+            return ""
 
 # ---------------------------------------------------------------------
 # Mock (Safe default)
