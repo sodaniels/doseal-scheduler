@@ -84,8 +84,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
+      # ollama:
+      #   condition: service_healthy
 
     command: >
       sh -c "rq worker publish --url redis://redis:6379/0"
