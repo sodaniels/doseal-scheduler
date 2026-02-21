@@ -59,10 +59,6 @@ https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oaut
 https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/pinterest/callback
 
 
-curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/facebook/start" \
+curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/instagram/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk5ODMzZTI5OWJlZjE0OTFmNWQ2MTFmIiwiZXhwIjoxNzcxODkwNTM4LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.QbDgonUEDq1P2QfUPJGpYyO3aL72GNUZSriXBzqp3H0"
-
-
-
-
 
