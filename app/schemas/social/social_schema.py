@@ -186,7 +186,11 @@ class PinterestAccountConnectionSchema(Schema):
         error_messages={"required": "Ad Account ID is required", "invalid": "Invalid DesAd Account ID"}
     )
    
-
+class PublicIdSchema(Schema):
+    public_id = fields.Str(
+        required=True,
+        error_messages={"required": "Public ID is required", "invalid": "Invalid Public ID"}
+    )
 
 
 
