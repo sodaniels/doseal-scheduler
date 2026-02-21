@@ -134,6 +134,7 @@ class FacebookOauthCallbackResource(MethodView):
         redirect_uri = _require_env("FACEBOOK_REDIRECT_URI", log_tag)
         if not redirect_uri:
             return jsonify({"success": False, "message": "FACEBOOK_REDIRECT_URI missing"}), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+        
 
         try:
             token_data = _exchange_code_for_token(code=code, redirect_uri=redirect_uri, log_tag=log_tag)

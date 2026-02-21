@@ -296,6 +296,7 @@ class XConnectAccountResource(MethodView):
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
         account_type = user_info.get("account_type")
 
         # Optional business override for system roles
@@ -321,6 +322,17 @@ class XConnectAccountResource(MethodView):
                 "success": False,
                 "message": "selection_key is required"
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=target_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         # key: x_select:<selection_key>
         raw = get_redis(f"x_select:{selection_key}")

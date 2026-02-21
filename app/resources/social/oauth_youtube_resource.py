@@ -216,6 +216,22 @@ class YouTubeChannelsResource(MethodView):
     def get(self):
         client_ip = request.remote_addr
         log_tag = f"[oauth_youtube_resource.py][YouTubeChannelsResource][get][{client_ip}]"
+        
+        user_info = g.get("current_user", {}) or {}
+        auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
+        account_type = user_info.get("account_type")
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=auth_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         selection_key = request.args.get("selection_key")
         if not selection_key:
@@ -272,7 +288,20 @@ class YouTubeConnectChannelResource(MethodView):
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
         account_type = user_info.get("account_type")
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=auth_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
+
 
         # Optional business override
         form_business_id = body.get("business_id")

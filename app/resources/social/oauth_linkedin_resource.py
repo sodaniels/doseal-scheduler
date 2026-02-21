@@ -303,7 +303,11 @@ class LinkedInOauthStartResource(MethodView):
         #####################PRE TRANSACTION CHECKS#########################
         
         # 1. check pre transaction requirements for agents
-        pre_check = PreProcessCheck(business_id=target_business_id, account_type=account_type, admin_id=admin_id)
+        pre_check = PreProcessCheck(
+            business_id=target_business_id, 
+            account_type=account_type, 
+            admin_id=admin_id
+        )
         initial_check_result = pre_check.initial_processs_checks()
         
         if initial_check_result is not None:

@@ -208,6 +208,11 @@ class WhatsAppPhoneNumbersResource(MethodView):
     def get(self):
         client_ip = request.remote_addr
         log_tag = f"[oauth_whatsapp_resource.py][WhatsAppPhoneNumbersResource][get][{client_ip}]"
+        
+        user_info = g.get("current_user", {}) or {}
+        admin_id = str(user_info.get("admin_id"))
+        account_type = user_info.get("account_type")
+        auth_business_id = str(user_info.get("business_id"))
 
         selection_key = request.args.get("selection_key")
         waba_id = request.args.get("waba_id")
@@ -226,6 +231,17 @@ class WhatsAppPhoneNumbersResource(MethodView):
         access_token = sel.get("access_token")
         if not access_token:
             return jsonify({"success": False, "message": "Missing access token in selection (reconnect)"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=auth_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         try:
             nums = WhatsAppAdapter.list_phone_numbers(access_token=access_token, waba_id=str(waba_id))
@@ -270,6 +286,7 @@ class WhatsAppConnectNumberResource(MethodView):
 
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
+        admin_id = str(user_info.get("admin_id"))
         auth_business_id = str(user_info.get("business_id"))
         account_type = user_info.get("account_type")
 
@@ -290,6 +307,17 @@ class WhatsAppConnectNumberResource(MethodView):
             auth_business_id,
             target_business_id
         )
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=auth_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         if not selection_key or not phone_number_id:
             return jsonify({

@@ -193,6 +193,22 @@ class PinterestBoardsResource(MethodView):
     def get(self):
         client_ip = request.remote_addr
         log_tag = f"[oauth_pinterest_resource.py][PinterestBoardsResource][get][{client_ip}]"
+        
+        user_info = g.get("current_user", {}) or {}
+        auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
+        account_type = user_info.get("account_type")
+        
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=auth_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         selection_key = request.args.get("selection_key")
         if not selection_key:
@@ -237,7 +253,10 @@ class PinterestConnectBoardResource(MethodView):
         user_info = g.get("current_user", {}) or {}
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
+        admin_id = str(user_info.get("admin_id"))
         account_type = user_info.get("account_type")
+        
+        
 
         # Optional business override for system roles
         form_business_id = body.get("business_id")
@@ -262,6 +281,17 @@ class PinterestConnectBoardResource(MethodView):
                 "success": False,
                 "message": "selection_key and board_id are required"
             }), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+        ##################### PRE TRANSACTION CHECKS #########################
+        pre_check = PreProcessCheck(
+            business_id=auth_business_id,
+            account_type=account_type,
+            admin_id=admin_id
+        )
+        initial_check_result = pre_check.initial_processs_checks()
+        if initial_check_result is not None:
+            return initial_check_result
+        ##################### PRE TRANSACTION CHECKS #########################
 
         sel = _load_selection("pi", selection_key)
         if not sel:
