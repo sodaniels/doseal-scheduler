@@ -1494,6 +1494,8 @@ class AdminResource(MethodView):
         
         business = {}
         addon_users = 0
+        updated_message = None
+        updated_meta = None
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = item_data.get("business_id")
@@ -1609,37 +1611,38 @@ class AdminResource(MethodView):
                 Log.info(f"{log_tag} plan limit reached: {e.meta}")
 
                 # Check if business has addon users
-                allowed_addon_users = addon_users + 1  # the 1 is the default user that every business has
+                allowed_addon_users = addon_users  
                 
                 # ✅ Use the efficient count method instead of fetching all admins
                 current_admin_count = Admin.get_by_business_id_count(target_business_id)
                 
+                
                 Log.info(f"{log_tag} current_admin_count: {current_admin_count}, allowed_addon_users: {allowed_addon_users}")
-                
-                
-                # Check if admin count exceeds allowed addon users
-                if current_admin_count >= allowed_addon_users:
-                    Log.info(f"{log_tag} admin count exceeds allowed addon users: {current_admin_count} >= {allowed_addon_users}")
                     
-                    # Update the error meta with correct current and limit values
-                    updated_meta = e.meta.copy() if e.meta else {}
-                    updated_meta["current"] = current_admin_count
-                    updated_meta["limit"] = allowed_addon_users
-                    updated_meta["addon_users"] = addon_users
-                    updated_meta["base_users"] = 1  # Default user every business has
-                    
-                    # Update message to reflect addon users
-                    updated_message = f"User limit reached. You have {current_admin_count} of {allowed_addon_users} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
-                    
-                    if actual_path:
-                        os.remove(actual_path)
-                    
-                    return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
+                if current_admin_count < allowed_addon_users:  # Allow creation if within addon limits (current count includes the new admin being created)
+                    pass
                 else:
-                    # Business has addon users available, allow creation to proceed
-                    Log.info(f"{log_tag} addon users available: {current_admin_count} < {allowed_addon_users}, proceeding with creation")
-                
-                return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
+                    # Check if admin count exceeds allowed addon users
+                    if current_admin_count >= allowed_addon_users:
+                        Log.info(f"{log_tag} admin count exceeds allowed addon users: {current_admin_count} >= {allowed_addon_users}")
+                        
+                        # Update the error meta with correct current and limit values
+                        updated_meta = e.meta.copy() if e.meta else {}
+                        updated_meta["current"] = current_admin_count + 1
+                        updated_meta["limit"] = allowed_addon_users + 1
+                        updated_meta["addon_users"] = addon_users
+                        updated_meta["base_users"] = 1  # Default user every business has
+                        
+                        # Update message to reflect addon users
+                        updated_message = f"User limit reached. You have {current_admin_count} of {allowed_addon_users} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
+                        
+                        if actual_path:
+                            os.remove(actual_path)
+                        
+                        return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
+                    
+                    
+                    return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         # ----------------- HASH PASSWORD ----------------- #
         item_data["password"] = bcrypt.hashpw(

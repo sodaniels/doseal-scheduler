@@ -1127,7 +1127,7 @@ class Admin(BaseModel):
         }
 
     @classmethod
-    def get_by_business_id_count(cls, business_id: str) -> int:
+    def get_by_business_id_count(cls, business_id: str, include_owner: bool = True) -> int:
         """
         Count the number of admins for a business.
         
@@ -1136,23 +1136,36 @@ class Admin(BaseModel):
         
         Args:
             business_id: The business ID to count admins for
+            include_owner: If True, count all admins including business owner.
+                        If False, only count admins with created_by field.
         
         Returns:
             int: Number of admins for the business
         """
         try:
             business_id_obj = ObjectId(business_id)
-        except Exception:
+        except Exception as e:
+            Log.error(f"[super_superadmin_model.py][get_by_business_id_count] invalid business_id: {business_id}, error: {e}")
             return 0
 
         try:
             collection = db.get_collection(cls.collection_name)
-            count = collection.count_documents({"business_id": business_id_obj})
+            
+            query = {"business_id": business_id_obj}
+            
+            # If not including owner, only count admins that were created by someone
+            if not include_owner:
+                query["created_by"] = {"$exists": True, "$type": "objectId"}
+            
+            count = collection.count_documents(query)
+            
+            Log.info(f"[super_superadmin_model.py][get_by_business_id_count] business_id={business_id}, include_owner={include_owner}, count={count}")
+            
             return count
         except Exception as e:
-            Log.error(f"[Admin.get_by_business_id_count] error counting admins: {e}")
+            Log.error(f"[super_superadmin_model.py][get_by_business_id_count] error counting admins: {e}")
             return 0
-    
+        
     @classmethod
     def update(cls, system_user_id: str, **updates):
         updates["updated_at"] = datetime.now()
