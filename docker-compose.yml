@@ -77,7 +77,7 @@ services:
       REDIS_URL: redis://redis:6379/0
 
       # ✅ Ollama
-      OLLAMA_HOST: http://ollama:11434
+      # OLLAMA_HOST: http://ollama:11434
 
       APP_LOG_DIR: /app/storage/logs
 
