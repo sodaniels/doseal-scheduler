@@ -26,7 +26,7 @@ services:
       REDIS_URL: redis://redis:6379/0
 
       # ✅ Ollama (Docker-internal hostname)
-      OLLAMA_HOST: http://ollama:11434
+      # OLLAMA_HOST: http://ollama:11434
 
       APP_LOG_DIR: /app/storage/logs
       PORT: 9090
@@ -34,8 +34,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
+      # ollama:
+      #   condition: service_healthy
 
     command: >
       sh -c "
