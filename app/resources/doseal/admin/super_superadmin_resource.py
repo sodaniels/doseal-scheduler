@@ -69,6 +69,7 @@ from ....schemas.admin.setup_schema import BusinessIdAndUserIdQuerySchema
 from ....models.admin.super_superadmin_model import (
     Role, Expense, Admin
 )
+from ....models.admin.subscription_model import Subscription
 from ....models.business_model import Business
 from ....models.user_model import User
 from ....utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
@@ -1490,6 +1491,9 @@ class AdminResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
         account_type = account_type_enc if account_type_enc else None
+        
+        business = {}
+        addon_users = 0
 
         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = item_data.get("business_id")
@@ -1515,11 +1519,14 @@ class AdminResource(MethodView):
             target_business_id,
         )
 
-        # ----------------- BUSINESS / TENANT RESOLUTION ----------------- #
-        business = Business.get_business_by_id(target_business_id)
-        if not business:
-            Log.info(f"{log_tag} Could not retrieve business information")
-            return prepared_response(False, "BAD_REQUEST", "Could not retrieve business information.")
+        try:
+            # ----------------- BUSINESS / TENANT RESOLUTION ----------------- #
+            business = Business.get_business_by_id(target_business_id)
+            if not business:
+                Log.info(f"{log_tag} Could not retrieve business information")
+                return prepared_response(False, "BAD_REQUEST", "Could not retrieve business information.")
+        except Exception as e:
+            Log.info(f"{log_tag} error in pre-validation: {e}")
 
         tenant_id_encrypted = business.get("tenant_id")
         tenant_id = decrypt_data(tenant_id_encrypted)
@@ -1576,8 +1583,16 @@ class AdminResource(MethodView):
         else:
             # If admin doesn't exist, we will proceed with the creation and reserve quota for it (if applicable)
             should_reserve_quota = True
+        
+        # ----------------- GET SUBSCRIPTION & ADDON USERS ----------------- #
+        try:
+            business_subscription = Subscription.get_active_by_business(target_business_id)
+            if business_subscription:
+                addon_users = int(business_subscription.get("addon_users") or 0)
+        except Exception as e:
+            Log.info(f"{log_tag} error getting subscription: {e}")
             
-        # ---- PLAN ENFORCER ----
+        # ----------------- PLAN ENFORCER ----------------- #
         enforcer = QuotaEnforcer(target_business_id)
 
         # ✅ Reserve quota ONLY if this is a brand new connection
@@ -1592,10 +1607,41 @@ class AdminResource(MethodView):
                 )
             except PlanLimitError as e:
                 Log.info(f"{log_tag} plan limit reached: {e.meta}")
-                return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
+                # Check if business has addon users
+                allowed_addon_users = addon_users + 1  # the 1 is the default user that every business has
+                
+                # ✅ Use the efficient count method instead of fetching all admins
+                current_admin_count = Admin.get_by_business_id_count(target_business_id)
+                
+                Log.info(f"{log_tag} current_admin_count: {current_admin_count}, allowed_addon_users: {allowed_addon_users}")
+                
+                
+                # Check if admin count exceeds allowed addon users
+                if current_admin_count >= allowed_addon_users:
+                    Log.info(f"{log_tag} admin count exceeds allowed addon users: {current_admin_count} >= {allowed_addon_users}")
+                    
+                    # Update the error meta with correct current and limit values
+                    updated_meta = e.meta.copy() if e.meta else {}
+                    updated_meta["current"] = current_admin_count
+                    updated_meta["limit"] = allowed_addon_users
+                    updated_meta["addon_users"] = addon_users
+                    updated_meta["base_users"] = 1  # Default user every business has
+                    
+                    # Update message to reflect addon users
+                    updated_message = f"User limit reached. You have {current_admin_count} of {allowed_addon_users} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
+                    
+                    if actual_path:
+                        os.remove(actual_path)
+                    
+                    return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
+                else:
+                    # Business has addon users available, allow creation to proceed
+                    Log.info(f"{log_tag} addon users available: {current_admin_count} < {allowed_addon_users}, proceeding with creation")
+                
+                return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
 
-        # Hash password before passing into Admin and User
+        # ----------------- HASH PASSWORD ----------------- #
         item_data["password"] = bcrypt.hashpw(
             item_data["password"].encode("utf-8"),
             bcrypt.gensalt()
@@ -1603,23 +1649,6 @@ class AdminResource(MethodView):
 
         # ----------------- CREATE ADMIN ----------------- #
         item = Admin(**item_data)
-        
-        
-        #check if business has addon users
-        try:
-            business_admins = Admin.get_by_business_id(target_business_id)
-            if business_admins and len(business_admins) > 0:
-                Log.info(f"{log_tag} business has {len(business_admins)} existing admin(s)")
-                for admin in business_admins:
-                    if admin.get("is_addon_user"):
-                        Log.info(f"{log_tag} found existing addon user: {admin.get('email')}")
-                        return prepared_response(
-                            False,
-                            "CONFLICT",
-                            "Cannot create new admin because this business already has an addon user."
-                        )
-        except Exception as e:
-            Log.info(f"{log_tag} error checking addon users: {e}")
 
         try:
             Log.info(f"{log_tag} [{client_ip}][{item_data['email']}][committing system user]")
@@ -1689,7 +1718,6 @@ class AdminResource(MethodView):
                 "An unexpected error occurred.",
                 errors=str(e),
             )
-
     # ---------------------- GET SINGLE ADMIN (role-aware) ---------------------- #
     @crud_read_limiter("admin")
     @token_required

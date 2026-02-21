@@ -16,14 +16,36 @@ from ...constants.service_code import (
 )
 from ...constants.social_role_permissions import PERMISSION_FIELDS_FOR_ADMIN_ROLE
 
+
+# =========================================
+# HELPER FUNCTIONS FOR PERMISSIONS
+# =========================================
+
 def _zero_permissions_for_module(module_name: str) -> Dict[str, str]:
     """
     Dynamic "zero permission" generator based on PERMISSION_FIELDS_FOR_ADMIN_ROLE.
+    Returns a dict format: {"read":"0","create":"0","update":"0","delete":"0",...}
+    
     Example:
-      scheduled_posts -> {"read":"0","create":"0","update":"0","delete":"0","cancel":"0"}
+      scheduledposts -> {"read":"0","create":"0","update":"0","delete":"0","cancel":"0"}
     """
     actions = PERMISSION_FIELDS_FOR_ADMIN_ROLE.get(module_name) or []
     return {a: "0" for a in actions}
+
+
+def _zero_permission_for(field: str) -> List[Dict[str, str]]:
+    """
+    Dynamic "zero permission" generator that returns list-of-dicts format
+    (for backward compatibility with existing code).
+    
+    Example:
+      scheduledposts -> [{"read":"0","create":"0","update":"0","delete":"0","approve":"0","cancel":"0","publish":"0"}]
+    """
+    actions = PERMISSION_FIELDS_FOR_ADMIN_ROLE.get(field) or []
+    if not actions:
+        return [{}]
+    return [{a: "0" for a in actions}]
+
 
 def _decrypt_permissions_field(
     *,
@@ -64,11 +86,28 @@ def _decrypt_permissions_field(
             out[action] = decrypt_data(enc_val) if enc_val else "0"
         return out
 
-    # not stored
+    # not stored - return zero permissions
     return _zero_permissions_for_module(module_name)
 
-
-
+def _stringify_object_ids(doc: dict) -> dict:
+        """Recursively convert all ObjectId values in a document to strings."""
+        for key, value in doc.items():
+            if isinstance(value, ObjectId):
+                doc[key] = str(value)
+            elif isinstance(value, dict):
+                doc[key] = _stringify_object_ids(value)
+            elif isinstance(value, list):
+                doc[key] = [
+                    _stringify_object_ids(item) if isinstance(item, dict)
+                    else str(item) if isinstance(item, ObjectId)
+                    else item
+                    for item in value
+                ]
+        return doc
+    
+# =========================================
+# ROLE MODEL
+# =========================================
 class Role(BaseModel):
     collection_name = "roles"
 
@@ -88,19 +127,10 @@ class Role(BaseModel):
     ):
         """
         Role model with encrypted core fields and optional permission fields.
-
-        ✅ Only permission fields explicitly provided in kwargs (matching
-        PERMISSION_FIELDS_FOR_ADMINS) are stored.
-
-        Why:
-          - Avoid storing huge permission payloads full of zeros in Mongo.
-          - You return "zero permissions" dynamically at read time for fields not stored.
         """
-        # Normalise admin_id / created_by to ObjectId where present
         admin_id_obj = ObjectId(admin_id) if admin_id else None
         created_by_obj = ObjectId(created_by) if created_by else None
 
-        # Call BaseModel with raw fields
         super().__init__(
             business_id,
             user_id,
@@ -114,7 +144,6 @@ class Role(BaseModel):
             updated_at=updated_at,
         )
 
-        # ----------------- Encrypt scalar fields ----------------- #
         self.name = encrypt_data(name)
         self.hashed_name = hash_data(name)
 
@@ -123,9 +152,6 @@ class Role(BaseModel):
 
         self.status = encrypt_data(status) if status is not None else None
 
-        # ----------------- Permission fields ----------------- #
-        # Only store permission fields that are explicitly given in kwargs.
-        # (We do NOT store ZERO_PERMISSION defaults here; they are used only at read time.)
         for field in PERMISSION_FIELDS_FOR_ADMINS:
             if field in kwargs and kwargs[field] is not None:
                 perm_list = kwargs[field] or []
@@ -141,10 +167,6 @@ class Role(BaseModel):
         self.updated_at = updated_at or datetime.now()
 
     def to_dict(self):
-        """
-        Convert the Role object to a dictionary representation (encrypted fields).
-        Only includes permission fields that exist on the instance.
-        """
         role_dict = super().to_dict()
         role_dict.update(
             {
@@ -160,26 +182,14 @@ class Role(BaseModel):
             }
         )
 
-        # Only include permission fields that are actually set on this instance
         for field in PERMISSION_FIELDS_FOR_ADMINS:
             if hasattr(self, field):
                 role_dict[field] = getattr(self, field)
 
         return role_dict
 
-    # -------------------------------------------------
-    # GET BY ID (business-scoped)
-    # -------------------------------------------------
     @classmethod
     def get_by_id(cls, role_id, business_id, is_logging_in=None):
-        """
-        Retrieve a role by _id and business_id (business-scoped),
-        decrypting fields and expanding permissions.
-
-        NOTE:
-          - If a permission field was NOT stored in Mongo, we return
-            a "zero permission" structure based on PERMISSION_FIELDS_FOR_ADMIN_ROLE.
-        """
         try:
             role_id_obj = ObjectId(role_id)
             business_id_obj = ObjectId(business_id)
@@ -190,7 +200,6 @@ class Role(BaseModel):
         if not data:
             return None
 
-        # Normalise IDs
         if "_id" in data:
             data["_id"] = str(data["_id"])
         if "business_id" in data:
@@ -204,12 +213,10 @@ class Role(BaseModel):
         if "created_by" in data and data["created_by"] is not None:
             data["created_by"] = str(data["created_by"])
 
-        # Decrypt scalar fields
         name = decrypt_data(data["name"]) if data.get("name") else None
         email = decrypt_data(data["email"]) if data.get("email") else None
         status = decrypt_data(data["status"]) if data.get("status") else None
 
-        # Permissions (dynamic ZERO permissions)
         permissions = {}
         for field in PERMISSION_FIELDS_FOR_ADMINS:
             encrypted_permissions = data.get(field)
@@ -221,7 +228,6 @@ class Role(BaseModel):
             else:
                 permissions[field] = _zero_permission_for(field)
 
-        # Clean up internal fields
         data.pop("hashed_name", None)
         data.pop("hashed_email", None)
         data.pop("agent_id", None)
@@ -239,25 +245,16 @@ class Role(BaseModel):
             "updated_at": data.get("updated_at"),
         }
 
-    # -------------------------------------------------
-    # GET BY BUSINESS ID (with pagination)
-    # -------------------------------------------------
     @classmethod
     def get_by_business_id(cls, business_id, page=None, per_page=None):
-        """
-        Retrieve roles for a business (paginated), decrypting fields and expanding permissions.
-        Only roles with created_by present are included.
-        """
         payload = super().get_by_business_id(business_id, page, per_page)
         processed = []
 
         for r in payload.get("items", []):
-            # Require created_by to be present (keeps "real roles")
             created_by_val = r.get("created_by")
             if created_by_val is None:
                 continue
 
-            # Normalise IDs
             if "_id" in r:
                 r["_id"] = str(r["_id"])
             if "business_id" in r:
@@ -271,12 +268,10 @@ class Role(BaseModel):
             if "created_by" in r and r["created_by"] is not None:
                 r["created_by"] = str(r["created_by"])
 
-            # Decrypt scalar fields
             name = decrypt_data(r["name"]) if r.get("name") else None
             email = decrypt_data(r["email"]) if r.get("email") else None
             status = decrypt_data(r["status"]) if r.get("status") else None
 
-            # Permissions
             permissions = {}
             for field in PERMISSION_FIELDS_FOR_ADMINS:
                 encrypted_permissions = r.get(field)
@@ -307,14 +302,8 @@ class Role(BaseModel):
         payload.pop("items", None)
         return payload
 
-    # -------------------------------------------------
-    # GET BY USER + BUSINESS (with pagination)
-    # -------------------------------------------------
     @classmethod
     def get_by_user__id_and_business_id(cls, user__id, business_id, page=None, per_page=None):
-        """
-        Retrieve roles created by a specific user within a business (paginated).
-        """
         payload = super().get_all_by_user__id_and_business_id(
             user__id=user__id,
             business_id=business_id,
@@ -325,7 +314,6 @@ class Role(BaseModel):
         processed = []
 
         for r in payload.get("items", []):
-            # Normalise IDs
             if "_id" in r:
                 r["_id"] = str(r["_id"])
             if "business_id" in r:
@@ -339,12 +327,10 @@ class Role(BaseModel):
             if "created_by" in r and r["created_by"] is not None:
                 r["created_by"] = str(r["created_by"])
 
-            # Decrypt scalar fields
             name = decrypt_data(r["name"]) if r.get("name") else None
             email = decrypt_data(r["email"]) if r.get("email") else None
             status = decrypt_data(r["status"]) if r.get("status") else None
 
-            # Permissions
             permissions = {}
             for field in PERMISSION_FIELDS_FOR_ADMINS:
                 encrypted_permissions = r.get(field)
@@ -375,9 +361,6 @@ class Role(BaseModel):
         payload.pop("items", None)
         return payload
 
-    # -------------------------------------------------
-    # EXISTING CHECK METHODS
-    # -------------------------------------------------
     @classmethod
     def check_item_exists(cls, admin_id, key, value):
         try:
@@ -418,15 +401,8 @@ class Role(BaseModel):
             Log.info(f"[Role.check_role_exists] error: {e}")
             return False
 
-    # -------------------------------------------------
-    # UPDATE
-    # -------------------------------------------------
     @classmethod
     def update(cls, role_id, **updates):
-        """
-        Update a role by role_id, re-encrypting changed fields and
-        updating hashes + permissions.
-        """
         updates["updated_at"] = datetime.now()
 
         if "name" in updates:
@@ -444,7 +420,6 @@ class Role(BaseModel):
                 encrypt_data(updates["status"]) if updates["status"] is not None else None
             )
 
-        # Permission fields – only re-encrypt if present in update payload
         for key in PERMISSION_FIELDS_FOR_ADMINS:
             if key in updates:
                 perm_list = updates[key] or []
@@ -454,21 +429,14 @@ class Role(BaseModel):
                         for item in perm_list
                     ]
                 else:
-                    # If explicitly passed as empty list, store None to "clear" it
                     updates[key] = None
 
         Log.info(f"[Role.update] updates: {updates}")
 
         return super().update(role_id, **updates)
 
-    # -------------------------------------------------
-    # DELETE (business-scoped)
-    # -------------------------------------------------
     @classmethod
     def delete(cls, role_id, business_id):
-        """
-        Delete a role by _id and business_id (business-scoped).
-        """
         try:
             role_id_obj = ObjectId(role_id)
             business_id_obj = ObjectId(business_id)
@@ -477,11 +445,13 @@ class Role(BaseModel):
 
         return super().delete(role_id_obj, business_id_obj)
 
-#-------------------------EXPENSE MODEL--------------------------------------
+
+# =========================================
+# EXPENSE MODEL
+# =========================================
 class Expense(BaseModel):
     """
-    An Expense represents an expense transaction in a business, including details such as the name, description,
-    category, date, amount, and status.
+    An Expense represents an expense transaction in a business.
     """
 
     collection_name = "expenses"
@@ -510,11 +480,9 @@ class Expense(BaseModel):
             status=status,
         )
 
-        # Core encrypted + hashed name
         self.name = encrypt_data(name)
         self.hashed_name = hash_data(name)
 
-        # Other encrypted fields
         self.description = encrypt_data(description)
         self.category = encrypt_data(category) if category else None
         self.date = encrypt_data(date)
@@ -525,9 +493,6 @@ class Expense(BaseModel):
         self.updated_at = datetime.now()
 
     def to_dict(self):
-        """
-        Convert the expense object to a dictionary representation.
-        """
         expense_dict = super().to_dict()
         expense_dict.update({
             "description": self.description,
@@ -540,15 +505,8 @@ class Expense(BaseModel):
         })
         return expense_dict
 
-    # ------------------------------------------------------------------
-    # QUERIES
-    # ------------------------------------------------------------------
-
     @classmethod
     def get_by_id(cls, expense_id, business_id):
-        """
-        Retrieve an expense by _id and business_id.
-        """
         try:
             expense_id_obj = ObjectId(expense_id)
             business_id_obj = ObjectId(business_id)
@@ -560,14 +518,12 @@ class Expense(BaseModel):
         if not data:
             return None
 
-        # Normalise IDs
         data["_id"] = str(data["_id"])
         if "business_id" in data:
             data["business_id"] = str(data["business_id"])
         if "user__id" in data:
             data["user__id"] = str(data["user__id"])
 
-        # Decrypt business fields
         data["name"] = decrypt_data(data["name"]) if data.get("name") else None
         data["description"] = decrypt_data(data["description"]) if data.get("description") else None
         data["category"] = decrypt_data(data["category"]) if data.get("category") else None
@@ -575,11 +531,9 @@ class Expense(BaseModel):
         data["amount"] = decrypt_data(data["amount"]) if data.get("amount") else None
         data["status"] = decrypt_data(data["status"]) if data.get("status") else None
 
-        # Timestamps are left as stored (datetime or ISO)
         data["created_at"] = data.get("created_at")
         data["updated_at"] = data.get("updated_at")
 
-        # Remove internal / sensitive fields
         data.pop("hashed_name", None)
         data.pop("agent_id", None)
         data.pop("admin_id", None)
@@ -588,10 +542,6 @@ class Expense(BaseModel):
 
     @classmethod
     def get_by_business_id(cls, business_id, page=None, per_page=None):
-        """
-        Retrieve expenses by business_id with pagination and decrypted fields.
-        Uses BaseModel.get_by_business_id(...) and post-processes the docs.
-        """
         payload = super().get_by_business_id(
             business_id=business_id,
             page=page,
@@ -600,7 +550,6 @@ class Expense(BaseModel):
         processed = []
 
         for expense in payload.get("items", []):
-            # Normalise IDs
             if "_id" in expense:
                 expense["_id"] = str(expense["_id"])
             if "business_id" in expense:
@@ -608,7 +557,6 @@ class Expense(BaseModel):
             if "user__id" in expense:
                 expense["user__id"] = str(expense["user__id"])
 
-            # Decrypt fields
             expense["name"] = decrypt_data(expense["name"]) if expense.get("name") else None
             expense["description"] = decrypt_data(expense["description"]) if expense.get("description") else None
             expense["category"] = decrypt_data(expense["category"]) if expense.get("category") else None
@@ -616,18 +564,15 @@ class Expense(BaseModel):
             expense["amount"] = decrypt_data(expense["amount"]) if expense.get("amount") else None
             expense["status"] = decrypt_data(expense["status"]) if expense.get("status") else None
 
-            # Timestamps
             expense["created_at"] = expense.get("created_at")
             expense["updated_at"] = expense.get("updated_at")
 
-            # Remove internal / sensitive fields
             expense.pop("hashed_name", None)
             expense.pop("agent_id", None)
             expense.pop("admin_id", None)
 
             processed.append(expense)
 
-        # Replace generic key with domain-specific one
         payload["expenses"] = processed
         payload.pop("items", None)
 
@@ -635,10 +580,6 @@ class Expense(BaseModel):
 
     @classmethod
     def get_by_user__id_and_business_id(cls, user__id, business_id, page=None, per_page=None):
-        """
-        Retrieve expenses by user__id and business_id with pagination and decrypted fields.
-        Uses BaseModel.get_all_by_user__id_and_business_id(...) and post-processes the docs.
-        """
         payload = super().get_all_by_user__id_and_business_id(
             user__id=user__id,
             business_id=business_id,
@@ -648,7 +589,6 @@ class Expense(BaseModel):
         processed = []
 
         for expense in payload.get("items", []):
-            # Normalise IDs
             if "_id" in expense:
                 expense["_id"] = str(expense["_id"])
             if "user__id" in expense:
@@ -656,7 +596,6 @@ class Expense(BaseModel):
             if "business_id" in expense:
                 expense["business_id"] = str(expense["business_id"])
 
-            # Decrypt fields
             expense["name"] = decrypt_data(expense["name"]) if expense.get("name") else None
             expense["description"] = decrypt_data(expense["description"]) if expense.get("description") else None
             expense["category"] = decrypt_data(expense["category"]) if expense.get("category") else None
@@ -664,32 +603,22 @@ class Expense(BaseModel):
             expense["amount"] = decrypt_data(expense["amount"]) if expense.get("amount") else None
             expense["status"] = decrypt_data(expense["status"]) if expense.get("status") else None
 
-            # Timestamps
             expense["created_at"] = expense.get("created_at")
             expense["updated_at"] = expense.get("updated_at")
 
-            # Remove internal / sensitive fields
             expense.pop("hashed_name", None)
             expense.pop("agent_id", None)
             expense.pop("admin_id", None)
 
             processed.append(expense)
 
-        # Replace generic key with domain-specific one
         payload["expenses"] = processed
         payload.pop("items", None)
 
         return payload
 
-    # ------------------------------------------------------------------
-    # UPDATE / DELETE
-    # ------------------------------------------------------------------
-
     @classmethod
     def update(cls, expense_id, **updates):
-        """
-        Update an expense's information by expense_id.
-        """
         updates["updated_at"] = datetime.now()
 
         if "name" in updates:
@@ -711,9 +640,6 @@ class Expense(BaseModel):
 
     @classmethod
     def delete(cls, expense_id, business_id):
-        """
-        Delete an expense by _id and business_id.
-        """
         try:
             expense_id_obj = ObjectId(expense_id)
             business_id_obj = ObjectId(business_id)
@@ -722,16 +648,13 @@ class Expense(BaseModel):
 
         return super().delete(expense_id_obj, business_id_obj)
 
-#-------------------------EXPENSE MODEL--------------------------------------
 
-#-------------------------ADMIN MODEL--------------------------------------
+# =========================================
+# ADMIN MODEL
+# =========================================
 class Admin(BaseModel):
     """
     Admin system user (Cashier/Manager/Admin), business-scoped.
-
-    - Encrypts PII fields
-    - Hashes phone/email for lookup
-    - Attaches role payload with permissions derived from PERMISSION_FIELDS_FOR_ADMIN_ROLE (non-uniform)
     """
 
     collection_name = "admins"
@@ -759,7 +682,6 @@ class Admin(BaseModel):
         updated_at: Optional[datetime] = None,
         **kwargs,
     ):
-        # Normalize foreign keys
         role_obj = ObjectId(role) if role else None
         created_by_obj = ObjectId(created_by) if created_by else None
 
@@ -771,18 +693,16 @@ class Admin(BaseModel):
             email=email,
             image=image,
             file_path=file_path,
-            password=password,  # will be overwritten below with hash
+            password=password,
             status=status,
             created_by=created_by_obj,
             created_at=created_at,
             updated_at=updated_at,
         )
 
-        # Foreign keys
         self.role = role_obj
         self.created_by = created_by_obj
 
-        # Encrypted fields + hashes
         self.fullname = encrypt_data(fullname) if fullname else None
 
         self.phone = encrypt_data(phone) if phone else None
@@ -803,7 +723,6 @@ class Admin(BaseModel):
         self.id_number = encrypt_data(id_number) if id_number else None
         self.current_address = encrypt_data(current_address) if current_address else None
 
-        # Password hashing (only if not already bcrypt)
         self.password = (
             bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             if password and not str(password).startswith("$2b$")
@@ -841,14 +760,8 @@ class Admin(BaseModel):
         )
         return user_dict
 
-    # -------------------------------------------------
-    # GET BY ID (business-scoped, with role + permissions)
-    # -------------------------------------------------
     @classmethod
     def get_by_id(cls, business_id: str, admin_id: str, is_logging_in=False) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve admin by _id + business_id and attach role payload + permissions.
-        """
         try:
             business_id_obj = ObjectId(business_id)
             admin_id_obj = ObjectId(admin_id)
@@ -859,17 +772,9 @@ class Admin(BaseModel):
         if not data:
             return None
 
-        # Normalize IDs
-        data["_id"] = str(data["_id"])
-        data["business_id"] = str(data["business_id"])
-        if data.get("user_id") is not None:
-            data["user_id"] = str(data["user_id"])
-        if data.get("created_by") is not None and isinstance(data.get("created_by"), ObjectId):
-            data["created_by"] = str(data["created_by"])
-        if data.get("role") is not None and isinstance(data.get("role"), ObjectId):
-            data["role"] = data["role"]  # keep ObjectId for lookup, stringify later in response
+        # Convert ObjectId fields to strings for easier handling
+        data = _stringify_object_ids(data)
 
-        # ---------------------- ROLE + PERMISSIONS ---------------------- #
         role_payload = None
         role_id = data.get("role")
         if role_id:
@@ -877,10 +782,8 @@ class Admin(BaseModel):
                 role_collection = db.get_collection("roles")
                 role_obj_id = role_id if isinstance(role_id, ObjectId) else ObjectId(str(role_id))
 
-                # Prefer business-scoped roles if your DB stores business_id on roles
                 role_doc = role_collection.find_one({"_id": role_obj_id, "business_id": business_id_obj})
                 if not role_doc:
-                    # fallback if roles are not business-scoped
                     role_doc = role_collection.find_one({"_id": role_obj_id})
 
                 if role_doc:
@@ -901,7 +804,6 @@ class Admin(BaseModel):
                 Log.info(f"[Admin.get_by_id] role resolve failed: {e}")
                 role_payload = None
 
-        # ---------------------- DECRYPT ADMIN FIELDS ---------------------- #
         decrypt_fields = [
             "fullname",
             "phone",
@@ -947,15 +849,8 @@ class Admin(BaseModel):
             "last_logged_in": data.get("last_logged_in"),
         }
 
-    # -------------------------------------------------
-    # LIST ADMINS BY BUSINESS (role + permissions)
-    # -------------------------------------------------
     @classmethod
     def get_system_users_by_business(cls, business_id: str) -> List[Dict[str, Any]]:
-        """
-        Retrieve all admins for a business along with role + permissions.
-        Only admins with created_by present are included (matches your existing behavior).
-        """
         try:
             business_id_obj = ObjectId(business_id)
         except Exception:
@@ -974,12 +869,13 @@ class Admin(BaseModel):
         out: List[Dict[str, Any]] = []
 
         for data in cursor:
-            # Normalize IDs
             system_user_id = str(data.get("_id"))
             user_id = str(data.get("user_id")) if data.get("user_id") is not None else None
             created_by = str(data.get("created_by")) if data.get("created_by") is not None else None
+            
+            # Convert ObjectId fields to strings for easier handling
+            data = _stringify_object_ids(data)
 
-            # Role + permissions
             role_payload = None
             role_id = data.get("role")
             if role_id:
@@ -1007,7 +903,6 @@ class Admin(BaseModel):
                     Log.info(f"[Admin.get_system_users_by_business] role resolve failed: {e}")
                     role_payload = None
 
-            # Decrypt personal fields
             fields = [
                 "fullname",
                 "phone",
@@ -1041,9 +936,93 @@ class Admin(BaseModel):
 
         return out
 
-    # -------------------------------------------------
-    # LOOKUP BY PHONE (no role enrichment)
-    # -------------------------------------------------
+    @classmethod
+    def get_system_users_by_business(cls, business_id: str) -> List[Dict[str, Any]]:
+        try:
+            business_id_obj = ObjectId(business_id)
+        except Exception:
+            raise ValueError(f"Invalid business_id format: {business_id}")
+
+        collection = db.get_collection(cls.collection_name)
+        role_collection = db.get_collection("roles")
+
+        cursor = collection.find(
+            {
+                "business_id": business_id_obj,
+                "created_by": {"$type": "objectId"},
+            }
+        )
+
+        out: List[Dict[str, Any]] = []
+
+        for data in cursor:
+            system_user_id = str(data.get("_id"))
+            user_id = str(data.get("user_id")) if data.get("user_id") is not None else None
+            created_by = str(data.get("created_by")) if data.get("created_by") is not None else None
+            
+            # Convert ObjectId fields to strings for easier handling
+            data = _stringify_object_ids(data)
+
+            role_payload = None
+            role_id = data.get("role")
+            if role_id:
+                try:
+                    role_obj_id = role_id if isinstance(role_id, ObjectId) else ObjectId(str(role_id))
+                    role_doc = role_collection.find_one({"_id": role_obj_id, "business_id": business_id_obj})
+                    if not role_doc:
+                        role_doc = role_collection.find_one({"_id": role_obj_id})
+
+                    if role_doc:
+                        permissions: Dict[str, Dict[str, str]] = {}
+                        for module_name in PERMISSION_FIELDS_FOR_ADMIN_ROLE.keys():
+                            permissions[module_name] = _decrypt_permissions_field(
+                                role_doc=role_doc,
+                                module_name=module_name,
+                            )
+
+                        role_payload = {
+                            "role_id": str(role_doc["_id"]),
+                            "name": decrypt_data(role_doc.get("name")) if role_doc.get("name") else None,
+                            "status": decrypt_data(role_doc.get("status")) if role_doc.get("status") else None,
+                            "permissions": permissions,
+                        }
+                except Exception as e:
+                    Log.info(f"[Admin.get_system_users_by_business] role resolve failed: {e}")
+                    role_payload = None
+
+            fields = [
+                "fullname",
+                "phone",
+                "email",
+                "image",
+                "file_path",
+                "status",
+                "date_of_birth",
+                "gender",
+                "alternative_phone",
+                "id_type",
+                "id_number",
+                "current_address",
+            ]
+
+            user: Dict[str, Any] = {
+                "system_user_id": system_user_id,
+                "business_id": str(data.get("business_id")),
+                "user_id": user_id,
+                "created_by": created_by,
+                "role": role_payload,
+                "created_at": data.get("created_at"),
+                "updated_at": data.get("updated_at"),
+                "last_logged_in": data.get("last_logged_in"),
+            }
+
+            for f in fields:
+                user[f] = decrypt_data(data.get(f)) if data.get(f) else None
+
+            out.append(user)
+
+        return out
+
     @classmethod
     def get_by_phone_number(cls, phone: str) -> Optional[Dict[str, Any]]:
         phone_hashed = hash_data(phone)
@@ -1147,9 +1126,33 @@ class Admin(BaseModel):
             "last_logged_in": data.get("last_logged_in"),
         }
 
-    # -------------------------------------------------
-    # UPDATE (with encryption + hashing)
-    # -------------------------------------------------
+    @classmethod
+    def get_by_business_id_count(cls, business_id: str) -> int:
+        """
+        Count the number of admins for a business.
+        
+        This is more efficient than get_by_business_id() as it only counts
+        documents without fetching and decrypting all fields.
+        
+        Args:
+            business_id: The business ID to count admins for
+        
+        Returns:
+            int: Number of admins for the business
+        """
+        try:
+            business_id_obj = ObjectId(business_id)
+        except Exception:
+            return 0
+
+        try:
+            collection = db.get_collection(cls.collection_name)
+            count = collection.count_documents({"business_id": business_id_obj})
+            return count
+        except Exception as e:
+            Log.error(f"[Admin.get_by_business_id_count] error counting admins: {e}")
+            return 0
+    
     @classmethod
     def update(cls, system_user_id: str, **updates):
         updates["updated_at"] = datetime.now()
@@ -1169,22 +1172,18 @@ class Admin(BaseModel):
             "current_address",
         ]
 
-        # Role (FK)
         if "role" in updates and updates["role"]:
             updates["role"] = ObjectId(updates["role"])
 
-        # Hash fields BEFORE encrypting
         if "phone" in updates and updates["phone"]:
             updates["phone_hashed"] = hash_data(updates["phone"])
         if "email" in updates and updates["email"]:
             updates["hashed_email"] = hash_data(updates["email"])
 
-        # Encrypt fields
         for field in encrypt_fields:
             if field in updates:
                 updates[field] = encrypt_data(updates[field]) if updates[field] else None
 
-        # Password update (if provided)
         if "password" in updates and updates["password"]:
             pwd = updates["password"]
             updates["password"] = (
@@ -1195,14 +1194,8 @@ class Admin(BaseModel):
 
         return super().update(system_user_id, **updates)
 
-    # -------------------------------------------------
-    # DELETE (business-scoped)
-    # -------------------------------------------------
     @classmethod
     def delete(cls, system_user_id: str, business_id: str) -> bool:
-        """
-        Delete admin by _id and business_id (business-scoped), then cascade delete linked User.
-        """
         try:
             system_user_id_obj = ObjectId(system_user_id)
             business_id_obj = ObjectId(business_id)
@@ -1213,7 +1206,6 @@ class Admin(BaseModel):
         if not ok:
             return False
 
-        # Cascade delete User
         try:
             User.delete_by_system_user(system_user_id, business_id)
         except Exception as e:

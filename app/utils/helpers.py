@@ -944,7 +944,6 @@ def sanitize_device_id(device_id: str, max_length: int = 50) -> str:
 
     return device_id
 
-
 def resolve_target_business_id(args, kwargs):
     """
     In MethodView, args is typically (self, item_data) for POST with @arguments.
@@ -1014,6 +1013,21 @@ def env_bool(key: str, default: bool = False) -> bool:
     return val.strip().lower() in ("1", "true", "yes", "on")
 
 
+def stringify_object_ids(doc: dict) -> dict:
+        """Recursively convert all ObjectId values in a document to strings."""
+        for key, value in doc.items():
+            if isinstance(value, ObjectId):
+                doc[key] = str(value)
+            elif isinstance(value, dict):
+                doc[key] = stringify_object_ids(value)
+            elif isinstance(value, list):
+                doc[key] = [
+                    stringify_object_ids(item) if isinstance(item, dict)
+                    else str(item) if isinstance(item, ObjectId)
+                    else item
+                    for item in value
+                ]
+        return doc
 
 
 
