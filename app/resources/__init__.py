@@ -96,6 +96,7 @@ from .social.auth.youtube_login_resource import blp_youtube_login
 from .social.auth.tiktok_login_resource import blp_tiktok_login
 from .social.auth.pinterest_login_resource import blp_pinterest_login
 from .doseal.admin.trial_subscription_resource import blp_trial_subscription
+from .social.media_management_resource import blp_media_management
 
 __all__ = [
     #-------------------
@@ -145,6 +146,7 @@ __all__ = [
     "blp_tiktok_login",
     "blp_pinterest_login",
     "blp_trial_subscription",
+    "blp_media_management",
     #-------------------
     #ADMIN ROUTES
     #-------------------
