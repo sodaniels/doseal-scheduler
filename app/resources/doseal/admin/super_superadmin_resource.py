@@ -1624,17 +1624,20 @@ class AdminResource(MethodView):
                 else:
                     # Check if admin count exceeds allowed addon users
                     if current_admin_count >= allowed_addon_users:
-                        Log.info(f"{log_tag} admin count exceeds allowed addon users: {current_admin_count} >= {allowed_addon_users}")
+                        allowed_current_admin_count = current_admin_count + 1
+                        allowed_addon_users_plus_one = allowed_addon_users + 1
+                        
+                        Log.info(f"{log_tag} admin count exceeds allowed addon users: {allowed_current_admin_count} >= {allowed_addon_users}")
                         
                         # Update the error meta with correct current and limit values
                         updated_meta = e.meta.copy() if e.meta else {}
-                        updated_meta["current"] = current_admin_count + 1
-                        updated_meta["limit"] = allowed_addon_users + 1
+                        updated_meta["current"] = allowed_current_admin_count
+                        updated_meta["limit"] = allowed_addon_users_plus_one
                         updated_meta["addon_users"] = addon_users
                         updated_meta["base_users"] = 1  # Default user every business has
                         
                         # Update message to reflect addon users
-                        updated_message = f"User limit reached. You have {current_admin_count} of {allowed_addon_users} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
+                        updated_message = f"User limit reached. You have {allowed_current_admin_count} of {allowed_addon_users_plus_one} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
                         
                         if actual_path:
                             os.remove(actual_path)
