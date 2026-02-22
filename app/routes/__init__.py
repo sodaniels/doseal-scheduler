@@ -101,6 +101,8 @@ from ..resources import (
     blp_pinterest_login,
     blp_trial_subscription,
     blp_media_management,
+    blp_legal_admin,
+    blp_legal_public,
     
 )
 
@@ -166,6 +168,8 @@ def register_social_routes(app, api):
         blp_pinterest_login,
         blp_trial_subscription,
         blp_media_management,
+        blp_legal_admin,
+        blp_legal_public,
     ]
 
     for blueprint in blueprints:

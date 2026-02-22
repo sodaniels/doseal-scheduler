@@ -1,3 +1,5 @@
+# app/models/beneficiary_model.py
+
 import uuid
 import bcrypt
 import os
