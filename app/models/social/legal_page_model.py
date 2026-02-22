@@ -39,17 +39,22 @@ class LegalPage(BaseModel):
 
     @classmethod
     def get_latest_published_by_type(cls, business_id, page_type):
-        return (
-            db.get_collection(cls.collection_name)
-            .find({
-                "business_id": ObjectId(business_id),
-                "page_type": page_type,
-                "status": "published"
-            })
-            .sort("updated_at", -1)
-            .limit(1)
-            .next()
-        )
+        try:
+            cursor = (
+                db.get_collection(cls.collection_name)
+                .find({
+                    "business_id": ObjectId(business_id),
+                    "page_type": page_type,
+                    "status": "published"
+                })
+                .sort("updated_at", -1)
+                .limit(1)
+            )
+
+            return next(cursor, None)  # ✅ returns None if empty
+
+        except Exception:
+            return None
     
     @classmethod
     def get_published_by_id(cls, business_id, page_id):

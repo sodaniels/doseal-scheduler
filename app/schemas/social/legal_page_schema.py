@@ -3,7 +3,7 @@ from marshmallow import Schema, fields, validate
 class LegalPageCreateSchema(Schema):
     page_type = fields.String(
         required=True,
-        validate=validate.OneOf(["terms", "privacy", "refund", "cookies"])
+        validate=validate.OneOf(["terms", "privacy", "refund", "cookies", "accessibility"])
     )
     title = fields.String(required=True)
     content = fields.String(required=True)
