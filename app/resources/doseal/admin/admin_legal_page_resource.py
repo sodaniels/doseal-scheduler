@@ -1,3 +1,5 @@
+# app/resources/doseal/admin/admin_legal_page_resource.py
+
 from flask.views import MethodView
 from flask_smorest import Blueprint
 from flask import g, jsonify

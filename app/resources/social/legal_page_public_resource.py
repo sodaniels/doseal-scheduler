@@ -1,3 +1,5 @@
+# app/resources/social/legal_page_public_resource.py
+
 import os
 from flask.views import MethodView
 from flask_smorest import Blueprint
@@ -27,17 +29,21 @@ class PublicLegalPageResource(MethodView):
         app_key = request.headers.get('x-app-key')
         server_app_key = os.getenv("X_APP_KEY")
         
+        log_tag = f"[legal_page_public_resource.py][PublicLegalPageResource][get][{client_ip}]"
+        
         if not business_id:
+            Log.info(f"{log_tag} Missing X-Business-ID")
             return prepared_response(False, "BAD_REQUEST", "Missing X-Business-ID")
         
         if app_key != server_app_key:
-            Log.info(f"[internal_controller.py][get_countries][{client_ip}] invalid x-app-ky header")
+            Log.info(f"{log_tag} invalid x-app-key header")
             
             return prepared_response(False, "UNAUTHORIZED", "Unauthorized")
 
         try:
             page = LegalPage.get_latest_published_by_type(business_id, args["page_type"])
             if not page:
+                Log.info(f"{log_tag} No published legal page found for type: {args['page_type']}")
                 return prepared_response(False, "NOT_FOUND", "Legal page not found")
 
             # Convert ObjectId fields to strings for JSON serialization
@@ -47,6 +53,7 @@ class PublicLegalPageResource(MethodView):
             page.pop("user__id", None)
             page.pop("business_id", None) 
 
+            Log.info(f"{log_tag} Successfully retrieved legal page for type: {args['page_type']}")
             return jsonify({
                 "success": True,
                 "status_code": HTTP_STATUS_CODES["OK"],
