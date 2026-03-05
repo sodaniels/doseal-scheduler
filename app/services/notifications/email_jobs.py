@@ -193,7 +193,7 @@ def _send_post_failed_email_job_impl(business_id: str, post_id: str):
         business_id=business_id,
         channel="email",
         item_key="scheduled_send_failed",
-        default=True,   # keep your default behaviour
+        default=True,
     ):
         Log.info(f"{log_tag} email disabled by settings")
         return

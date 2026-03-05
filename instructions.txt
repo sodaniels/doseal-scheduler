@@ -59,6 +59,14 @@ https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oaut
 https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/pinterest/callback
 
 
-curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/instagram/start" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjk5ODMzZTI5OWJlZjE0OTFmNWQ2MTFmIiwiZXhwIjoxNzcxODkwNTM4LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.QbDgonUEDq1P2QfUPJGpYyO3aL72GNUZSriXBzqp3H0"
+curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/facebook/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjlhMjEzNjgzNjFkMTdjNTI0NTc4ZjliIiwiZXhwIjoxNzcyNDQ1NzAyLCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.OcfSP0dQ2jHkUGzRoApa1-xFHmQwsopA-EXoiGWbRl8"
 
+
+curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/auth/facebook/business/login?return_url=https://inscribable-manipulatedly-davon.ngrok-free.dev" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjlhMjEzNjgzNjFkMTdjNTI0NTc4ZjliIiwiZXhwIjoxNzcyODc2NjA3LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.aODmiNn7RQV0vhoKmUYMkA7QhUU4dYcE7WseiyG7jIs"
+
+
+
+curl -i "https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/start" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjlhMjEzNjgzNjFkMTdjNTI0NTc4ZjliIiwiZXhwIjoxNzcyODc2NjA3LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.aODmiNn7RQV0vhoKmUYMkA7QhUU4dYcE7WseiyG7jIs"
