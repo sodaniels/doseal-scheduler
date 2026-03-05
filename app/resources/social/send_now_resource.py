@@ -12,6 +12,9 @@ from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 from ...utils.logger import Log
 from ...utils.helpers import make_log_tag
+from ...utils.helpers import (
+    env_bool, _get_business_suspension
+)
 
 from ...models.social.scheduled_post import ScheduledPost
 
@@ -275,6 +278,37 @@ class SendNowResource(MethodView):
 
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.isoformat()
+        
+        # ---------------------------------------------------
+        # ✅ BUSINESS SUSPENSION (single source of truth)
+        # ---------------------------------------------------
+        ALLOW_SCHEDULE_WHEN_SUSPENDED = env_bool(
+            "ALLOW_SCHEDULE_WHEN_SUSPENDED",
+            default=False,
+        )
+
+        susp = {"is_suspended": False}
+        try:
+            susp = _get_business_suspension(business_id) or {"is_suspended": False}
+        except Exception as e:
+            Log.info(f"{log_tag} suspension lookup failed (ignored): {e}")
+            susp = {"is_suspended": False}
+
+        is_suspended = bool(susp.get("is_suspended"))
+
+        if is_suspended and not ALLOW_SCHEDULE_WHEN_SUSPENDED:
+            return jsonify({
+                "success": False,
+                "code": "BUSINESS_SUSPENDED",
+                "status_code": HTTP_STATUS_CODES["FORBIDDEN"],
+                "message": "This business is currently suspended from publishing.",
+                "message_to_show": "Your business is currently suspended from publishing.",
+                "suspension": {
+                    "reason": susp.get("reason"),
+                    "suspended_at": susp.get("suspended_at"),
+                    "until": susp.get("until"),
+                }
+            }), HTTP_STATUS_CODES["FORBIDDEN"]
 
         # ------------------------------------------------------------------
         # SAVE FIRST

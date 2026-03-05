@@ -20,8 +20,9 @@ from ...constants.service_code import HTTP_STATUS_CODES
 from ..doseal.admin.admin_business_resource import token_required
 from ...models.social.scheduled_post import ScheduledPost
 from ...utils.logger import Log
-from ...extensions import db as db_ext
-from ...utils.helpers import env_bool
+from ...utils.helpers import (
+    env_bool, _get_business_suspension
+)
 from ...utils.media.cloudinary_client import (
     upload_image_file, upload_video_file
 )
@@ -154,48 +155,7 @@ def _ensure_content_shape(body: dict) -> dict:
     body["content"] = content
     return body
 
-def _get_business_suspension(business_id: str) -> dict:
-    """
-    Checks business_suspensions for an active suspension.
 
-    Returns:
-      {
-        is_suspended: bool,
-        reason: str,
-        suspended_at: datetime,
-        suspended_by: str,
-        scope: str,
-        platforms: list | None,
-        destinations: list | None
-      }
-    """
-
-    if not business_id:
-        return {"is_suspended": False}
-
-    col = db_ext.get_collection("business_suspensions")
-
-    doc = col.find_one(
-        {
-            "business_id": ObjectId(str(business_id)),
-            "is_active": True,
-        },
-        sort=[("suspended_at", -1)],
-    )
-
-    if not doc:
-        return {"is_suspended": False}
-
-    return {
-        "is_suspended": True,
-        "reason": doc.get("reason"),
-        "suspended_at": doc.get("suspended_at"),
-        "suspended_by": str(doc.get("suspended_by")) if doc.get("suspended_by") else None,
-        "scope": doc.get("scope") or "all",
-        "platforms": doc.get("platforms"),
-        "destinations": doc.get("destinations"),
-    }
-    
 
 # ---------------------------------------------------------
 # Create Scheduled Post API (FB/IG/etc)

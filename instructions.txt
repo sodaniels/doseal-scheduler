@@ -68,5 +68,5 @@ curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/au
 
 
 
-curl -i "https://scheduler.doseal.org/social/api/v1/social/oauth/facebook/start" \
+curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/pinterest/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjlhMjEzNjgzNjFkMTdjNTI0NTc4ZjliIiwiZXhwIjoxNzcyODc2NjA3LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.aODmiNn7RQV0vhoKmUYMkA7QhUU4dYcE7WseiyG7jIs"

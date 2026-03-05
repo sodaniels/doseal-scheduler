@@ -1029,7 +1029,50 @@ def stringify_object_ids(doc: dict) -> dict:
                 ]
         return doc
 
+def _get_business_suspension(business_id: str) -> dict:
+    """
+    Checks business_suspensions for an active suspension.
 
+    Returns:
+      {
+        is_suspended: bool,
+        reason: str,
+        suspended_at: datetime,
+        suspended_by: str,
+        scope: str,
+        platforms: list | None,
+        destinations: list | None
+      }
+    """
+
+    if not business_id:
+        return {"is_suspended": False}
+    
+    from ..extensions import db as db_ext
+
+    col = db_ext.get_collection("business_suspensions")
+
+    doc = col.find_one(
+        {
+            "business_id": ObjectId(str(business_id)),
+            "is_active": True,
+        },
+        sort=[("suspended_at", -1)],
+    )
+
+    if not doc:
+        return {"is_suspended": False}
+
+    return {
+        "is_suspended": True,
+        "reason": doc.get("reason"),
+        "suspended_at": doc.get("suspended_at"),
+        "suspended_by": str(doc.get("suspended_by")) if doc.get("suspended_by") else None,
+        "scope": doc.get("scope") or "all",
+        "platforms": doc.get("platforms"),
+        "destinations": doc.get("destinations"),
+    }
+    
 
 
 
