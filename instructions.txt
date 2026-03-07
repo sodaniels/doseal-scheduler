@@ -68,5 +68,5 @@ curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/au
 
 
 
-curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/facebook/start" \
+curl -i "https://inscribable-manipulatedly-davon.ngrok-free.dev/social/api/v1/social/oauth/tiktok/start" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNjlhMjEzNjgzNjFkMTdjNTI0NTc4ZjliIiwiZXhwIjoxNzczMDkzMzU0LCJhY2NvdW50X3R5cGUiOiJzdXBlcl9hZG1pbiIsInR5cGUiOm51bGwsInBlcm1pc3Npb25zIjp7fX0.PXmht8t5aXyQ61TQ70yxcmoKG5TyH7CEV2RZAczhBDM"

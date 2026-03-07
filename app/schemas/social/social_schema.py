@@ -193,6 +193,148 @@ class PublicIdSchema(Schema):
     )
 
 
+# =========================================
+# CONNECT AD ACCOUNT
+# =========================================
+class TikTokAdAccountConnectSchema(Schema):
+    advertiser_id = fields.Str(
+        required=True,
+        validate=validate.Length(min=5, max=50),
+        metadata={"description": "TikTok advertiser ID"}
+    )
+
+
+# =========================================
+# BOOST VIDEO (SPARK AD)
+# =========================================
+class TikTokBoostVideoSchema(Schema):
+
+    advertiser_id = fields.Str(
+        required=True,
+        validate=validate.Length(min=5, max=50),
+    )
+
+    spark_ad_auth_code = fields.Str(
+        required=True,
+        validate=validate.Length(min=10),
+    )
+
+    # 💰 Use Decimal for money (NOT Float)
+    daily_budget_usd = fields.Decimal(
+        required=True,
+        as_string=True,
+        validate=validate.Range(min=1),
+        metadata={"description": "Daily budget in USD"}
+    )
+
+    duration_days = fields.Int(
+        required=True,
+        validate=validate.Range(min=1, max=365),
+    )
+
+    objective = fields.Str(
+        load_default="VIDEO_VIEWS",
+        validate=validate.OneOf([
+            "VIDEO_VIEWS",
+            "CONVERSIONS",
+            "TRAFFIC",
+            "LEAD_GENERATION",
+            "APP_INSTALL",
+        ])
+    )
+
+    optimization_goal = fields.Str(
+        load_default="VIDEO_VIEW",
+        validate=validate.OneOf([
+            "VIDEO_VIEW",
+            "CONVERSION",
+            "CLICK",
+            "LEAD",
+            "APP_INSTALL",
+        ])
+    )
+
+    placements = fields.List(
+        fields.Str(),
+        load_default=None
+    )
+
+    bid_type = fields.Str(
+        load_default="BID_TYPE_NO_BID",
+        validate=validate.OneOf([
+            "BID_TYPE_NO_BID",
+            "BID_TYPE_CUSTOM",
+        ])
+    )
+
+    bid_usd = fields.Decimal(
+        load_default=None,
+        as_string=True,
+        allow_none=True,
+        validate=validate.Range(min=0)
+    )
+
+    billing_event = fields.Str(
+        load_default="CPM",
+        validate=validate.OneOf([
+            "CPM",
+            "CPC",
+            "CPV",
+            "OCPM",
+        ])
+    )
+
+    call_to_action = fields.Str(
+        load_default="WATCH_NOW",
+        validate=validate.OneOf([
+            "WATCH_NOW",
+            "SHOP_NOW",
+            "LEARN_MORE",
+            "SIGN_UP",
+            "DOWNLOAD",
+            "CONTACT_US",
+        ])
+    )
+
+    landing_page_url = fields.Url(
+        load_default=None,
+        allow_none=True
+    )
+
+    campaign_name = fields.Str(
+        load_default=None,
+        allow_none=True,
+        validate=validate.Length(max=255)
+    )
+
+    targeting = fields.Dict(
+        load_default=None,
+        allow_none=True
+    )
+
+    scheduled_post_id = fields.Str(
+        load_default=None,
+        allow_none=True
+    )
+
+    auto_activate = fields.Bool(
+        load_default=False
+    )
+
+    # =========================================
+    # Custom Validation
+    # =========================================
+    @validates_schema
+    def validate_bid_logic(self, data, **kwargs):
+        """
+        If bid_type is BID_TYPE_CUSTOM,
+        bid_usd must be provided.
+        """
+        if data.get("bid_type") == "BID_TYPE_CUSTOM" and not data.get("bid_usd"):
+            raise ValidationError(
+                "bid_usd is required when bid_type is BID_TYPE_CUSTOM",
+                field_name="bid_usd"
+            )
 
 
 
