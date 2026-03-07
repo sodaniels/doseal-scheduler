@@ -473,7 +473,7 @@ class PinterestPinsResource(MethodView):
 # =========================================
 # LIST BOARDS
 # =========================================
-@blp_pinterest_ads.route("/social/pinterest/boards", methods=["GET"])
+@blp_pinterest_ads.route("/social/pinterest/ad/boards", methods=["GET"])
 class PinterestBoardsResource(MethodView):
     """
     List Pinterest boards.
@@ -657,7 +657,7 @@ class PinterestPromotePinResource(MethodView):
             # =========================================
             ad_account = PinterestAdAccount.get_by_ad_account_id(business_id, ad_account_id)
             
-            if not ad_account or not ad_account.get("access_token_plain"):
+            if not ad_account or not ad_account.get("access_token"):
                 Log.warning(f"{log_tag} Missing ad account or token")
                 return jsonify({
                     "success": False,
@@ -665,7 +665,7 @@ class PinterestPromotePinResource(MethodView):
                     "code": "NO_AD_ACCOUNT",
                 }), HTTP_STATUS_CODES["BAD_REQUEST"]
             
-            access_token = ad_account["access_token_plain"]
+            access_token = ad_account["access_token"]
             currency = ad_account.get("currency", "USD")
             
             # =========================================

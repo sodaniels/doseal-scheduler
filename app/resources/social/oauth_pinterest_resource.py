@@ -102,7 +102,7 @@ class PinterestOauthStartResource(MethodView):
 
         # Scopes: adjust to your app’s access
         # Common patterns include boards:read, pins:read, pins:write, user_accounts:read
-        scopes = os.getenv("PINTEREST_SCOPES", "boards:read,pins:read,pins:write,user_accounts:read")
+        scopes = os.getenv("PINTEREST_SCOPES", "boards:read,boards:write,pins:read,pins:write,user_accounts:read,ads:read,ads:write")
 
         url = _pinterest_authorize_url(
             client_id=client_id,
