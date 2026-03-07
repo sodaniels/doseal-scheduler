@@ -81,3 +81,8 @@ class OAuthCredentialsSchema(Schema):
         error_messages={"required": "Client ID is required", "null": "Client ID cannot be null"}
     )
     
+class BusinessUpdateSchema(Schema):
+    business_name = fields.Str(load_default=None)
+    first_name    = fields.Str(load_default=None)
+    last_name     = fields.Str(load_default=None)
+    

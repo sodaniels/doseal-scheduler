@@ -517,7 +517,31 @@ class Business(BaseModel):
         """Check if the password is correct."""
         return check_password_hash(business['password'], password)
    
-    
+    @classmethod
+    def update_business(cls, record_id, **updates):
+        """
+        Update a record by its ID after checking permission.
+        Encrypts sensitive fields before persisting.
+        """
+
+        cls.verify_permission("update", cls.__name__.lower())
+
+        ENCRYPT_FIELDS = {"business_name", "first_name", "last_name"}
+
+        encrypted_updates = {}
+        for key, value in updates.items():
+            if key in ENCRYPT_FIELDS and value is not None:
+                encrypted_updates[key] = encrypt_data(value)
+            else:
+                encrypted_updates[key] = value
+
+        collection = db.get_collection(cls.collection_name)
+        encrypted_updates["updated_at"] = datetime.now()
+        result = collection.update_one(
+            {"_id": ObjectId(record_id)},
+            {"$set": encrypted_updates},
+        )
+        return result.modified_count > 0
     
     
     

@@ -11,6 +11,7 @@ from flask import current_app, g
 from flask_smorest import Blueprint, abort
 from flask.views import MethodView
 from flask import jsonify, request
+from ....utils.helpers import make_log_tag
 from pymongo.errors import PyMongoError
 from marshmallow import ValidationError
 from rq import Queue
@@ -18,10 +19,12 @@ from rq import Queue
 from datetime import datetime, timedelta
 # from app import queue
 from ....models.business_model import Business
-from ....schemas.business_schema import BusinessSchema
+from ....schemas.business_schema import (
+    BusinessSchema, BusinessUpdateSchema
+)
 from ....schemas.business_schema import OAuthCredentialsSchema
 from ....schemas.login_schema import (
-    LoginInitiateSchema,
+    LoginInitiateSchema, 
     LoginExecuteSchema,
     LoginExecuteResponseSchema,
     LoginInitiateResponseSchema,
@@ -90,7 +93,6 @@ connection = Redis(host=REDIS_HOST, port=6379)
 queue = Queue("emails", connection=connection)
 
 blp_business_auth = Blueprint("Business Auth", __name__, url_prefix="/v1/auth", description="Authentication Management")
-
 blp_admin_preauth = Blueprint("Admin Pre Auth", __name__, url_prefix="/v1/auth", description="Admin Pre Auth Management")
 
 
@@ -525,6 +527,86 @@ class RegisterBusinessResource(MethodView):
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
+@blp_business_auth.route("/auth/register", methods=["PATCH"])
+class UpdateBusinessResource(MethodView):
+
+    @token_required
+    @blp_business_auth.arguments(BusinessUpdateSchema, location="form")
+    @blp_business_auth.response(200, BusinessUpdateSchema)
+    def patch(self, item_data):
+        client_ip = request.remote_addr
+        user = g.get("current_user", {}) or {}
+
+        business_id = str(user.get("business_id", ""))
+        user__id = str(user.get("_id", ""))
+        account_type = user.get("account_type")
+
+        log_tag = make_log_tag(
+            "admin_business_resource.py",
+            "UpdateBusinessResource",
+            "patch",
+            client_ip,
+            user__id,
+            account_type,
+            business_id,
+            business_id,
+        )
+        
+        try:
+            business = Business.get_business_by_id(business_id)
+            
+            if business is None:
+                Log.info(f"{log_tag} Business not found.")
+                return prepared_response(False,"NOT_FOUND","Business not found.")
+        except Exception as e:
+            Log.info(f"{log_tag} Error. retrieving business: {str(e)}")
+
+        # Only these three fields are patchable
+        ALLOWED_FIELDS = {"business_name", "first_name", "last_name"}
+
+        updates = {k: v for k, v in item_data.items() if k in ALLOWED_FIELDS and v is not None}
+
+        if not updates:
+            Log.info(f"{log_tag} No patchable fields provided")
+            message = f"Nothing to update. Allowed fields: {', '.join(ALLOWED_FIELDS)}"
+            return prepared_response(False,"BAD_REQUEST", message)
+
+        try:
+            start_time = time.time()
+
+            result = Business.update_business(business_id, **updates)
+
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} Business updated in {duration:.2f}s fields={list(updates.keys())}")
+
+            if not result:
+                return prepared_response(False,"changes", "Business not found or no changes made")
+            
+            try:
+                #logout user
+                auth_header = request.headers.get('Authorization')
+                access_token = auth_header.split(' ')[1]
+                Token.delete_token(access_token)
+            except Exception as e:
+                Log.info(f"{log_tag} Business account logged out.")
+                
+
+            return jsonify({
+                "success": True,
+                "status_code": HTTP_STATUS_CODES["OK"],
+                "message": "Business updated successfully",
+                "data": updates,
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.error(f"{log_tag} Exception: {e}")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"],
+                "message": "An unexpected error occurred",
+                "error": str(e),
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
 #-------------------------------------------------------
 # LOGIN INITIATE
 #-------------------------------------------------------
@@ -622,7 +704,6 @@ class LoginBusinessInitiateResource(MethodView):
             },
         },
     )
-    
     def post(self, user_data):
         client_ip = request.remote_addr
         log_tag = '[admin_business_resource.py][LoginBusinessInitiateResource][post]'
@@ -740,8 +821,8 @@ class LoginBusinessInitiateResource(MethodView):
 #-------------------------------------------------------
 @blp_business_auth.route("/auth/login/execute", methods=["POST"])
 class LoginBusinessExecuteResource(MethodView):
-    # @login_ip_limiter("login")
-    # @login_user_limiter("login")
+    @login_ip_limiter("login")
+    @login_user_limiter("login")
     @blp_business_auth.arguments(LoginExecuteSchema, location="form")
     @blp_business_auth.response(200, LoginExecuteResponseSchema)
     @blp_business_auth.doc(
@@ -1441,6 +1522,7 @@ class LogoutResource(MethodView):
         except Exception as e:
             Log.error(f"{log_tag}[{client_ip}]: logout error: {e}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred. {str(e)}")
+
          
 
 #-------------------------------------------------------
@@ -1898,3 +1980,31 @@ class ResetPasswordExecute(MethodView):
                 "INTERNAL_SERVER_ERROR",
                 "An error occurred while resetting your password"
             )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
