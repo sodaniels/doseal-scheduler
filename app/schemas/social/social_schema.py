@@ -336,7 +336,151 @@ class TikTokBoostVideoSchema(Schema):
                 field_name="bid_usd"
             )
 
+# =========================================
+# CONNECT GOOGLE ADS ACCOUNT
+# =========================================
+class YouTubeAdAccountConnectSchema(Schema):
 
+    customer_id = fields.Str(
+        required=True,
+        validate=validate.Regexp(
+            r"^\d{3}-?\d{3}-?\d{4}$",
+            error="Customer ID must be 10 digits (hyphens optional)"
+        ),
+        metadata={"description": "Google Ads customer ID"}
+    )
+
+    manager_customer_id = fields.Str(
+        load_default=None,
+        allow_none=True,
+        validate=validate.Regexp(
+            r"^\d{3}-?\d{3}-?\d{4}$",
+            error="Manager customer ID must be 10 digits (hyphens optional)"
+        )
+    )
+
+
+# =========================================
+# BOOST YOUTUBE VIDEO
+# =========================================
+class YouTubeBoostVideoSchema(Schema):
+
+    customer_id = fields.Str(
+        required=True,
+        validate=validate.Regexp(r"^\d{3}-?\d{3}-?\d{4}$")
+    )
+
+    youtube_video_id = fields.Str(
+        required=True,
+        validate=validate.Regexp(
+            r"^[a-zA-Z0-9_-]{11}$",
+            error="Invalid YouTube video ID"
+        )
+    )
+
+    headline = fields.Str(
+        required=True,
+        validate=validate.Length(max=30)
+    )
+
+    description = fields.Str(
+        required=True,
+        validate=validate.Length(max=90)
+    )
+
+    business_name = fields.Str(
+        required=True,
+        validate=validate.Length(max=25)
+    )
+
+    final_url = fields.Url(
+        required=True
+    )
+
+    # 💰 Use Decimal for budget (never float)
+    daily_budget_usd = fields.Decimal(
+        required=True,
+        as_string=True,
+        validate=validate.Range(min=1)
+    )
+
+    duration_days = fields.Int(
+        required=True,
+        validate=validate.Range(min=1, max=365)
+    )
+
+    long_headline = fields.Str(
+        load_default=None,
+        allow_none=True,
+        validate=validate.Length(max=90)
+    )
+
+    logo_image_url = fields.Url(
+        load_default=None,
+        allow_none=True
+    )
+
+    campaign_name = fields.Str(
+        load_default=None,
+        allow_none=True,
+        validate=validate.Length(max=255)
+    )
+
+    bidding_strategy = fields.Str(
+        load_default="maximizeConversions",
+        validate=validate.OneOf([
+            "maximizeConversions",
+            "targetCpa",
+            "maximizeClicks",
+            "targetRoas"
+        ])
+    )
+
+    target_cpa_usd = fields.Decimal(
+        load_default=None,
+        allow_none=True,
+        as_string=True,
+        validate=validate.Range(min=0)
+    )
+
+    breadcrumb1 = fields.Str(
+        load_default=None,
+        allow_none=True,
+        validate=validate.Length(max=15)
+    )
+
+    breadcrumb2 = fields.Str(
+        load_default=None,
+        allow_none=True,
+        validate=validate.Length(max=15)
+    )
+
+    targeting = fields.Dict(
+        load_default=None,
+        allow_none=True
+    )
+
+    scheduled_post_id = fields.Str(
+        load_default=None,
+        allow_none=True
+    )
+
+    auto_activate = fields.Bool(load_default=False)
+
+    # =========================================
+    # Custom Cross-Field Validation
+    # =========================================
+    @validates_schema
+    def validate_bidding_logic(self, data, **kwargs):
+        """
+        If bidding_strategy is targetCpa,
+        target_cpa_usd must be provided.
+        """
+        if data.get("bidding_strategy") == "targetCpa" and not data.get("target_cpa_usd"):
+            raise ValidationError(
+                "target_cpa_usd is required when bidding_strategy is targetCpa",
+                field_name="target_cpa_usd"
+            )
 
 
 

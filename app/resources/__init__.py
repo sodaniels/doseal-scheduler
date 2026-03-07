@@ -85,12 +85,15 @@ from .social.insights.pinterest_insights_resource import blp_pinterest_insights
 from .social.insights.social_dashboard_resource import blp_social_dashboard
 from .social.business_suspension_resource import blp_business_suspension
 from .notifications.notification_settings_resource import blp_notifications
+#ads
 from .social.campaigns.facebook_ads_resource import blp_facebook_ads
 from .social.campaigns.instagram_ads_resource import blp_instagram_ads
 from .social.campaigns.pinterest_ads_resource import blp_pinterest_ads
 from .social.campaigns.x_ads_resource import blp_x_ads
 from .social.campaigns.linkedin_ads_resource import blp_linkedin_ads
 from .social.campaigns.tiktok_ads_resource import blp_tiktok_ads
+from .social.campaigns.youtube_ads_resource import blp_youtube_ads
+
 from .social.auth.facebook_login_resource import blp_facebook_login
 from .social.auth.instagram_login_resource import blp_instagram_login
 from .social.auth.x_login_resource import blp_x_login
@@ -146,6 +149,7 @@ __all__ = [
     "blp_x_ads",
     "blp_linkedin_ads",
     "blp_tiktok_ads",
+    "blp_youtube_ads",
     "blp_facebook_login",
     "blp_instagram_login",
     "blp_x_login",
