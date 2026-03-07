@@ -191,6 +191,7 @@ class Business(BaseModel):
         user_id: Optional[str] = None,
         facebook_user_id: Optional[str] = None,
         social_login_provider: Optional[str] = None,
+        phone_number: Optional[str] = None,
         **kwargs,
     ):
         client_id_plain = generate_client_id()
@@ -214,6 +215,7 @@ class Business(BaseModel):
 
         # Optional encrypted fields (only set if not None/empty)
         self.start_date = self._enc(start_date)
+        self.phone_number = self._enc(phone_number)
         self.business_contact = self._enc(business_contact)
         self.city = self._enc(city)
         self.state = self._enc(state)
@@ -261,6 +263,7 @@ class Business(BaseModel):
             "image": getattr(self, "image", None),
             "business_contact": getattr(self, "business_contact", None),
             "country": self.country,
+            "phone_number": getattr(self, "phone_number", None),
             "city": getattr(self, "city", None),
             "state": getattr(self, "state", None),
             "postcode": getattr(self, "postcode", None),
@@ -526,7 +529,7 @@ class Business(BaseModel):
 
         cls.verify_permission("update", cls.__name__.lower())
 
-        ENCRYPT_FIELDS = {"business_name", "first_name", "last_name"}
+        ENCRYPT_FIELDS = {"business_name", "first_name", "last_name", "phone_number"}
 
         encrypted_updates = {}
         for key, value in updates.items():

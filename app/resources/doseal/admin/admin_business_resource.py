@@ -562,7 +562,7 @@ class UpdateBusinessResource(MethodView):
             Log.info(f"{log_tag} Error. retrieving business: {str(e)}")
 
         # Only these three fields are patchable
-        ALLOWED_FIELDS = {"business_name", "first_name", "last_name"}
+        ALLOWED_FIELDS = {"business_name", "first_name", "last_name", "phone_number"}
 
         updates = {k: v for k, v in item_data.items() if k in ALLOWED_FIELDS and v is not None}
 
