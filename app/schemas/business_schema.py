@@ -86,4 +86,5 @@ class BusinessUpdateSchema(Schema):
     first_name    = fields.Str(load_default=None)
     last_name     = fields.Str(load_default=None)
     phone_number     = fields.Str(load_default=None)
+    image     = fields.Str(load_default=None)
     

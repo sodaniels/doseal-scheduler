@@ -187,7 +187,7 @@ class Business(BaseModel):
         callback_url: Optional[str] = None,
         status: str = "Active",
         account_type: str = "super_admin",
-        image: Optional[str] = None,  # kept plain
+        image: Optional[str] = None,
         user_id: Optional[str] = None,
         facebook_user_id: Optional[str] = None,
         social_login_provider: Optional[str] = None,
@@ -529,7 +529,7 @@ class Business(BaseModel):
 
         cls.verify_permission("update", cls.__name__.lower())
 
-        ENCRYPT_FIELDS = {"business_name", "first_name", "last_name", "phone_number"}
+        ENCRYPT_FIELDS = {"business_name", "first_name", "last_name", "phone_number", "image"}
 
         encrypted_updates = {}
         for key, value in updates.items():

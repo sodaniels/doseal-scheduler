@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import uuid
 import bcrypt, jwt, os, time, secrets, json
 from functools import wraps
 from redis import Redis
@@ -63,6 +65,9 @@ from ....services.email_service import (
     send_otp_email,
     send_forgot_password_email
 )
+from ....utils.media.cloudinary_client import (
+    upload_image_file, upload_video_file
+)
 
 from ....utils.generators import (
     generate_reset_token,
@@ -85,6 +90,8 @@ from ....utils.generators import generate_registration_verification_token
 from ....utils.helpers import resolve_target_business_id_from_payload
 from ....services.seeders.social_role_seeder import SocialRoleSeeder
 from ....utils.url_utils import generate_forgot_password_token
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 SECRET_KEY = os.getenv("SECRET_KEY") 
 
@@ -560,9 +567,50 @@ class UpdateBusinessResource(MethodView):
                 return prepared_response(False,"NOT_FOUND","Business not found.")
         except Exception as e:
             Log.info(f"{log_tag} Error. retrieving business: {str(e)}")
+            
+        image = request.files["image"]
+        if (image is not None) and (image.filename == ""):
+            return jsonify({"success": False, "message": "invalid image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        if not (image.mimetype).startswith("image/"):
+            return jsonify({"success": False, "message": "file must be an image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        business_id = str(user.get("business_id") or "")
+        user_id = str(user.get("_id") or "")
+        if not business_id or not user_id:
+            return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
 
+        
+        try:
+            uploaded_payload = None
+            folder = f"profile/{business_id}/{user_id}"
+            public_id = uuid.uuid4().hex
+            Log.info(f"{log_tag} Uploading profile image for business_id: {business_id}, user_id: {user_id}, filename: {image.filename}")
+            uploaded = upload_image_file(image, folder=folder, public_id=public_id)
+            raw = uploaded.get("raw") or {}
+            
+            if uploaded is not None:
+                
+                uploaded_payload = {
+                    "asset_id": uploaded.get("public_id"),
+                    "public_id": uploaded.get("public_id"),
+                    "asset_provider": "cloudinary",
+                    "asset_type": "image",
+                    "url": uploaded.get("url"),
+
+                    "width": raw.get("width"),
+                    "height": raw.get("height"),
+                    "format": raw.get("format"),
+                    "bytes": raw.get("bytes"),
+                    "created_at": _utc_now().isoformat(),
+                }
+            
+        except Exception as e:
+            Log.info(f"{log_tag} Error uploading profile image: {str(e)}")
+        
+        
         # Only these three fields are patchable
-        ALLOWED_FIELDS = {"business_name", "first_name", "last_name", "phone_number"}
+        ALLOWED_FIELDS = {"business_name", "first_name", "last_name", "phone_number", "image"}
 
         updates = {k: v for k, v in item_data.items() if k in ALLOWED_FIELDS and v is not None}
 
@@ -570,6 +618,9 @@ class UpdateBusinessResource(MethodView):
             Log.info(f"{log_tag} No patchable fields provided")
             message = f"Nothing to update. Allowed fields: {', '.join(ALLOWED_FIELDS)}"
             return prepared_response(False,"BAD_REQUEST", message)
+        
+        if uploaded_payload is not None:
+            updates["image"] = uploaded_payload
 
         try:
             start_time = time.time()
