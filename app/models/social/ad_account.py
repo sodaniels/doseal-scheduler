@@ -12,19 +12,18 @@ from ...utils.logger import Log
 
 class AdAccount(BaseModel):
     """
-    Stores connected Facebook Ad Accounts for a business.
-    
-    One business can have multiple ad accounts.
-    Each ad account can be linked to one or more pages for boosting.
+    Stores connected Ad Accounts (Facebook, X, LinkedIn, etc.) for a business.
+
+    One business can have multiple ad accounts across platforms.
     """
-    
+
     collection_name = "social_ad_accounts"
-    
+
     STATUS_ACTIVE = "active"
     STATUS_DISABLED = "disabled"
     STATUS_PENDING_REVIEW = "pending_review"
     STATUS_DISCONNECTED = "disconnected"
-    
+
     # Facebook Ad Account Status Codes
     FB_ACCOUNT_STATUS = {
         1: "ACTIVE",
@@ -52,27 +51,29 @@ class AdAccount(BaseModel):
         page_name=None,
         business_manager_id=None,
         access_token_plain=None,
+        platform=None,
         status=None,
         meta=None,
         **kwargs,
     ):
         super().__init__(business_id=business_id, user__id=user__id, **kwargs)
-        
-        self.ad_account_id = ad_account_id  # e.g., "act_123456789"
+
+        self.ad_account_id = ad_account_id
         self.ad_account_name = ad_account_name
         self.currency = currency
         self.timezone_name = timezone_name
         self.fb_account_status = fb_account_status
-        
+
         self.page_id = page_id
         self.page_name = page_name
         self.business_manager_id = business_manager_id
-        
+
         self.access_token = encrypt_data(access_token_plain) if access_token_plain else None
-        
+
+        self.platform = platform or "facebook"
         self.status = status or self.STATUS_ACTIVE
         self.meta = meta or {}
-        
+
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
 
@@ -89,6 +90,7 @@ class AdAccount(BaseModel):
             "page_name": self.page_name,
             "business_manager_id": self.business_manager_id,
             "access_token": self.access_token,
+            "platform": self.platform,
             "status": self.status,
             "meta": self.meta,
             "created_at": self.created_at,
@@ -112,7 +114,7 @@ class AdAccount(BaseModel):
     @classmethod
     def create(cls, data: dict) -> dict:
         col = db_ext.get_collection(cls.collection_name)
-        
+
         doc = {
             "business_id": ObjectId(str(data["business_id"])),
             "user__id": ObjectId(str(data["user__id"])),
@@ -124,13 +126,18 @@ class AdAccount(BaseModel):
             "page_id": data.get("page_id"),
             "page_name": data.get("page_name"),
             "business_manager_id": data.get("business_manager_id"),
-            "access_token": encrypt_data(data["access_token"]) if data.get("access_token") else None,
+            "access_token": encrypt_data(data["access_token_plain"]) if data.get("access_token_plain") else (
+                encrypt_data(data["access_token"]) if data.get("access_token") else None
+            ),
+            "refresh_token": encrypt_data(data["refresh_token_plain"]) if data.get("refresh_token_plain") else None,
+            "token_expires_at": data.get("token_expires_at"),
+            "platform": data.get("platform", "facebook"),
             "status": data.get("status", cls.STATUS_ACTIVE),
             "meta": data.get("meta", {}),
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
         }
-        
+
         result = col.insert_one(doc)
         doc["_id"] = result.inserted_id
         return cls._oid_str(doc)
@@ -143,56 +150,73 @@ class AdAccount(BaseModel):
             "business_id": ObjectId(str(business_id)),
         })
         if doc:
-            doc["access_token_plain"] = decrypt_data(doc.get("access_token")) if doc.get("access_token") else None
+            doc["access_token_plain"] = decrypt_data(doc["access_token"]) if doc.get("access_token") else None
+            doc["refresh_token_plain"] = decrypt_data(doc["refresh_token"]) if doc.get("refresh_token") else None
         return cls._oid_str(doc)
 
     @classmethod
-    def get_by_ad_account_id(cls, business_id: str, ad_account_id: str) -> Optional[dict]:
+    def get_by_ad_account_id(cls, business_id: str, ad_account_id: str, platform: str = None) -> Optional[dict]:
         col = db_ext.get_collection(cls.collection_name)
-        
-        # Ensure ad_account_id has "act_" prefix
-        if not ad_account_id.startswith("act_"):
-            ad_account_id = f"act_{ad_account_id}"
-        
-        doc = col.find_one({
+
+        # Only apply act_ prefix for Facebook accounts
+        if platform == "facebook" or (not platform and str(ad_account_id).startswith("act_")):
+            if not str(ad_account_id).startswith("act_"):
+                ad_account_id = f"act_{ad_account_id}"
+
+        query = {
             "business_id": ObjectId(str(business_id)),
-            "ad_account_id": ad_account_id,
-        })
+            "ad_account_id": str(ad_account_id),
+        }
+        if platform:
+            query["platform"] = platform
+
+        doc = col.find_one(query)
         if doc:
-            doc["access_token_plain"] = decrypt_data(doc.get("access_token")) if doc.get("access_token") else None
+            doc["access_token_plain"] = decrypt_data(doc["access_token"]) if doc.get("access_token") else None
+            doc["refresh_token_plain"] = decrypt_data(doc["refresh_token"]) if doc.get("refresh_token") else None
         return cls._oid_str(doc)
 
     @classmethod
-    def list_by_business(cls, business_id: str, status: str = None) -> List[dict]:
+    def list_by_business(
+        cls,
+        business_id: str,
+        platform: str = None,
+        status: str = None,
+    ) -> List[dict]:
         col = db_ext.get_collection(cls.collection_name)
-        
+
         query = {"business_id": ObjectId(str(business_id))}
+        if platform:
+            query["platform"] = platform
         if status:
             query["status"] = status
-        
+
         items = list(col.find(query).sort("created_at", -1))
-        
+
         for doc in items:
             cls._oid_str(doc)
-            doc.pop("access_token", None)  # Don't expose token in list
-        
+            doc.pop("access_token", None)       # never expose encrypted token in lists
+            doc.pop("refresh_token", None)
+
         return items
 
     @classmethod
     def update(cls, account_id: str, business_id: str, updates: dict) -> bool:
         col = db_ext.get_collection(cls.collection_name)
-        
+
         updates = dict(updates)
         updates.pop("_id", None)
         updates.pop("business_id", None)
         updates.pop("user__id", None)
         updates.pop("created_at", None)
-        
-        if updates.get("access_token"):
-            updates["access_token"] = encrypt_data(updates["access_token"])
-        
+
+        if updates.get("access_token_plain"):
+            updates["access_token"] = encrypt_data(updates.pop("access_token_plain"))
+        if updates.get("refresh_token_plain"):
+            updates["refresh_token"] = encrypt_data(updates.pop("refresh_token_plain"))
+
         updates["updated_at"] = datetime.now(timezone.utc)
-        
+
         result = col.update_one(
             {
                 "_id": ObjectId(str(account_id)),
@@ -214,8 +238,8 @@ class AdAccount(BaseModel):
     @classmethod
     def ensure_indexes(cls):
         col = db_ext.get_collection(cls.collection_name)
-        col.create_index([("business_id", 1), ("ad_account_id", 1)], unique=True)
-        col.create_index([("business_id", 1), ("status", 1)])
+        col.create_index([("business_id", 1), ("platform", 1), ("ad_account_id", 1)], unique=True)
+        col.create_index([("business_id", 1), ("platform", 1), ("status", 1)])
         col.create_index([("business_id", 1), ("page_id", 1)])
         return True
 
@@ -223,12 +247,13 @@ class AdAccount(BaseModel):
 class AdCampaign(BaseModel):
     """
     Stores ad campaigns created through the platform.
-    
-    Can be linked to a scheduled post (for boosting) or standalone.
+
+    Supports Facebook, X (Twitter), and LinkedIn campaigns.
+    Platform is identified by the `platform` field.
     """
-    
+
     collection_name = "social_ad_campaigns"
-    
+
     # Campaign Status
     STATUS_DRAFT = "draft"
     STATUS_PENDING = "pending"
@@ -237,8 +262,8 @@ class AdCampaign(BaseModel):
     STATUS_COMPLETED = "completed"
     STATUS_FAILED = "failed"
     STATUS_DELETED = "deleted"
-    
-    # Campaign Objectives (ODAX)
+
+    # Campaign Objectives (ODAX / cross-platform)
     OBJECTIVE_AWARENESS = "OUTCOME_AWARENESS"
     OBJECTIVE_TRAFFIC = "OUTCOME_TRAFFIC"
     OBJECTIVE_ENGAGEMENT = "OUTCOME_ENGAGEMENT"
@@ -246,7 +271,7 @@ class AdCampaign(BaseModel):
     OBJECTIVE_LEADS = "OUTCOME_LEADS"
     OBJECTIVE_SALES = "OUTCOME_SALES"
     OBJECTIVE_APP_PROMOTION = "OUTCOME_APP_PROMOTION"
-    
+
     # Budget Types
     BUDGET_DAILY = "daily"
     BUDGET_LIFETIME = "lifetime"
@@ -256,7 +281,8 @@ class AdCampaign(BaseModel):
         business_id,
         user__id,
         ad_account_id,
-        page_id,
+        page_id=None,
+        platform=None,
         campaign_name=None,
         objective=None,
         budget_type=None,
@@ -267,10 +293,20 @@ class AdCampaign(BaseModel):
         targeting=None,
         scheduled_post_id=None,
         post_id=None,
+        # Facebook IDs
         fb_campaign_id=None,
         fb_adset_id=None,
         fb_ad_id=None,
         fb_creative_id=None,
+        # X (Twitter) IDs
+        x_campaign_id=None,
+        x_line_item_id=None,
+        x_promoted_tweet_id=None,
+        tweet_id=None,
+        # LinkedIn IDs
+        linkedin_campaign_group_id=None,
+        linkedin_campaign_id=None,
+        linkedin_creative_id=None,
         status=None,
         error=None,
         results=None,
@@ -278,36 +314,45 @@ class AdCampaign(BaseModel):
         **kwargs,
     ):
         super().__init__(business_id=business_id, user__id=user__id, **kwargs)
-        
+
         self.ad_account_id = ad_account_id
         self.page_id = page_id
-        
+        self.platform = platform or "facebook"
+
         self.campaign_name = campaign_name
         self.objective = objective or self.OBJECTIVE_ENGAGEMENT
-        
+
         self.budget_type = budget_type or self.BUDGET_DAILY
-        self.budget_amount = budget_amount  # in cents
+        self.budget_amount = budget_amount
         self.currency = currency
-        
+
         self.start_time = start_time
         self.end_time = end_time
-        
         self.targeting = targeting or {}
-        
-        # Link to scheduled post (if boosting)
+
         self.scheduled_post_id = scheduled_post_id
-        self.post_id = post_id  # Facebook post ID to boost
-        
-        # Facebook IDs (populated after creation)
+        self.post_id = post_id
+
+        # Facebook
         self.fb_campaign_id = fb_campaign_id
         self.fb_adset_id = fb_adset_id
         self.fb_ad_id = fb_ad_id
         self.fb_creative_id = fb_creative_id
-        
+
+        # X
+        self.x_campaign_id = x_campaign_id
+        self.x_line_item_id = x_line_item_id
+        self.x_promoted_tweet_id = x_promoted_tweet_id
+        self.tweet_id = tweet_id
+
+        # LinkedIn
+        self.linkedin_campaign_group_id = linkedin_campaign_group_id
+        self.linkedin_campaign_id = linkedin_campaign_id
+        self.linkedin_creative_id = linkedin_creative_id
+
         self.status = status or self.STATUS_DRAFT
         self.error = error
-        
-        # Performance results
+
         self.results = results or {
             "impressions": 0,
             "reach": 0,
@@ -318,9 +363,9 @@ class AdCampaign(BaseModel):
             "ctr": 0,
             "actions": [],
         }
-        
+
         self.meta = meta or {}
-        
+
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
 
@@ -330,6 +375,7 @@ class AdCampaign(BaseModel):
             "user__id": self.user__id,
             "ad_account_id": self.ad_account_id,
             "page_id": self.page_id,
+            "platform": self.platform,
             "campaign_name": self.campaign_name,
             "objective": self.objective,
             "budget_type": self.budget_type,
@@ -344,6 +390,13 @@ class AdCampaign(BaseModel):
             "fb_adset_id": self.fb_adset_id,
             "fb_ad_id": self.fb_ad_id,
             "fb_creative_id": self.fb_creative_id,
+            "x_campaign_id": self.x_campaign_id,
+            "x_line_item_id": self.x_line_item_id,
+            "x_promoted_tweet_id": self.x_promoted_tweet_id,
+            "tweet_id": self.tweet_id,
+            "linkedin_campaign_group_id": self.linkedin_campaign_group_id,
+            "linkedin_campaign_id": self.linkedin_campaign_id,
+            "linkedin_creative_id": self.linkedin_creative_id,
             "status": self.status,
             "error": self.error,
             "results": self.results,
@@ -378,12 +431,13 @@ class AdCampaign(BaseModel):
     @classmethod
     def create(cls, data: dict) -> dict:
         col = db_ext.get_collection(cls.collection_name)
-        
+
         doc = {
             "business_id": ObjectId(str(data["business_id"])),
             "user__id": ObjectId(str(data["user__id"])),
             "ad_account_id": data["ad_account_id"],
-            "page_id": data["page_id"],
+            "page_id": data.get("page_id"),
+            "platform": data.get("platform", "facebook"),
             "campaign_name": data.get("campaign_name"),
             "objective": data.get("objective", cls.OBJECTIVE_ENGAGEMENT),
             "budget_type": data.get("budget_type", cls.BUDGET_DAILY),
@@ -394,10 +448,20 @@ class AdCampaign(BaseModel):
             "targeting": data.get("targeting", {}),
             "scheduled_post_id": ObjectId(str(data["scheduled_post_id"])) if data.get("scheduled_post_id") else None,
             "post_id": data.get("post_id"),
+            # Facebook
             "fb_campaign_id": data.get("fb_campaign_id"),
             "fb_adset_id": data.get("fb_adset_id"),
             "fb_ad_id": data.get("fb_ad_id"),
             "fb_creative_id": data.get("fb_creative_id"),
+            # X
+            "x_campaign_id": data.get("x_campaign_id"),
+            "x_line_item_id": data.get("x_line_item_id"),
+            "x_promoted_tweet_id": data.get("x_promoted_tweet_id"),
+            "tweet_id": data.get("tweet_id"),
+            # LinkedIn
+            "linkedin_campaign_group_id": data.get("linkedin_campaign_group_id"),
+            "linkedin_campaign_id": data.get("linkedin_campaign_id"),
+            "linkedin_creative_id": data.get("linkedin_creative_id"),
             "status": data.get("status", cls.STATUS_DRAFT),
             "error": data.get("error"),
             "results": data.get("results", {
@@ -408,7 +472,7 @@ class AdCampaign(BaseModel):
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
         }
-        
+
         result = col.insert_one(doc)
         doc["_id"] = result.inserted_id
         return cls._oid_str(doc)
@@ -435,18 +499,21 @@ class AdCampaign(BaseModel):
     def list_by_business(
         cls,
         business_id: str,
+        platform: str = None,
         status: str = None,
         page: int = 1,
         per_page: int = 20,
     ) -> Dict[str, Any]:
         col = db_ext.get_collection(cls.collection_name)
-        
+
         query = {"business_id": ObjectId(str(business_id))}
+        if platform:
+            query["platform"] = platform
         if status:
             query["status"] = status
-        
+
         total_count = col.count_documents(query)
-        
+
         skip = (page - 1) * per_page
         items = list(
             col.find(query)
@@ -454,13 +521,13 @@ class AdCampaign(BaseModel):
             .skip(skip)
             .limit(per_page)
         )
-        
+
         for doc in items:
             cls._oid_str(doc)
-        
+
         return {
             "items": items,
-            "total_count": total_count,
+            "total": total_count,
             "total_pages": (total_count + per_page - 1) // per_page,
             "current_page": page,
             "per_page": per_page,
@@ -469,15 +536,15 @@ class AdCampaign(BaseModel):
     @classmethod
     def update(cls, campaign_id: str, business_id: str, updates: dict) -> bool:
         col = db_ext.get_collection(cls.collection_name)
-        
+
         updates = dict(updates)
         updates.pop("_id", None)
         updates.pop("business_id", None)
         updates.pop("user__id", None)
         updates.pop("created_at", None)
-        
+
         updates["updated_at"] = datetime.now(timezone.utc)
-        
+
         result = col.update_one(
             {
                 "_id": ObjectId(str(campaign_id)),
@@ -507,8 +574,10 @@ class AdCampaign(BaseModel):
     @classmethod
     def ensure_indexes(cls):
         col = db_ext.get_collection(cls.collection_name)
-        col.create_index([("business_id", 1), ("status", 1), ("created_at", -1)])
+        col.create_index([("business_id", 1), ("platform", 1), ("status", 1), ("created_at", -1)])
         col.create_index([("business_id", 1), ("scheduled_post_id", 1)])
         col.create_index([("business_id", 1), ("ad_account_id", 1)])
-        col.create_index([("fb_campaign_id", 1)])
+        col.create_index([("fb_campaign_id", 1)], sparse=True)
+        col.create_index([("x_campaign_id", 1)], sparse=True)
+        col.create_index([("linkedin_campaign_id", 1)], sparse=True)
         return True
