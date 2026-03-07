@@ -6,7 +6,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 
-from ...utils.logger import Log
+from ....utils.logger import Log
 
 
 class FacebookAdsService:

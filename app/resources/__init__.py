@@ -88,6 +88,7 @@ from .notifications.notification_settings_resource import blp_notifications
 from .social.campaigns.facebook_ads_resource import blp_facebook_ads
 from .social.campaigns.instagram_ads_resource import blp_instagram_ads
 from .social.campaigns.pinterest_ads_resource import blp_pinterest_ads
+from .social.campaigns.x_ads_resource import blp_x_ads
 from .social.auth.facebook_login_resource import blp_facebook_login
 from .social.auth.instagram_login_resource import blp_instagram_login
 from .social.auth.x_login_resource import blp_x_login
@@ -140,6 +141,7 @@ __all__ = [
     "blp_facebook_ads",
     "blp_instagram_ads",
     "blp_pinterest_ads",
+    "blp_x_ads",
     "blp_facebook_login",
     "blp_instagram_login",
     "blp_x_login",

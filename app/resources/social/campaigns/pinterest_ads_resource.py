@@ -16,7 +16,7 @@ from ....utils.helpers import make_log_tag
 
 from ....models.social.social_account import SocialAccount
 from ....models.social.pinterest_ad_account import PinterestAdAccount, PinterestAdCampaign
-from ....services.social.pinterest_ads_service import PinterestAdsService
+from ....services.social.ads.pinterest_ads_service import PinterestAdsService
 
 from ....schemas.social.social_schema import (
     AccountConnectionSchema, PinterestAccountConnectionSchema

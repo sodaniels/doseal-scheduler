@@ -16,7 +16,7 @@ from ....utils.json_response import prepared_response
 
 from ....models.social.social_account import SocialAccount
 from ....models.social.ad_account import AdAccount, AdCampaign
-from ....services.social.facebook_ads_service import FacebookAdsService
+from ....services.social.ads.facebook_ads_service import FacebookAdsService
 
 #schemas
 from ....schemas.social.social_schema import (
