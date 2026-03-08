@@ -631,7 +631,8 @@ class UpdateBusinessResource(MethodView):
             Log.info(f"{log_tag} Business updated in {duration:.2f}s fields={list(updates.keys())}")
 
             if not result:
-                return prepared_response(False,"changes", "Business not found or no changes made")
+                Log.info(f"{log_tag} Business updated in {duration:.2f}s fields={list(updates.keys())}")
+                return prepared_response(False,"changes", "Business not found or no changes made.")
             
             try:
                 #logout user

@@ -1131,8 +1131,6 @@ def send_trial_expired_email(business_id: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-# services/email_service.py
-
 # =========================================================
 # FORGOT PASSWORD EMAIL
 # =========================================================
@@ -1213,8 +1211,79 @@ def send_forgot_password_email(
         return {"success": False, "error": str(e)}
 
 
+# =========================================================
+# ADMIN INVITATION EMAIL (SIMPLE VERSION)
+# =========================================================
+def send_admin_invitation_email(
+    email: str,
+    confirmation_url: str,
+    admin_name: str = None,
+    business_name: str = None,
+) -> Dict[str, Any]:
+    """
+    Send admin invitation email with account confirmation link.
 
+    Args:
+        email: Admin email address
+        confirmation_url: Secure confirmation URL (includes token)
+        admin_name: Admin full name (optional)
+        business_name: Business name (optional)
 
+    Returns:
+        Dict with success status and message_id
+    """
+
+    log_tag = f"[email_service][send_admin_invitation_email][{email}]"
+
+    try:
+        cfg = load_email_config()
+        svc = EmailService(cfg)
+
+        app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+        support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
+
+        expiry_hours = int(os.getenv("ADMIN_INVITE_EXPIRY_HOURS", "24"))
+
+        subject = f"You’ve been invited to join {app_name}"
+
+        expiry_text = f"{expiry_hours} hours"
+
+        text_fallback = (
+            f"Hi{', ' + admin_name if admin_name else ''},\n\n"
+            f"You have been added as an administrator"
+            f"{' for ' + business_name}.\n\n"
+            f"To activate your account and set your password, click the link below:\n"
+            f"{confirmation_url}\n\n"
+            f"⏱️ This link will expire in {expiry_text}.\n\n"
+            f"If you were not expecting this invitation, you can safely ignore this email.\n\n"
+            f"For assistance, contact {support_email}\n\n"
+            f"— {app_name}"
+        )
+
+        return svc.send_templated(
+            to=email,
+            subject=subject,
+            template="email/admin_invitation.html",
+            context={
+                "admin_name": admin_name,
+                "business_name": business_name,
+                "app_name": cfg.from_name,
+                "confirmation_link": confirmation_url,
+                "link_expiry_hours": expiry_hours,
+                "support_email": support_email,
+                "email": email,
+            },
+            text_fallback=text_fallback,
+            tags=["admin", "invitation"],
+            meta={
+                "email_type": "admin_invitation",
+                "email": email,
+            },
+        )
+
+    except Exception as e:
+        Log.error(f"{log_tag} Error sending invitation email: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 
 

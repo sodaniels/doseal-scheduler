@@ -66,6 +66,12 @@ def send_user_registration_email(email, name, link):
     html    = render_template("email/agent_initial_account.html", email=email, link=link, app_name=MAIL_NAME)
     return send_simple_message(email, subject, body, html)
 
+def send_admin_invitation_email(email, name, link):
+    subject = f"Welcome to {MAIL_NAME}"
+    body    = f"Hi {name}! Complete your registration by confirming your email and choosing a new password."
+    html    = render_template("email/admin_invitation.html", email=email, link=link, app_name=MAIL_NAME)
+    return send_simple_message(email, subject, body, html)
+
 def send_subscriber_registration_email(email, name, link):
     subject = f"Welcome to {MAIL_NAME}"
     body    = f"Hi {name}! Complete your registration by confirming your email."

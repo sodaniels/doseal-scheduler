@@ -664,7 +664,7 @@ class Admin(BaseModel):
         business_id: str,
         role: Optional[str],
         user_id: Optional[str],
-        password: str,
+        password: Optional[str] = None,
         fullname: Optional[str] = None,
         phone: Optional[str] = None,
         email: Optional[str] = None,

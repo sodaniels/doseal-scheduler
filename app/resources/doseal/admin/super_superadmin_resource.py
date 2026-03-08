@@ -3,7 +3,9 @@ import jwt
 import os
 import time
 import secrets
+import uuid
 
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from redis import Redis
 from functools import wraps
@@ -21,10 +23,16 @@ from ....utils.file_upload import (
     upload_file, upload_file_to_bucket
 )
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
+from ....utils.media.cloudinary_client import upload_image_file
+
 
 from ....utils.helpers import (
-    validate_and_format_phone_number, create_token_response_admin, 
+    validate_and_format_phone_number, 
+    create_token_response_admin,
     generate_tokens, safe_decrypt
+)
+from ....services.email_service import (
+    send_admin_invitation_email
 )
 
 from ....utils.rate_limits import (
@@ -34,12 +42,15 @@ from ....utils.rate_limits import (
     profile_retrieval_limiter 
 )
 
-
 from ....utils.json_response import prepared_response
 from ....utils.essentials import Essensial
 from ....utils.helpers import make_log_tag
-from ....utils.generators import generate_confirm_email_token
-from tasks import send_user_registration_email
+from ....utils.generators import (
+    generate_confirm_email_token, generate_confirm_admin_email_token
+)
+from tasks import (
+    send_user_registration_email,
+)
 #helper functions
 
 from .admin_business_resource import token_required
@@ -73,6 +84,8 @@ from ....models.admin.subscription_model import Subscription
 from ....models.business_model import Business
 from ....models.user_model import User
 from ....utils.plan.quota_enforcer import QuotaEnforcer, PlanLimitError
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 blp_admin_role = Blueprint("Admin Role", __name__,  description="Admin Role Management")
@@ -1492,7 +1505,9 @@ class AdminResource(MethodView):
         account_type_enc = user_info.get("account_type")
         account_type = account_type_enc if account_type_enc else None
         
+        
         business = {}
+        business_name = None
         addon_users = 0
         updated_message = None
         updated_meta = None
@@ -1509,6 +1524,8 @@ class AdminResource(MethodView):
         item_data["user_id"] = user_info.get("user_id")
         item_data["created_by"] = str(user_info.get("_id"))
         role_id = item_data.get("role")
+        
+        email = item_data.get("email")
 
         log_tag = make_log_tag(
             "super_superadmin_resource.py",
@@ -1532,10 +1549,15 @@ class AdminResource(MethodView):
 
         tenant_id_encrypted = business.get("tenant_id")
         tenant_id = decrypt_data(tenant_id_encrypted)
+        business_name = business.get("business_name")
 
         if not tenant_id:
             Log.info(f"{log_tag} Could not retrieve tenant information")
             return prepared_response(False, "BAD_REQUEST", "Could not retrieve tenant information.")
+        
+        if User.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):
+            Log.info(f"{log_tag} A user with this email already exists.")
+            return prepared_response(False, "CONFLICT", f"A user with this email already exists.")
 
         tenant = Essensial.get_tenant_by_id(tenant_id)
         country_iso_2 = tenant.get("country_iso_2")
@@ -1564,23 +1586,49 @@ class AdminResource(MethodView):
             )
 
         # ----------------- IMAGE UPLOAD (OPTIONAL) ----------------- #
-        actual_path = None
-        if "image" in request.files:
-            image = request.files["image"]
-            try:
-                image_path, actual_path = upload_file(image, user_info.get("agent_id"))
-                item_data["image"] = image_path
-                item_data["file_path"] = actual_path
-            except ValueError as e:
-                return prepared_response(False, "BAD_REQUEST", f"Error uploading image. {str(e)}")
+        image = request.files["image"]
+        if (image is not None) and (image.filename == ""):
+            return jsonify({"success": False, "message": "invalid image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        if not (image.mimetype).startswith("image/"):
+            return jsonify({"success": False, "message": "file must be an image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        uploaded_payload = {}
+        try:
+            user_id = str(user_info.get("_id") or "")
+            folder = f"profile/{target_business_id}/{user_id}"
+            public_id = uuid.uuid4().hex
+            Log.info(f"{log_tag} Uploading profile image for business_id: {target_business_id}, user_id: {user_id}, filename: {image.filename}")
+            uploaded = upload_image_file(image, folder=folder, public_id=public_id)
+            raw = uploaded.get("raw") or {}
+            
+            if uploaded is not None:
+                
+                uploaded_payload = {
+                    "asset_id": uploaded.get("public_id"),
+                    "public_id": uploaded.get("public_id"),
+                    "asset_provider": "cloudinary",
+                    "asset_type": "image",
+                    "url": uploaded.get("url"),
+
+                    "width": raw.get("width"),
+                    "height": raw.get("height"),
+                    "format": raw.get("format"),
+                    "bytes": raw.get("bytes"),
+                    "created_at": _utc_now().isoformat(),
+                }
+            
+        except Exception as e:
+            Log.info(f"{log_tag} Error uploading profile image: {str(e)}")
+            
+        if uploaded_payload.get("asset_id") is not None:
+            item_data["image"] = uploaded_payload
+            
 
         # ----------------- UNIQUENESS CHECKS (EMAIL, PHONE) ----------------- #
         should_reserve_quota = False
         Log.info(f"{log_tag} [{client_ip}] checking if admin (email) already exists")
-        if Admin.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):
-            if actual_path:
-                os.remove(actual_path)
-            Log.info(f"{log_tag} [{client_ip}] checking if admin (phone) already exists")    
+        if Admin.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):  
             return prepared_response(False, "CONFLICT", "Admin account already exists")
         else:
             # If admin doesn't exist, we will proceed with the creation and reserve quota for it (if applicable)
@@ -1639,15 +1687,14 @@ class AdminResource(MethodView):
                         # Update message to reflect addon users
                         updated_message = f"User limit reached. You have {allowed_current_admin_count} of {allowed_addon_users_plus_one} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
                         
-                        if actual_path:
-                            os.remove(actual_path)
-                        
                         return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
                     
                     
                     return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
         # ----------------- HASH PASSWORD ----------------- #
+        temp_password = time.time()
+        item_data["password"] = str(temp_password)
         item_data["password"] = bcrypt.hashpw(
             item_data["password"].encode("utf-8"),
             bcrypt.gensalt()
@@ -1691,22 +1738,59 @@ class AdminResource(MethodView):
                     user = User(**user_data)
                     user_client_id = user.save()
                     Log.info(f"{log_tag} user_client_id: {user_client_id}")
+                else:
+                    Log.info(f"{log_tag} Failed to stor user, delete uploaded image.")
+                    
+                    import cloudinary
+                    import cloudinary.uploader
+                    public_id = uploaded.get("public_id")
+                    
+                    result = cloudinary.uploader.destroy(
+                        public_id,
+                        resource_type="image",
+                    )
+                    Log.info(f"{log_tag} result: {result}")
+            
             except Exception as e:
                 Log.info(f"{log_tag} Failed to upsert: {e}")
                 if should_reserve_quota:
                     enforcer.release(counter_name="max_users", qty=1, period="billing")
                 Log.error(f"{log_tag}[{client_ip}][{system_user_id}] error creating User record: {str(e)}")
-
+               
+  
             if system_user_id is not None:
+                
+                # send email to newly created admin to reset their password 
+                try:
+                    
+                    return_url= os.getenv("ADMIN_RESET_PASSWORD_RETURN_URL", "http://app.schedulefy.org")
+                    token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
+                    reset_url = generate_confirm_admin_email_token(return_url, token)
+
+                    update_code = User.update_auth_code(email, token)
+                    
+                    if update_code:
+                        Log.info(f"{log_tag}\t reset_url: {reset_url}")
+                        try:
+                            result = send_admin_invitation_email(
+                                email=email,
+                                confirmation_url=reset_url,
+                                admin_name=item_data.get("fullname"),
+                                business_name=business_name
+                            )
+                            Log.info(f"Email sent result={result}")
+                        except Exception as e:
+                            Log.error(f"Email sending failed: {e}")
+                            raise
+                except Exception as e:
+                    Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
+                  
+                  
                 return prepared_response(True, "OK", "Admin created successfully.")
             else:
-                if actual_path:
-                    os.remove(actual_path)
                 return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to create system user.")
 
         except PyMongoError as e:
-            if actual_path:
-                os.remove(actual_path)
             Log.info(f"{log_tag} PyMongoError while creating admin: {e}")
             return prepared_response(
                 False,
@@ -1715,8 +1799,6 @@ class AdminResource(MethodView):
                 errors=str(e),
             )
         except Exception as e:
-            if actual_path:
-                os.remove(actual_path)
             Log.info(f"{log_tag} unexpected error while creating admin: {e}")
             return prepared_response(
                 False,

@@ -413,11 +413,10 @@ class SystemUserSchema(Schema):
         error_messages={"invalid": "Invalid email address"}
     )
 
-    image = fields.Raw(
+    image = fields.Dict(
         required=False,
         allow_none=True,
-        validate=validate_image,
-        error_messages={"invalid": "Image must be a valid file"}
+        error_messages={"invalid": "Image must be a valid object"}
     )
 
     file_path = fields.Str(
@@ -432,10 +431,9 @@ class SystemUserSchema(Schema):
     )
 
     password = fields.Str(
-        required=True,
+        required=False,
+        allow_none=True,
         load_only=True,
-        validate=validate.Length(min=8, max=100),
-        error_messages={"required": "Password is required", "min_length": "Password must be at least 8 characters"}
     )
 
     status = fields.Str(
