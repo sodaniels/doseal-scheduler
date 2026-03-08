@@ -42,7 +42,7 @@ from ....models.user_model import User
 from ....models.admin.super_superadmin_model import Role
 from ....models.notifications.notification_settings import NotificationSettings
 from ....models.social.password_reset_token import PasswordResetToken
-
+from ....schemas.social.change_password_schema import ChoosePasswordSchema
 
 from ....utils.logger import Log # import logging
 from ....utils.generators import generate_client_id, generate_client_secret
@@ -53,6 +53,7 @@ from ....utils.redis import (
     set_redis_with_expiry, set_redis, get_redis, remove_redis
 )
 from ....utils.generators import generate_otp
+from ....utils.generators import generate_return_url_with_payload
 
 from ....constants.service_code import (
     HTTP_STATUS_CODES, SYSTEM_USERS, BUSINESS_FIELDS
@@ -1226,7 +1227,166 @@ class ChangePasswordResource(MethodView):
         except Exception as e:
             Log.info(f"{log_tag} [{client_ip}] Unexpected error: {e}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
+   
+
+#-------------------------------------------------------
+# CHOOSE PASSWORD
+#------------------------------------------------------- 
+@blp_business_auth.route("/choose-password", methods=["POST"])
+class ChoosePasswordResource(MethodView):
+
+    @profile_retrieval_limiter("change_password")
+    @blp_business_auth.arguments(ChoosePasswordSchema, location="form")
+    @blp_business_auth.doc(
+        summary="Change password for the current authenticated user",
+        description="""
+            Change the password of the currently authenticated user.
+
+            **How it works**
+            - The user must provide `current_password` and `new_password`.
+            - The API verifies `current_password` against the stored bcrypt hash.
+            - If valid, the API hashes `new_password` and updates the user record.
+
+            **Notes**
+            - Requires a valid Bearer token.
+            - Password update is enforced within the resolved business scope.
+        """,
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": ChoosePasswordSchema,
+                    "example": {
+                        "current_password": "OldPassword123",
+                        "new_password": "NewStrongPassword123"
+                    }
+                }
+            },
+        },
+        responses={
+            200: {
+                "description": "Password changed successfully",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Password changed successfully."
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Bad request / validation error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid input data"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized / wrong current password",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Current password is incorrect."
+                        }
+                    }
+                }
+            },
+            404: {
+                "description": "User not found",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 404,
+                            "message": "User not found"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        },
+        security=[{"Bearer": []}],
+    )
+    def post(self, payload):
+        client_ip = request.remote_addr
+        log_tag = "[admin_business_resource.py][ChoosePasswordResource][post]"
+
+        try:
+            token = payload.get("token")
+            target_business_id = payload.get("business_id")
+            password = payload.get("password")
+
+            Log.info(
+                f"{log_tag} [{client_ip}] change password request "
+                f"business_id={target_business_id}"
+            )
+
+            user_from_auth = User.get_auth_code(token)
+            if not user_from_auth:
+                Log.info(f"{log_tag} [{client_ip}] Invalid or expired token.")
+                return prepared_response(False, "BAD_REQUEST", "Invalid or expired token.")
+
+            auth_user__id = user_from_auth.get("_id")
+            email = decrypt_data(user_from_auth.get("email"))
+            fullname = decrypt_data(user_from_auth.get("fullname"))
+            
+            # Log.info(f"user_from_auth: {user_from_auth}")
+            
+            updated = User.update_password(
+                user_id=auth_user__id,
+                business_id=target_business_id,
+                new_password=password,
+            )
+
+            if not updated:
+                Log.info(f"{log_tag} [{client_ip}] password update failed for user_id={auth_user__id}")
+                return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to change password.")
+            
+            #send email about password change
+            try:
+                update_passsword = send_password_changed_email(
+                    email=email,
+                    fullname=fullname,
+                    changed_at=datetime.now(),
+                    ip_address=request.remote_addr,
+                    user_agent=request.headers.get("User-Agent"),
+                )
+                Log.error(f"{log_tag} change password email update: {update_passsword}")
+            except Exception as e:
+                Log.error(f"{log_tag} error sending change password emails: {e}")
+
+            Log.info(f"{log_tag} [{client_ip}] password changed successfully for user_id={auth_user__id}")
+            return prepared_response(True, "OK", "Password changed successfully.")
+
+        except PyMongoError as e:
+            Log.info(f"{log_tag} [{client_ip}] PyMongoError: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected database error occurred.", errors=str(e))
+        except Exception as e:
+            Log.info(f"{log_tag} [{client_ip}] Unexpected error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
       
+   
 
 # -----------------------INITIATE EMAIL VERIFICAITON-----------------------------------------
 @blp_business_auth.route("/initiate-email-verification", methods=["POST"])

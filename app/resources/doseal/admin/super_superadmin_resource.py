@@ -72,7 +72,7 @@ from ....schemas.super_superadmin_schema import (
     ExpenseIdQuerySchema, ExpenseSchema, ExpenseUpdateSchema, AgentIdQuerySchema,
     SystemUserSchema, SystemUserUpdateSchema, SystemAdminIdQuerySchema, RolesSchema,
     AgentsQuerySchema, ExpensesSchema, DownloadsSchema, SelectMoreSchema,
-    SubscriberQuerySchema, SubscribersSchema, SearchSubscriberQuerySchema
+    SubscriberQuerySchema, SubscribersSchema, SearchSubscriberQuerySchema,
 )
 from ....schemas.login_schema import LoginInitiateSchema as LoginSchema
 from ....schemas.admin.setup_schema import BusinessIdAndUserIdQuerySchema
@@ -1585,6 +1585,75 @@ class AdminResource(MethodView):
                 errors=str(e),
             )
 
+        
+            
+
+        # ----------------- UNIQUENESS CHECKS (EMAIL, PHONE) ----------------- #
+        should_reserve_quota = False
+        Log.info(f"{log_tag} [{client_ip}] checking if admin (email) already exists")
+        if Admin.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):  
+            return prepared_response(False, "CONFLICT", "Admin account already exists")
+        else:
+            # If admin doesn't exist, we will proceed with the creation and reserve quota for it (if applicable)
+            should_reserve_quota = True
+        
+        # ----------------- GET SUBSCRIPTION & ADDON USERS ----------------- #
+        try:
+            business_subscription = Subscription.get_active_by_business(target_business_id)
+            if business_subscription:
+                addon_users = int(business_subscription.get("addon_users") or 0)
+        except Exception as e:
+            Log.info(f"{log_tag} error getting subscription: {e}")
+            
+        # ----------------- PLAN ENFORCER ----------------- #
+        enforcer = QuotaEnforcer(target_business_id)
+
+        # ✅ Reserve quota ONLY if this is a brand new connection
+        if should_reserve_quota:
+            try:
+                enforcer.reserve(
+                    counter_name="max_users",
+                    limit_key="max_users",
+                    qty=1,
+                    period="billing",
+                    reason="max_users:create",
+                )
+            except PlanLimitError as e:
+                Log.info(f"{log_tag} default plan limit reached. entring checking addon_users : {e.meta}")
+
+                # Check if business has addon users
+                allowed_addon_users = addon_users  
+                
+                # ✅ Use the efficient count method instead of fetching all admins
+                current_admin_count = Admin.get_by_business_id_count(target_business_id)
+                
+                Log.info(f"{log_tag} current_admin_count: {current_admin_count}, allowed_addon_users: {allowed_addon_users}")
+                    
+                if current_admin_count < allowed_addon_users:  # Allow creation if within addon limits (current count includes the new admin being created)
+                    pass
+                else:
+                    # Check if admin count exceeds allowed addon users
+                    if current_admin_count >= allowed_addon_users:
+                        allowed_current_admin_count = current_admin_count + 1
+                        allowed_addon_users_plus_one = allowed_addon_users + 1
+                        
+                        Log.info(f"{log_tag} admin count exceeds allowed addon users: {allowed_current_admin_count} >= {allowed_addon_users}")
+                        
+                        # Update the error meta with correct current and limit values
+                        updated_meta = e.meta.copy() if e.meta else {}
+                        updated_meta["current"] = allowed_current_admin_count
+                        updated_meta["limit"] = allowed_addon_users_plus_one
+                        updated_meta["addon_users"] = addon_users
+                        updated_meta["base_users"] = 1  # Default user every business has
+                        
+                        # Update message to reflect addon users
+                        updated_message = f"User limit reached. You have {allowed_current_admin_count} of {allowed_addon_users_plus_one} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
+                        
+                        return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
+                    
+                    return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
+
+        
         # ----------------- IMAGE UPLOAD (OPTIONAL) ----------------- #
         image = request.files["image"]
         if (image is not None) and (image.filename == ""):
@@ -1623,75 +1692,9 @@ class AdminResource(MethodView):
             
         if uploaded_payload.get("asset_id") is not None:
             item_data["image"] = uploaded_payload
-            
-
-        # ----------------- UNIQUENESS CHECKS (EMAIL, PHONE) ----------------- #
-        should_reserve_quota = False
-        Log.info(f"{log_tag} [{client_ip}] checking if admin (email) already exists")
-        if Admin.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):  
-            return prepared_response(False, "CONFLICT", "Admin account already exists")
-        else:
-            # If admin doesn't exist, we will proceed with the creation and reserve quota for it (if applicable)
-            should_reserve_quota = True
+        # ----------------- IMAGE UPLOAD (OPTIONAL) ----------------- #
         
-        # ----------------- GET SUBSCRIPTION & ADDON USERS ----------------- #
-        try:
-            business_subscription = Subscription.get_active_by_business(target_business_id)
-            if business_subscription:
-                addon_users = int(business_subscription.get("addon_users") or 0)
-        except Exception as e:
-            Log.info(f"{log_tag} error getting subscription: {e}")
-            
-        # ----------------- PLAN ENFORCER ----------------- #
-        enforcer = QuotaEnforcer(target_business_id)
-
-        # ✅ Reserve quota ONLY if this is a brand new connection
-        if should_reserve_quota:
-            try:
-                enforcer.reserve(
-                    counter_name="max_users",
-                    limit_key="max_users",
-                    qty=1,
-                    period="billing",
-                    reason="max_users:create",
-                )
-            except PlanLimitError as e:
-                Log.info(f"{log_tag} plan limit reached: {e.meta}")
-
-                # Check if business has addon users
-                allowed_addon_users = addon_users  
-                
-                # ✅ Use the efficient count method instead of fetching all admins
-                current_admin_count = Admin.get_by_business_id_count(target_business_id)
-                
-                
-                Log.info(f"{log_tag} current_admin_count: {current_admin_count}, allowed_addon_users: {allowed_addon_users}")
-                    
-                if current_admin_count < allowed_addon_users:  # Allow creation if within addon limits (current count includes the new admin being created)
-                    pass
-                else:
-                    # Check if admin count exceeds allowed addon users
-                    if current_admin_count >= allowed_addon_users:
-                        allowed_current_admin_count = current_admin_count + 1
-                        allowed_addon_users_plus_one = allowed_addon_users + 1
-                        
-                        Log.info(f"{log_tag} admin count exceeds allowed addon users: {allowed_current_admin_count} >= {allowed_addon_users}")
-                        
-                        # Update the error meta with correct current and limit values
-                        updated_meta = e.meta.copy() if e.meta else {}
-                        updated_meta["current"] = allowed_current_admin_count
-                        updated_meta["limit"] = allowed_addon_users_plus_one
-                        updated_meta["addon_users"] = addon_users
-                        updated_meta["base_users"] = 1  # Default user every business has
-                        
-                        # Update message to reflect addon users
-                        updated_message = f"User limit reached. You have {allowed_current_admin_count} of {allowed_addon_users_plus_one} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
-                        
-                        return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
-                    
-                    
-                    return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
-
+        
         # ----------------- HASH PASSWORD ----------------- #
         temp_password = time.time()
         item_data["password"] = str(temp_password)

@@ -362,6 +362,29 @@ class User(BaseModel):
         return result.matched_count > 0
 
     @staticmethod
+    def update_admin_user_status(email_hashed):
+        """Activate user and clear auth_code by hashed email."""
+        users_collection = db.get_collection("users")
+
+        user = users_collection.find_one({"email_hashed": email_hashed})
+        if not user:
+            return False
+
+        result = users_collection.update_one(
+            {"email_hashed": email_hashed},
+            {
+                "$set": {
+                    "status": encrypt_data("Active"),
+                    "email_verified": "verified",
+                    "email_verified": "verified",
+                },
+                "$unset": {"auth_code": ""},
+            },
+        )
+        return result.matched_count > 0
+
+
+    @staticmethod
     def update_last_login(
         *, _id: str | ObjectId, ip_address: str | None = None
     ) -> bool:
