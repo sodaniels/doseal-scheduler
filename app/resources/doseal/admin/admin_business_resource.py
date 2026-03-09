@@ -1348,7 +1348,8 @@ class ChoosePasswordResource(MethodView):
             success = User.update_password(
                 user_id=user_id, 
                 business_id=business_id, 
-                new_password=password
+                new_password=password,
+                password_chosen=True
             )
             
             if not success:
@@ -1358,6 +1359,17 @@ class ChoosePasswordResource(MethodView):
                     "INTERNAL_SERVER_ERROR",
                     "Failed to update password. Please try again."
                 )
+                
+            try:
+                update_account_status = Business.update_account_status_by_business_id(
+                    business_id,
+                    client_ip,
+                    'business_email_verified',
+                    True
+                )
+                Log.info(f"{log_tag} update_account_status: {update_account_status}")
+            except Exception as e:
+                Log.info(f"{log_tag} \t Error updating account status: {str(e)}")
                 
             # Mark token as used
             PasswordResetToken.mark_token_used(reset_token)

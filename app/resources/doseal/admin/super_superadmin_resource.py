@@ -2621,6 +2621,11 @@ class ResendResetPasswordLinkResource(MethodView):
         except Exception as e:
             Log.info(f"{log_tag} Error retrieving user record: {e}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.")
+        
+        #check if password is already chosen
+        if user_record.get("password_chosen"):
+            Log.info(f"{log_tag} This admin has already chosen a password.")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "This admin has already chosen a password")
 
         
         # ----------------- GENERATE RESET TOKEN & SEND EMAIL ----------------- #

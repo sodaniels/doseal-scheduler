@@ -273,7 +273,7 @@ class User(BaseModel):
             return False
     
     @classmethod
-    def update_password(cls, *, user_id: str, business_id: str, new_password: str) -> bool:
+    def update_password(cls, *, user_id: str, business_id: str, new_password: str, password_chosen=False) -> bool:
         """
         Update password for a user within a business scope.
         """
@@ -295,6 +295,7 @@ class User(BaseModel):
                 {
                     "$set": {
                         "password": hashed,
+                        "password_chosen": password_chosen if password_chosen else False,
                         "updated_at": datetime.utcnow()
                     }
                 }
