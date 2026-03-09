@@ -148,6 +148,7 @@ class Business(BaseModel):
         else:
             return {"success": False, "message": "Failed to update account status"}
     
+    
     @staticmethod
     def check_password(business_doc: dict, password: str) -> bool:
         stored_hash = (business_doc or {}).get("password")

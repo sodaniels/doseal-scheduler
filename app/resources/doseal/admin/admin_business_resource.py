@@ -1364,13 +1364,19 @@ class ChoosePasswordResource(MethodView):
                 )
                 
             try:
-                update_account_status = Business.update_account_status_by_business_id(
+                update_account_status_email = Admin.update_account_status_by_business_id(
                     business_id,
                     client_ip,
-                    'business_email_verified',
+                    'email_verified',
                     True
                 )
-                Log.info(f"{log_tag} update_account_status: {update_account_status}")
+                update_account_status_password = Admin.update_account_status_by_business_id(
+                    business_id,
+                    client_ip,
+                    'password_chosen',
+                    True
+                )
+                Log.info(f"{log_tag} update_account_status_email: {update_account_status_email} update_account_status_password: {update_account_status_password}")
             except Exception as e:
                 Log.info(f"{log_tag} \t Error updating account status: {str(e)}")
                 
@@ -1602,7 +1608,6 @@ class CurrentUserResource(MethodView):
         
         try:
             admin = Admin.get_by_email_and_business_id(email=email, business_id=target_business_id)
-            Log.info(f"admin: {admin}")
         except Exception as e:
             Log.error(f"{log_tag} Error retrieving admin: {str(e)}")
             

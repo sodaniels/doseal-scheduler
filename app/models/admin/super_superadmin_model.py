@@ -1,6 +1,7 @@
 import uuid
 import bcrypt
 import json
+import ast
 
 from typing import Any, Dict, List, Optional
 from bson.objectid import ObjectId
@@ -1274,6 +1275,78 @@ class Admin(BaseModel):
         return super().update(system_user_id, **updates)
 
     @classmethod
+    def update_account_status_by_business_id(cls, admin_id, business_id, ip_address, field, update_value):
+        """Update a specific field in the 'account_status' for the given agent ID."""
+        collection = db.get_collection(cls.collection_name)
+        
+        # Search for the business by business_id
+        admin = collection.find_one({"_id": ObjectId(admin_id), "business_id": ObjectId(business_id)})
+        
+        if not admin:
+            return {"success": False, "message": "Admin not found"}
+        
+        # Get the encrypted account_status field from the agent document
+        encrypted_account_status = admin.get("account_status")
+        
+        # Check if account_status is None
+        if encrypted_account_status is None:
+            return {"success": False, "message": "Account status not found"}
+        
+        # Decrypt the account_status field
+        try:
+            account_status = decrypt_data(encrypted_account_status)
+            
+            # Parse if it's a string
+            if isinstance(account_status, str):
+                try:
+                    # First try JSON parsing
+                    account_status = json.loads(account_status)
+                except json.JSONDecodeError:
+                    # If JSON fails, try ast.literal_eval for Python dict format
+                    account_status = ast.literal_eval(account_status)
+            
+            Log.info(f"account_status: {account_status}")
+            
+        except Exception as e:
+            return {"success": False, "message": f"Error decrypting account status: {str(e)}"}
+        
+        # Flag to track if the field was updated
+        field_updated = False
+        
+        # Loop through account_status and find the specific field to update
+        for status in account_status:
+            if field in status:
+                # Update the field's status, created_at, and ip_address
+                status[field]["status"] = update_value
+                status[field]["created_at"] = datetime.utcnow().isoformat()
+                status[field]["ip_address"] = ip_address
+                field_updated = True
+                break
+        
+        # If the field was not found
+        if not field_updated:
+            return {"success": False, "message": f"Field '{field}' not found in account status"}
+        
+        # Re-encrypt the updated account_status before saving back
+        try:
+            encrypted_account_status = encrypt_data(account_status)
+        except Exception as e:
+            return {"success": False, "message": f"Error encrypting account status: {str(e)}"}
+        
+        # Update the 'account_status' in the database
+        result = collection.update_one(
+            {"_id": ObjectId(business_id)},
+            {"$set": {"account_status": encrypted_account_status}}
+        )
+        
+        # Return success or failure of the update operation
+        if result.matched_count > 0:
+            return {"success": True, "message": "Account status updated successfully"}
+        else:
+            return {"success": False, "message": "Failed to update account status"}
+    
+    
+    @classmethod
     def delete(cls, system_user_id: str, business_id: str) -> bool:
         try:
             system_user_id_obj = ObjectId(system_user_id)
@@ -1292,3 +1365,27 @@ class Admin(BaseModel):
                 f"[Admin.delete] Failed to delete linked User for system_user_id={system_user_id}: {e}"
             )
         return True
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
