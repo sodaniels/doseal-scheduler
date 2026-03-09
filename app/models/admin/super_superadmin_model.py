@@ -1125,6 +1125,61 @@ class Admin(BaseModel):
             "updated_at": data.get("updated_at"),
             "last_logged_in": data.get("last_logged_in"),
         }
+    
+    @classmethod
+    def get_by_email_and_business_id(cls, email: str, business_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            business_id_obj = ObjectId(business_id)
+        except Exception:
+            return None
+
+        hashed_email = hash_data(email)
+
+        collection = db.get_collection(cls.collection_name)
+        data = collection.find_one({"hashed_email": hashed_email, "business_id": business_id_obj})
+        if not data:
+            return None
+
+        fields = [
+            "fullname",
+            "phone",
+            "email",
+            "image",
+            "file_path",
+            "status",
+            "date_of_birth",
+            "gender",
+            "alternative_phone",
+            "id_type",
+            "id_number",
+            "current_address",
+        ]
+
+        decrypted: Dict[str, Any] = {}
+        for f in fields:
+            decrypted[f] = decrypt_data(data.get(f)) if data.get(f) else None
+
+        return {
+            "system_user_id": str(data.get("_id")),
+            "business_id": str(data.get("business_id")),
+            "role": str(data.get("role")) if data.get("role") else None,
+            "fullname": decrypted["fullname"],
+            "phone": decrypted["phone"],
+            "email": decrypted["email"],
+            "image": decrypted["image"],
+            "file_path": decrypted["file_path"],
+            "status": decrypted["status"],
+            "date_of_birth": decrypted["date_of_birth"],
+            "gender": decrypted["gender"],
+            "alternative_phone": decrypted["alternative_phone"],
+            "id_type": decrypted["id_type"],
+            "id_number": decrypted["id_number"],
+            "current_address": decrypted["current_address"],
+            "created_at": data.get("created_at"),
+            "updated_at": data.get("updated_at"),
+            "last_logged_in": data.get("last_logged_in"),
+        }
+
 
     @classmethod
     def get_by_business_id_count(cls, business_id: str, include_owner: bool = True) -> int:

@@ -34,6 +34,7 @@ from ....utils.helpers import (
 from ....services.email_service import (
     send_admin_invitation_email
 )
+from ....utils.url_utils import generate_forgot_password_token
 
 from ....utils.rate_limits import (
     login_ip_limiter, login_user_limiter,
@@ -73,6 +74,7 @@ from ....schemas.super_superadmin_schema import (
     SystemUserSchema, SystemUserUpdateSchema, SystemAdminIdQuerySchema, RolesSchema,
     AgentsQuerySchema, ExpensesSchema, DownloadsSchema, SelectMoreSchema,
     SubscriberQuerySchema, SubscribersSchema, SearchSubscriberQuerySchema,
+    ResendResetPasswordSchema
 )
 from ....schemas.login_schema import LoginInitiateSchema as LoginSchema
 from ....schemas.admin.setup_schema import BusinessIdAndUserIdQuerySchema
@@ -80,6 +82,7 @@ from ....schemas.admin.setup_schema import BusinessIdAndUserIdQuerySchema
 from ....models.admin.super_superadmin_model import (
     Role, Expense, Admin
 )
+from ....models.social.password_reset_token import PasswordResetToken
 from ....models.admin.subscription_model import Subscription
 from ....models.business_model import Business
 from ....models.user_model import User
@@ -1585,8 +1588,6 @@ class AdminResource(MethodView):
                 errors=str(e),
             )
 
-        
-            
 
         # ----------------- UNIQUENESS CHECKS (EMAIL, PHONE) ----------------- #
         should_reserve_quota = False
@@ -1705,6 +1706,8 @@ class AdminResource(MethodView):
 
         # ----------------- CREATE ADMIN ----------------- #
         item = Admin(**item_data)
+        
+        user__id = None
 
         try:
             Log.info(f"{log_tag} [{client_ip}][{item_data['email']}][committing system user]")
@@ -1739,8 +1742,8 @@ class AdminResource(MethodView):
                     }
 
                     user = User(**user_data)
-                    user_client_id = user.save()
-                    Log.info(f"{log_tag} user_client_id: {user_client_id}")
+                    user__id = user.save()
+                    Log.info(f"{log_tag} user__id: {user__id}")
                 else:
                     Log.info(f"{log_tag} Failed to stor user, delete uploaded image.")
                     
@@ -1767,24 +1770,54 @@ class AdminResource(MethodView):
                 try:
                     
                     return_url= os.getenv("ADMIN_RESET_PASSWORD_RETURN_URL", "http://app.schedulefy.org")
-                    token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
-                    reset_url = generate_confirm_admin_email_token(return_url, token)
-
-                    update_code = User.update_auth_code(email, token)
+ 
+                    # Create password reset token (5 minutes expiry)
+                    success, reset_token, error = PasswordResetToken.create_token(
+                        email=email,
+                        user_id=user__id,
+                        business_id=target_business_id,
+                        expiry_minutes=10
+                    )
                     
-                    if update_code:
-                        Log.info(f"{log_tag}\t reset_url: {reset_url}")
-                        try:
-                            result = send_admin_invitation_email(
-                                email=email,
-                                confirmation_url=reset_url,
-                                admin_name=item_data.get("fullname"),
-                                business_name=business_name
+                    if not success:
+                        Log.error(f"{log_tag} Failed to create reset token: {error}")
+                        return prepared_response(
+                            False,
+                            "INTERNAL_SERVER_ERROR",
+                            "Failed to initiate password reset"
+                        )
+                        
+                    # Generate full reset URL with token
+                    reset_url = generate_confirm_admin_email_token(return_url, reset_token)
+                    
+                    try:
+                        email_result = send_admin_invitation_email(
+                            email=email,
+                            confirmation_url=reset_url,
+                            admin_name=item_data.get("fullname"),
+                            business_name=business_name
+                        )
+                        Log.info(f"Email sent result={email_result}")
+                        
+                        if email_result.get("ok"):
+                            Log.info(f"{log_tag} Admin password reset email sent successfully")
+                            return jsonify(
+                                success=True,
+                                status_code=200,
+                                message="Password reset link sent to email",
+                                message_to_show="We sent a password reset link to the email address of the admin. Please ask them to check their email and click on the link to proceed. The link will expire in 10 minutes."
+                            ), 200
+                        else:
+                            Log.error(f"{log_tag} Email sending failed: {email_result.get('error')}")
+                            return prepared_response(
+                                False,
+                                "INTERNAL_SERVER_ERROR",
+                                "Failed to send password reset email"
                             )
-                            Log.info(f"Email sent result={result}")
-                        except Exception as e:
-                            Log.error(f"Email sending failed: {e}")
-                            raise
+                    except Exception as e:
+                        Log.error(f"Email sending failed: {e}")
+                        raise
+                        
                 except Exception as e:
                     Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
                   
@@ -1809,6 +1842,7 @@ class AdminResource(MethodView):
                 "An unexpected error occurred.",
                 errors=str(e),
             )
+    
     # ---------------------- GET SINGLE ADMIN (role-aware) ---------------------- #
     @crud_read_limiter("admin")
     @token_required
@@ -2488,8 +2522,151 @@ class AvailableRoleResource(MethodView):
             return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred.{str(e)}")
 
 
+#-------------------------------------------------------
+# RESEND PASSWORD LINK
+#------------------------------------------------------- 
 
+@blp_system_admin_user.route("/resend-reset-password-link", methods=["POST"])
+class ResendResetPasswordLinkResource(MethodView):
 
+    @crud_write_limiter("admin")
+    @token_required
+    @blp_system_admin_user.arguments(ResendResetPasswordSchema, location="form")
+    @blp_system_admin_user.response(200)
+    @blp_system_admin_user.doc(
+        summary="Resend password reset link to an admin",
+        description="""
+            Resend a password setup/reset invitation email to an existing admin user.
 
+            • SYSTEM_OWNER / SUPER_ADMIN:
+                - May submit business_id to target an admin in any business.
+                - If omitted, defaults to their own business_id.
+
+            • Other roles:
+                - business_id is always forced to the authenticated user's business_id.
+        """,
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": ResendResetPasswordSchema,
+                    "example": {
+                        "email": "johndoe@example.com",
+                        "business_id": "60a6b938d4d8c24fa0804d63"  # optional for SYSTEM_OWNER/SUPER_ADMIN
+                    }
+                }
+            },
+        },
+        security=[{"Bearer": []}],
+    )
+    def post(self, item_data):
+        """Resend password reset link to an existing admin."""
+        client_ip = request.remote_addr
+        user_info = g.get("current_user", {}) or {}
+
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        account_type_enc = user_info.get("account_type")
+        account_type = account_type_enc if account_type_enc else None
+
+        email = item_data.get("email")
+
+        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+        form_business_id = item_data.get("business_id")
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+            target_business_id = form_business_id
+        else:
+            target_business_id = auth_business_id
+
+        log_tag = make_log_tag(
+            "super_superadmin_resource.py",
+            "ResendResetPasswordLinkResource",
+            "post",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            target_business_id,
+        )
+
+        # ----------------- BUSINESS RESOLUTION ----------------- #
+        try:
+            business = Business.get_business_by_id(target_business_id)
+            if not business:
+                Log.info(f"{log_tag} Could not retrieve business information")
+                return prepared_response(False, "BAD_REQUEST", "Could not retrieve business information.")
+        except Exception as e:
+            Log.info(f"{log_tag} Error retrieving business: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.")
+
+        business_name = business.get("business_name")
+
+        # ----------------- VERIFY ADMIN EXISTS ----------------- #
+        try:
+            admin = Admin.get_by_email_and_business_id(email=email, business_id=target_business_id)
+            if not admin:
+                Log.info(f"{log_tag} Admin with email={email} not found for business_id={target_business_id}")
+                return prepared_response(False, "NOT_FOUND", "No admin account found with this email.")
+        except Exception as e:
+            Log.info(f"{log_tag} Error retrieving admin: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.")
+
+        # ----------------- FETCH CORRESPONDING USER ----------------- #
+        try:
+            user_record = User.get_user_by_email_and_business_id(email=email, business_id=target_business_id)
+            if not user_record:
+                Log.info(f"{log_tag} User record not found for email={email}")
+                return prepared_response(False, "NOT_FOUND", "Associated user account not found.")
+            user__id = str(user_record.get("_id"))
+        except Exception as e:
+            Log.info(f"{log_tag} Error retrieving user record: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.")
+
+        
+        # ----------------- GENERATE RESET TOKEN & SEND EMAIL ----------------- #
+        try:
+            return_url = os.getenv("ADMIN_RESET_PASSWORD_RETURN_URL", "http://app.schedulefy.org")
+
+            success, reset_token, error = PasswordResetToken.create_token(
+                email=email,
+                user_id=user__id,
+                business_id=target_business_id,
+                expiry_minutes=10
+            )
+
+            if not success:
+                Log.error(f"{log_tag} Failed to create reset token: {error}")
+                return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to initiate password reset.")
+
+            reset_url = generate_confirm_admin_email_token(return_url, reset_token)
+
+            try:
+                email_result = send_admin_invitation_email(
+                    email=email,
+                    confirmation_url=reset_url,
+                    admin_name=admin.get("fullname"),
+                    business_name=business_name
+                )
+                Log.info(f"{log_tag} Email sent result={email_result}")
+
+                if email_result.get("ok"):
+                    Log.info(f"{log_tag} Password reset email resent successfully to {email}")
+                    return jsonify(
+                        success=True,
+                        status_code=200,
+                        message="Password reset link resent",
+                        message_to_show="A new password reset link has been sent to the admin's email address. The link will expire in 10 minutes."
+                    ), 200
+                else:
+                    Log.error(f"{log_tag} Email sending failed: {email_result.get('error')}")
+                    return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to send password reset email.")
+
+            except Exception as e:
+                Log.error(f"{log_tag} Exception sending email: {e}")
+                return prepared_response(False, "INTERNAL_SERVER_ERROR", "An error occurred while sending the email.")
+
+        except Exception as e:
+            Log.info(f"{log_tag} Unexpected error during resend: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.")
 
 

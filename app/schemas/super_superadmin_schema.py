@@ -668,3 +668,16 @@ class SubscriberQuerySchema(Schema):
 class SearchSubscriberQuerySchema(Schema):
     search_term = fields.Str(required=True, description="Search term is required")
     business_id = fields.Str(required=True, validate=validate_objectid, description="Business ID of the User to fetch detail.")
+
+class ResendResetPasswordSchema(Schema):
+    email = fields.Email(required=True)
+    business_id = fields.Str(load_default=None)
+
+
+
+
+
+
+
+
+

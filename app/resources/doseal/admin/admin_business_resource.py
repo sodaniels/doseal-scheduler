@@ -481,7 +481,11 @@ class RegisterBusinessResource(MethodView):
                             if update_code:
                                 Log.info(f"{log_tag}\t reset_url: {reset_url}")
                                 try:
-                                    result = send_user_registration_email(business_data["email"], user_data["fullname"], reset_url)
+                                    result = send_user_registration_email(
+                                        business_data["email"], 
+                                        user_data["fullname"], 
+                                        reset_url
+                                    )
                                     Log.info(f"Email sent result={result}")
                                 except Exception as e:
                                     Log.error(f"Email sending failed: {e}")
@@ -801,8 +805,10 @@ class LoginBusinessInitiateResource(MethodView):
             
         Log.info(f"{log_tag} [{client_ip}][{email}]: login info matched")
         
-        business = Business.get_business_by_email(email)
+        business_id = str(user.get("business_id"))
+        business = Business.get_business_by_id(business_id)
         if not business: 
+            Log.info(f"{log_tag} Use was not found to belong to any business")
             abort(401, message="Your access has been revoked. Contact your administrator")
             
         
@@ -850,25 +856,6 @@ class LoginBusinessInitiateResource(MethodView):
         except Exception as e:
             Log.error(f"{log_tag} Error occurred: {str(e)}")
             
-        
-        
-        
-        
-        
-        # # when user was not found
-        # if user is None:
-        #     Log.info(f"{log_tag}[{client_ip}] user not found.") 
-        #     return prepared_response(False, "NOT_FOUND", f"User not found.")
-        
-        # # proceed to create token when user payload was created
-        # return create_token_response_admin(
-        #     user=user,
-        #     account_type=decrypted_data,
-        #     client_ip=client_ip, 
-        #     log_tag=log_tag, 
-        # )
-  
-  
 #-------------------------------------------------------
 # LOGIN EXECUTE
 #-------------------------------------------------------
@@ -1001,8 +988,10 @@ class LoginBusinessExecuteResource(MethodView):
             )
         try:
             
-            business = Business.get_business_by_email(email)
+            business_id = str(user.get("business_id"))
+            business = Business.get_business_by_id(business_id)
             if not business: 
+                Log.info(f"{log_tag} Use was not found to belong to any business")
                 abort(401, message="Your access has been revoked. Contact your administrator")
                 
             account_type = business.get("account_type")
@@ -1333,7 +1322,7 @@ class ChoosePasswordResource(MethodView):
         log_tag = "[admin_business_resource.py][ChoosePasswordResource][post]"
 
         try:
-            token = payload.get("token")
+            reset_token = payload.get("token")
             target_business_id = payload.get("business_id")
             password = payload.get("password")
 
@@ -1341,29 +1330,43 @@ class ChoosePasswordResource(MethodView):
                 f"{log_tag} [{client_ip}] change password request "
                 f"business_id={target_business_id}"
             )
-
-            user_from_auth = User.get_auth_code(token)
-            if not user_from_auth:
-                Log.info(f"{log_tag} [{client_ip}] Invalid or expired token.")
-                return prepared_response(False, "BAD_REQUEST", "Invalid or expired token.")
-
-            auth_user__id = user_from_auth.get("_id")
-            email = decrypt_data(user_from_auth.get("email"))
-            fullname = decrypt_data(user_from_auth.get("fullname"))
             
-            # Log.info(f"user_from_auth: {user_from_auth}")
+            # Validate token
+            token_data = PasswordResetToken.validate_token(reset_token)
             
-            updated = User.update_password(
-                user_id=auth_user__id,
-                business_id=target_business_id,
-                new_password=password,
+            if not token_data:
+                Log.warning(f"{log_tag} Invalid or expired token")
+                return prepared_response(False, "BAD_REQUEST", "Password reset link is invalid or has expired. Please request a new one.")
+
+            # Get user details from token
+            email = token_data.get("email")
+            user_id = token_data.get("user_id")
+            business_id = token_data.get("business_id")
+            
+            
+            # Update user password
+            success = User.update_password(
+                user_id=user_id, 
+                business_id=business_id, 
+                new_password=password
             )
-
-            if not updated:
-                Log.info(f"{log_tag} [{client_ip}] password update failed for user_id={auth_user__id}")
-                return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to change password.")
             
-            #send email about password change
+            if not success:
+                Log.error(f"{log_tag} Failed to update password for user: {user_id}")
+                return prepared_response(
+                    False,
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to update password. Please try again."
+                )
+                
+            # Mark token as used
+            PasswordResetToken.mark_token_used(reset_token)
+            
+            Log.info(f"{log_tag} Password reset successful for user: {user_id}")
+            
+            user = User.get_user_by_email(email)
+            fullname = decrypt_data(user.get("fullname"))
+            
             try:
                 update_passsword = send_password_changed_email(
                     email=email,
@@ -1375,10 +1378,11 @@ class ChoosePasswordResource(MethodView):
                 Log.error(f"{log_tag} change password email update: {update_passsword}")
             except Exception as e:
                 Log.error(f"{log_tag} error sending change password emails: {e}")
-
-            Log.info(f"{log_tag} [{client_ip}] password changed successfully for user_id={auth_user__id}")
-            return prepared_response(True, "OK", "Password changed successfully.")
-
+                
+            Log.info(f"{log_tag} [{client_ip}] password changed successfully for user_id={user_id}")
+            return prepared_response(True, "OK", "Password reset successful. The admin can now log in with their new password")
+                
+            
         except PyMongoError as e:
             Log.info(f"{log_tag} [{client_ip}] PyMongoError: {e}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected database error occurred.", errors=str(e))
@@ -1386,7 +1390,7 @@ class ChoosePasswordResource(MethodView):
             Log.info(f"{log_tag} [{client_ip}] Unexpected error: {e}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
       
-   
+
 
 # -----------------------INITIATE EMAIL VERIFICAITON-----------------------------------------
 @blp_business_auth.route("/initiate-email-verification", methods=["POST"])
@@ -1530,78 +1534,34 @@ class BusinessRegistrationInitiateEmailVerificationResource(MethodView):
 #-------------------------------------------------------     
 @blp_business_auth.route("/me", methods=["GET"])
 class CurrentUserResource(MethodView):
-    
-    # @profile_retrieval_limiter("me")
+
     @token_required
     @blp_business_auth.response(200)
     @blp_business_auth.doc(
         summary="Get current authenticated user",
-        description="This endpoint returns the profile information of the currently authenticated user based on their JWT token.",
-        responses={
-            200: {
-                "description": "Successfully retrieved user profile",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": True,
-                            "status_code": 200,
-                            "data": {
-                                "id": "user_id_here",
-                                "email": "johndoe@example.com",
-                                "fullname": "John Doe",
-                                "client_id": "client_id_here",
-                                "account_type": "admin",
-                                "email_verified": True
-                            }
-                        }
-                    }
-                }
-            },
-            401: {
-                "description": "Unauthorized - Invalid or missing token",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 401,
-                            "message": "Missing or invalid authentication token"
-                        }
-                    }
-                }
-            },
-            404: {
-                "description": "User not found",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 404,
-                            "message": "User not found"
-                        }
-                    }
-                }
-            }
-        }
+        description="Returns the profile of the currently authenticated user based on their JWT token.",
+        security=[{"Bearer": []}],
     )
     def get(self):
         client_ip = request.remote_addr
         log_tag = '[admin_business_resource.py][CurrentUserResource][get]'
-        
-        body = request.get_json(silent=True) or {}
-        
-        user = g.get("current_user", {}) or {}
-        target_business_id = resolve_target_business_id_from_payload(body)
 
-        auth_user__id = str(user.get("_id") or "")
-        account_type = user.get("account_type")
+        body = request.get_json(silent=True) or {}
+
+        user_info = g.get("current_user", {}) or {}
+        target_business_id = resolve_target_business_id_from_payload(body)
         
-        Log.info(f"{log_tag} [{client_ip}] fetching user profile for user_id: {auth_user__id}")
-        
-        # Get user from database
+        Log.info(f"user_info: {user_info}")
+
+        auth_user__id = str(user_info.get("_id") or "")
+        account_type = user_info.get("account_type")
+
+        Log.info(f"{log_tag} [{client_ip}] fetching profile for user_id={auth_user__id}")
+
+        # ----------------- FETCH USER ----------------- #
         user = User.get_by_id(auth_user__id, target_business_id)
-        
-        email = decrypt_data(user.get("email"))
-        
+
+        # ✅ BUG 1 FIX: null check BEFORE any access on user
         if user is None:
             Log.info(f"{log_tag} [{client_ip}] user not found")
             return jsonify({
@@ -1609,56 +1569,70 @@ class CurrentUserResource(MethodView):
                 "status_code": HTTP_STATUS_CODES["NOT_FOUND"],
                 "message": "User not found"
             }), HTTP_STATUS_CODES["NOT_FOUND"]
-        
-        # Get business info
-        business = Business.get_business_by_email(email)
-        
-        
-        decrypte_full_name = decrypt_data(user.get("fullname"))
-        
-        business_info = dict()
 
+        email = decrypt_data(user.get("email"))  # ✅ safe to decrypt now
+
+        # ----------------- FETCH BUSINESS ----------------- #
+        business = Business.get_business_by_id(target_business_id)
+
+        if not business:
+            Log.info(f"{log_tag} [{client_ip}] business not found for email={email}")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["NOT_FOUND"],
+                "message": "Business not found"
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        decrypted_full_name = decrypt_data(user.get("fullname"))
         business_info = {key: safe_decrypt(business.get(key)) for key in BUSINESS_FIELDS}
+
         
-        # Token is for 24 hours
         response = {
-            "fullname": decrypte_full_name,
+            "fullname": decrypted_full_name,
             "admin_id": str(user.get("_id")),
             "business_id": target_business_id,
-            "tenant_id": decrypt_data(decrypt_data(user.get("tenant_id"))),
-            "email": business.get("email"),
-            "account_status": business.get("account_status"),
+            "tenant_id": decrypt_data(business.get("tenant_id")),
+            "email": business.get("email") if account_type == "super_admin" else email,
+            "account_status": decrypt_data(business.get("account_status")),
             "profile": business_info,
+            "account_type": account_type,
         }
-    
-        
+
+        # ----------------- FETCH PERMISSIONS ----------------- #
+        permissions = {}  # ✅ BUG 2 FIX: default before try block
+
         try:
-            role_id = user.get("role") if user.get("role") else None
-            
-            role = None
-            
+            role_id = user.get("role") or None
+
             if role_id is not None:
-                # role =  Role.get_by_id(role_id=role_id)
-                role = Role.get_by_id(role_id=role_id, business_id=target_business_id, is_logging_in=True)
-                
-            if role is not None:
-                # retreive the permissions for the user
-                permissions = role.get("permissions")
-                
+                role = Role.get_by_id(
+                    role_id=role_id,
+                    business_id=target_business_id,
+                    is_logging_in=True
+                )
+
+                if role is not None:
+                    permissions = role.get("permissions") or {}
 
         except Exception as e:
-            Log.info(f"{log_tag} [admin_business_resource.py][{client_ip}]: error retreiving permissions for user: {e}")
-            
-        
-        response["account_type"] = account_type
+            Log.info(f"{log_tag} [{client_ip}] error retrieving permissions: {e}")
 
-        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]) :
+        # ----------------- BUILD RESPONSE ----------------- #
+        if account_type in (
+            SYSTEM_USERS["SYSTEM_OWNER"],
+            SYSTEM_USERS["SUPER_ADMIN"],
+            SYSTEM_USERS["BUSINESS_OWNER"]
+        ):
             response["permissions"] = {}
         else:
             response["permissions"] = permissions
-            
+
         return jsonify(response), HTTP_STATUS_CODES["OK"]
-        
+
+
+
+
+      
 #-------------------------------------------------------
 # LOGOUT
 #-------------------------------------------------------  

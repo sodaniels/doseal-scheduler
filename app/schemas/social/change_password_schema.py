@@ -40,3 +40,20 @@ class ChoosePasswordSchema(Schema):
             raise ValidationError(
                 {"confirm_password": ["Passwords do not match."]}
             )
+
+
+class ResendResetPasswordSchema(Schema):
+    email = fields.Email(required=True)
+    business_id = fields.Str(load_default=None)
+
+
+
+
+
+
+
+
+
+
+
+

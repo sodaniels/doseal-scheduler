@@ -288,15 +288,25 @@ class User(BaseModel):
             ).decode("utf-8")
 
             res = col.update_one(
-                {"_id": ObjectId(user_id), "business_id": ObjectId(business_id)},
-                {"$set": {"password": hashed, "updated_at": datetime.utcnow()}}
+                {
+                    "_id": ObjectId(user_id),
+                    "business_id": ObjectId(business_id)  # ✅ always ObjectId
+                },
+                {
+                    "$set": {
+                        "password": hashed,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
             )
+
+            Log.info(f"{log_tag} modified_count={res.modified_count}")
             return res.modified_count > 0
 
         except Exception as e:
             Log.info(f"{log_tag} error: {e}")
             return False
-        
+      
     @staticmethod
     def email_verification_needed(email):
         """
@@ -453,6 +463,23 @@ class User(BaseModel):
 
         user.pop("password", None)
         return user
+
+    @staticmethod
+    def get_user_by_email_and_business_id(email, business_id):
+        try:
+            business_id_obj = ObjectId(business_id)
+        except Exception:
+            return None
+        
+        email_hashed = hash_data(email)
+        users_collection = db.get_collection("users")
+        user = users_collection.find_one({"email_hashed": email_hashed, "business_id": business_id_obj})
+        if not user:
+            return None
+
+        user.pop("password", None)
+        return user
+
 
     @staticmethod
     def get_user_by_username(username):
