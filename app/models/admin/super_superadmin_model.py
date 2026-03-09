@@ -677,6 +677,7 @@ class Admin(BaseModel):
         id_type: Optional[str] = None,
         id_number: Optional[str] = None,
         current_address: Optional[str] = None,
+        account_status: Optional[str] = None,
         created_by: Optional[str] = None,
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
@@ -695,6 +696,7 @@ class Admin(BaseModel):
             file_path=file_path,
             password=password,
             status=status,
+            account_status=account_status,
             created_by=created_by_obj,
             created_at=created_at,
             updated_at=updated_at,
@@ -722,6 +724,7 @@ class Admin(BaseModel):
         self.id_type = encrypt_data(id_type) if id_type else None
         self.id_number = encrypt_data(id_number) if id_number else None
         self.current_address = encrypt_data(current_address) if current_address else None
+        self.account_status = encrypt_data(account_status) if account_status else None
 
         self.password = (
             bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -751,6 +754,7 @@ class Admin(BaseModel):
                 "id_number": self.id_number,
                 "current_address": self.current_address,
                 "last_logged_in": self.last_logged_in,
+                "account_status": self.account_status,
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
                 "phone_hashed": self.phone_hashed,
@@ -817,6 +821,7 @@ class Admin(BaseModel):
             "id_type",
             "id_number",
             "current_address",
+            "account_status",
         ]
 
         decrypted: Dict[str, Any] = {}
@@ -916,6 +921,7 @@ class Admin(BaseModel):
                 "id_type",
                 "id_number",
                 "current_address",
+                "account_status",
             ]
 
             user: Dict[str, Any] = {
@@ -1003,6 +1009,7 @@ class Admin(BaseModel):
                 "id_type",
                 "id_number",
                 "current_address",
+                "account_status",
             ]
 
             user: Dict[str, Any] = {
@@ -1045,6 +1052,7 @@ class Admin(BaseModel):
             "id_type",
             "id_number",
             "current_address",
+            "account_status",
         ]
 
         decrypted: Dict[str, Any] = {}
@@ -1099,6 +1107,7 @@ class Admin(BaseModel):
             "id_type",
             "id_number",
             "current_address",
+            "account_status",
         ]
 
         decrypted: Dict[str, Any] = {}
@@ -1153,6 +1162,7 @@ class Admin(BaseModel):
             "id_type",
             "id_number",
             "current_address",
+            "account_status",
         ]
 
         decrypted: Dict[str, Any] = {}
@@ -1175,6 +1185,7 @@ class Admin(BaseModel):
             "id_type": decrypted["id_type"],
             "id_number": decrypted["id_number"],
             "current_address": decrypted["current_address"],
+            "account_status": decrypted["account_status"],
             "created_at": data.get("created_at"),
             "updated_at": data.get("updated_at"),
             "last_logged_in": data.get("last_logged_in"),

@@ -1528,6 +1528,27 @@ class AdminResource(MethodView):
         item_data["created_by"] = str(user_info.get("_id"))
         role_id = item_data.get("role")
         
+        account_status = [
+                {
+                    "account_created": {
+                        "created_at": str(datetime.utcnow()),
+                        "status": True,
+                    },
+                },
+                {
+                    "email_verified": {
+                        "status": False,
+                    }
+                },
+                {
+                    "password_chosen": {
+                        "status": False,
+                    }
+                }
+            ]
+           
+        item_data["account_status"] = account_status
+        
         email = item_data.get("email")
 
         log_tag = make_log_tag(

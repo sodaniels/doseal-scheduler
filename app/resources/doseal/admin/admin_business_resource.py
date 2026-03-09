@@ -18,6 +18,9 @@ from pymongo.errors import PyMongoError
 from marshmallow import ValidationError
 from rq import Queue
 
+from ....models.admin.super_superadmin_model import (
+    Admin
+)
 from datetime import datetime, timedelta
 # from app import queue
 from ....models.business_model import Business
@@ -1559,11 +1562,10 @@ class CurrentUserResource(MethodView):
         log_tag = '[admin_business_resource.py][CurrentUserResource][get]'
 
         body = request.get_json(silent=True) or {}
+        admin = None
 
         user_info = g.get("current_user", {}) or {}
         target_business_id = resolve_target_business_id_from_payload(body)
-        
-        Log.info(f"user_info: {user_info}")
 
         auth_user__id = str(user_info.get("_id") or "")
         account_type = user_info.get("account_type")
@@ -1597,18 +1599,38 @@ class CurrentUserResource(MethodView):
 
         decrypted_full_name = decrypt_data(user.get("fullname"))
         business_info = {key: safe_decrypt(business.get(key)) for key in BUSINESS_FIELDS}
-
         
-        response = {
-            "fullname": decrypted_full_name,
-            "admin_id": str(user.get("_id")),
-            "business_id": target_business_id,
-            "tenant_id": decrypt_data(business.get("tenant_id")),
-            "email": business.get("email") if account_type == "super_admin" else email,
-            "account_status": decrypt_data(business.get("account_status")),
-            "profile": business_info,
-            "account_type": account_type,
-        }
+        try:
+            admin = Admin.get_by_email_and_business_id(email=email, business_id=target_business_id)
+            Log.info(f"admin: {admin}")
+        except Exception as e:
+            Log.error(f"{log_tag} Error retrieving admin: {str(e)}")
+            
+
+        if account_type == "super_admin":
+            response = {
+                "fullname": decrypted_full_name,
+                "admin_id": str(user.get("_id")),
+                "business_id": target_business_id,
+                "tenant_id": decrypt_data(business.get("tenant_id")),
+                "email": business.get("email"),
+                "account_status": decrypt_data(business.get("account_status")),
+                "profile": business_info,
+                "account_type": account_type,
+            }
+        else:
+            response = {
+                "fullname": decrypted_full_name,
+                "admin_id": str(user.get("_id")),
+                "business_id": target_business_id,
+                "tenant_id": decrypt_data(business.get("tenant_id")),
+                "email": email,
+                "account_status": decrypt_data(business.get("account_status")),
+                "admin_account_status": admin.get("account_status", ""),
+                "profile": business_info,
+                "account_type": account_type,
+            }
+            
 
         # ----------------- FETCH PERMISSIONS ----------------- #
         permissions = {}  # ✅ BUG 2 FIX: default before try block
