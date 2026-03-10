@@ -62,6 +62,7 @@ from ....constants.service_code import (
     HTTP_STATUS_CODES, SYSTEM_USERS, BUSINESS_FIELDS
 )
 
+
 from ....services.email_service import (
     send_user_registration_email,
     send_new_contact_sale_email,
@@ -1612,7 +1613,7 @@ class CurrentUserResource(MethodView):
             Log.error(f"{log_tag} Error retrieving admin: {str(e)}")
             
 
-        if account_type == "super_admin":
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
             response = {
                 "fullname": decrypted_full_name,
                 "admin_id": str(user.get("_id")),
@@ -1631,7 +1632,7 @@ class CurrentUserResource(MethodView):
                 "tenant_id": decrypt_data(business.get("tenant_id")),
                 "email": email,
                 "account_status": decrypt_data(business.get("account_status")),
-                "admin_account_status": admin.get("account_status", ""),
+                "admin_account_status": admin.get("account_status") if admin else None,
                 "profile": business_info,
                 "account_type": account_type,
             }
