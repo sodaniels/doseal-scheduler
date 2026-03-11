@@ -1609,7 +1609,6 @@ class AdminResource(MethodView):
                 errors=str(e),
             )
 
-
         # ----------------- UNIQUENESS CHECKS (EMAIL, PHONE) ----------------- #
         should_reserve_quota = False
         Log.info(f"{log_tag} [{client_ip}] checking if admin (email) already exists")
@@ -1675,17 +1674,21 @@ class AdminResource(MethodView):
                     
                     return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
-        
+    
+    
         # ----------------- IMAGE UPLOAD (OPTIONAL) ----------------- #
-        image = request.files["image"]
-        if (image is not None) and (image.filename == ""):
-            return jsonify({"success": False, "message": "invalid image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        uploaded_payload = dict()
         
-        if not (image.mimetype).startswith("image/"):
-            return jsonify({"success": False, "message": "file must be an image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-        
-        uploaded_payload = {}
         try:
+            image = request.files["image"]
+            if (image is not None) and (image.filename == ""):
+                return jsonify({"success": False, "message": "invalid image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            if not (image.mimetype).startswith("image/"):
+                return jsonify({"success": False, "message": "file must be an image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+            
+            uploaded_payload = {}
+        
             user_id = str(user_info.get("_id") or "")
             folder = f"profile/{target_business_id}/{user_id}"
             public_id = uuid.uuid4().hex

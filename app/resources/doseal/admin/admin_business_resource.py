@@ -1180,13 +1180,13 @@ class ChangePasswordResource(MethodView):
                 return prepared_response(False, "BAD_REQUEST", "current_password and new_password are required.")
 
             if current_password == new_password:
-                return prepared_response(False, "BAD_REQUEST", "New password must be different from current password.")
+                return prepared_response(False, "BAD_REQUEST", "New password must be one you've never used before.")
 
             # 2) Verify current password
             if not User.verify_change_password(user_doc, current_password):
                 Log.info(f"{log_tag} [{client_ip}] wrong current password for user_id={auth_user__id}")
                 return prepared_response(False, "UNAUTHORIZED", "Current password is incorrect.")
-
+ 
             # 3) Update password
             updated = User.update_password(
                 user_id=auth_user__id,
@@ -1207,7 +1207,7 @@ class ChangePasswordResource(MethodView):
                     ip_address=request.remote_addr,
                     user_agent=request.headers.get("User-Agent"),
                 )
-                Log.error(f"{log_tag} change password email update: {update_passsword}")
+                Log.info(f"{log_tag} change password email update: {update_passsword}")
             except Exception as e:
                 Log.error(f"{log_tag} error sending change password emails: {e}")
 
