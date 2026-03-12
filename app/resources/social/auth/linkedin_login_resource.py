@@ -16,7 +16,11 @@ import json
 # helpers
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
-from ....utils.helpers import create_token_response_admin
+from ....utils.helpers import (
+    create_token_response_admin, 
+    _redirect_with_tokens,
+    _handle_token_exchange
+)
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
@@ -682,12 +686,16 @@ class LinkedInLoginCallbackResource(MethodView):
                 Log.info(f"{log_tag} Login successful in {duration:.2f}s")
                 
                 # Return token
-                return create_token_response_admin(
+                token_response = create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
                     client_ip=client_ip,
                     log_tag=log_tag,
                 )
+                
+                # Extract token data from the response object
+                token_data = token_response.get_json()
+                return _redirect_with_tokens(token_data, return_url)
             
             # Check by email
             existing_business = Business.get_business_by_email(email)
@@ -737,12 +745,16 @@ class LinkedInLoginCallbackResource(MethodView):
                 Log.info(f"{log_tag} Login with LinkedIn link successful in {duration:.2f}s")
                 
                 # Return token
-                return create_token_response_admin(
+                token_response = create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
                     client_ip=client_ip,
                     log_tag=log_tag,
                 )
+                
+                # Extract token data from the response object
+                token_data = token_response.get_json()
+                return _redirect_with_tokens(token_data, return_url)
             
             # =========================================
             # 4. NEW USER - Create account
@@ -761,12 +773,16 @@ class LinkedInLoginCallbackResource(MethodView):
             Log.info(f"{log_tag} New account created in {duration:.2f}s")
             
             # Return token
-            return create_token_response_admin(
+            token_response = create_token_response_admin(
                 user=user_doc,
                 account_type=account_type,
                 client_ip=client_ip,
                 log_tag=log_tag,
             )
+            
+            # Extract token data from the response object
+            token_data = token_response.get_json()
+            return _redirect_with_tokens(token_data, return_url)
         
         except Exception as e:
             duration = time.time() - start_time
@@ -779,6 +795,21 @@ class LinkedInLoginCallbackResource(MethodView):
                 "message": "Failed to complete LinkedIn login",
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
+
+# =========================================
+# LINKEDIN TOKEN EXCHANGE
+# =========================================
+@blp_linkedin_login.route("/auth/linkedin/business/token", methods=["POST"])
+class LinkedinLoginTokenExchangeResource(MethodView):
+    """
+    Exchange opaque auth_key for JWT tokens after LinkedIn OAuth redirect.
+    One-time use, 2-minute TTL.
+    """
+
+    def post(self):
+        client_ip = request.remote_addr
+        log_tag = f"[linkedin_login_resource.py][LinkedinLoginTokenExchangeResource][post][{client_ip}]"
+        return _handle_token_exchange(log_tag, provider_name="linkedin")
 
 
 

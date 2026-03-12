@@ -16,7 +16,11 @@ import json
 # helpers
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
-from ....utils.helpers import create_token_response_admin
+from ....utils.helpers import (
+    create_token_response_admin, 
+    _redirect_with_tokens,
+    _handle_token_exchange
+)
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
@@ -753,12 +757,16 @@ class XLoginCallbackResource(MethodView):
                 Log.info(f"{log_tag} Login successful in {duration:.2f}s")
                 
                 # Return token
-                return create_token_response_admin(
+                token_response = create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
                     client_ip=client_ip,
                     log_tag=log_tag,
                 )
+                
+                # Extract token data from the response object
+                token_data = token_response.get_json()
+                return _redirect_with_tokens(token_data, return_url)
             
             # Check by X username (fallback)
             existing_user = user_col.find_one({"x_username": screen_name})
@@ -808,12 +816,16 @@ class XLoginCallbackResource(MethodView):
                 Log.info(f"{log_tag} Login with X link successful in {duration:.2f}s")
                 
                 # Return token
-                return create_token_response_admin(
+                token_response = create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
                     client_ip=client_ip,
                     log_tag=log_tag,
                 )
+                
+                # Extract token data from the response object
+                token_data = token_response.get_json()
+                return _redirect_with_tokens(token_data, return_url)
             
             # =========================================
             # 4. NEW USER - Create account
@@ -833,12 +845,16 @@ class XLoginCallbackResource(MethodView):
             Log.info(f"{log_tag} New account created in {duration:.2f}s")
             
             # Return token
-            return create_token_response_admin(
+            token_response = create_token_response_admin(
                 user=user_doc,
                 account_type=account_type,
                 client_ip=client_ip,
                 log_tag=log_tag,
             )
+            
+            # Extract token data from the response object
+            token_data = token_response.get_json()
+            return _redirect_with_tokens(token_data, return_url)
         
         except Exception as e:
             duration = time.time() - start_time
@@ -1045,3 +1061,18 @@ class XUpdateEmailResource(MethodView):
         
         return _post()
 
+
+# =========================================
+# X (TWITTER) TOKEN EXCHANGE
+# =========================================
+@blp_x_login.route("/auth/x/business/token", methods=["POST"])
+class XLoginTokenExchangeResource(MethodView):
+    """
+    Exchange opaque auth_key for JWT tokens after X (Twitter) OAuth redirect.
+    One-time use, 2-minute TTL.
+    """
+
+    def post(self):
+        client_ip = request.remote_addr
+        log_tag = f"[x_login_resource.py][XLoginTokenExchangeResource][post][{client_ip}]"
+        return _handle_token_exchange(log_tag, provider_name="x")

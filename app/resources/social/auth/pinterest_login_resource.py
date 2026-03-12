@@ -17,7 +17,11 @@ import json
 # helpers
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
-from ....utils.helpers import create_token_response_admin
+from ....utils.helpers import (
+    create_token_response_admin, 
+    _redirect_with_tokens,
+    _handle_token_exchange
+)
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
@@ -638,12 +642,16 @@ class PinterestLoginCallbackResource(MethodView):
                 Log.info(f"{log_tag} Login successful in {duration:.2f}s")
                 
                 # Return token
-                return create_token_response_admin(
+                token_response = create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
                     client_ip=client_ip,
                     log_tag=log_tag,
                 )
+                
+                # Extract token data from the response object
+                token_data = token_response.get_json()
+                return _redirect_with_tokens(token_data, return_url)
             
             # =========================================
             # 4. NEW USER - Create account
@@ -663,12 +671,16 @@ class PinterestLoginCallbackResource(MethodView):
             Log.info(f"{log_tag} New account created in {duration:.2f}s")
             
             # Return token
-            return create_token_response_admin(
+            token_response = create_token_response_admin(
                 user=user_doc,
                 account_type=account_type,
                 client_ip=client_ip,
                 log_tag=log_tag,
             )
+            
+            # Extract token data from the response object
+            token_data = token_response.get_json()
+            return _redirect_with_tokens(token_data, return_url)
         
         except Exception as e:
             duration = time.time() - start_time
@@ -849,3 +861,41 @@ class PinterestDebugResource(MethodView):
                 ]
             }
         }), 200
+
+# =========================================
+# PINTEREST TOKEN EXCHANGE
+# =========================================
+@blp_pinterest_login.route("/auth/pinterest/business/token", methods=["POST"])
+class PinterestLoginTokenExchangeResource(MethodView):
+    """
+    Exchange opaque auth_key for JWT tokens after Pinterest OAuth redirect.
+    One-time use, 2-minute TTL.
+    """
+
+    def post(self):
+        client_ip = request.remote_addr
+        log_tag = f"[pinterest_login_resource.py][PinterestLoginTokenExchangeResource][post][{client_ip}]"
+        return _handle_token_exchange(log_tag, provider_name="pinterest")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
