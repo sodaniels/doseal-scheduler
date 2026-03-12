@@ -1,4 +1,6 @@
-from flask import jsonify, g
+import secrets
+
+from flask import jsonify, g, redirect
 import re, jwt, os, hmac, json, hashlib, unicodedata, phonenumbers
 from datetime import datetime, timedelta
 from bson import ObjectId
@@ -1073,7 +1075,24 @@ def _get_business_suspension(business_id: str) -> dict:
         "destinations": doc.get("destinations"),
     }
     
+def _redirect_with_tokens(token_data: dict, return_url: str):
+    from ..extensions.redis_conn import redis_client
+    """
+    Store token data in Redis under an opaque key, 
+    redirect frontend with only the key.
+    """
+    auth_key = secrets.token_urlsafe(24)
 
+    redis_client.setex(
+        f"fb_auth_result:{auth_key}",
+        120,  # 2-minute TTL — frontend must exchange immediately
+        json.dumps(token_data),
+    )
+
+    frontend_url = os.getenv("FRONT_END_BASE_URL", "/")
+    base = return_url if return_url.startswith("http") else frontend_url
+
+    return redirect(f"{base}?auth_key={auth_key}")
 
 
 

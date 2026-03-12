@@ -16,7 +16,9 @@ import json
 # helpers
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
-from ....utils.helpers import create_token_response_admin
+from ....utils.helpers import (
+    create_token_response_admin, _redirect_with_tokens
+)
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
 from ....utils.crypt import encrypt_data, decrypt_data, hash_data
@@ -666,12 +668,16 @@ class FacebookLoginCallbackResource(MethodView):
                 Log.info(f"{log_tag} Login successful in {duration:.2f}s")
                 
                 # Return token
-                return create_token_response_admin(
+                token_response = create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
                     client_ip=client_ip,
                     log_tag=log_tag,
                 )
+                
+                # Extract token data from the response object
+                token_data = token_response.get_json()
+                return _redirect_with_tokens(token_data, return_url)
             
             # Check by email
             existing_business = Business.get_business_by_email(email)
@@ -721,12 +727,16 @@ class FacebookLoginCallbackResource(MethodView):
                 Log.info(f"{log_tag} Login with Facebook link successful in {duration:.2f}s")
                 
                 # Return token
-                return create_token_response_admin(
+                token_response = create_token_response_admin(
                     user=existing_user,
                     account_type=account_type,
                     client_ip=client_ip,
                     log_tag=log_tag,
                 )
+                
+                # Extract token data from the response object
+                token_data = token_response.get_json()
+                return _redirect_with_tokens(token_data, return_url)
             
             # =========================================
             # 4. NEW USER - Create account
@@ -745,12 +755,17 @@ class FacebookLoginCallbackResource(MethodView):
             Log.info(f"{log_tag} New account created in {duration:.2f}s")
             
             # Return token
-            return create_token_response_admin(
+            token_response = create_token_response_admin(
                 user=user_doc,
                 account_type=account_type,
                 client_ip=client_ip,
                 log_tag=log_tag,
             )
+            
+            # Extract token data from the response object
+            token_data = token_response.get_json()
+            return _redirect_with_tokens(token_data, return_url)
+            
         
         except Exception as e:
             duration = time.time() - start_time
@@ -764,6 +779,51 @@ class FacebookLoginCallbackResource(MethodView):
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
+@blp_facebook_login.route("/auth/facebook/business/token", methods=["POST"])
+class FacebookLoginTokenExchangeResource(MethodView):
+    """
+    Frontend calls this immediately after redirect to exchange
+    the opaque auth_key for the real JWT tokens.
+    One-time use, 2-minute TTL.
+    """
+
+    def post(self):
+        client_ip = request.remote_addr
+        log_tag = f"[facebook_login_resource.py][FacebookLoginTokenExchangeResource][post][{client_ip}]"
+
+        data = request.get_json() or {}
+        auth_key = data.get("auth_key")
+
+        if not auth_key:
+            return jsonify({
+                "success": False,
+                "message": "Missing auth_key",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        # Consume — one-time use
+        redis_key = f"fb_auth_result:{auth_key}"
+        raw = redis_client.get(redis_key)
+
+        if not raw:
+            Log.warning(f"{log_tag} Invalid or expired auth_key attempted")
+            return jsonify({
+                "success": False,
+                "message": "Invalid or expired auth_key. Please log in again.",
+            }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+        redis_client.delete(redis_key)  # Delete immediately after read
+
+        try:
+            token_data = json.loads(raw)
+        except Exception:
+            return jsonify({
+                "success": False,
+                "message": "Malformed auth session",
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+        Log.info(f"{log_tag} auth_key exchanged successfully")
+        return jsonify(token_data), HTTP_STATUS_CODES["OK"]
+    
 # =========================================
 # SET PASSWORD (for Facebook users)
 # =========================================
