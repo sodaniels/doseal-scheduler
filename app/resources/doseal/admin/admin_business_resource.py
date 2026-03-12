@@ -77,6 +77,7 @@ from ....utils.media.cloudinary_client import (
 from ....utils.generators import (
     generate_reset_token,
     generate_confirm_email_token,
+    generate_confirm_email_token_init_registration
 )
 
 from ....utils.helpers import (
@@ -478,7 +479,7 @@ class RegisterBusinessResource(MethodView):
                         try:
                             return_url= business_data["return_url"]
                             token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
-                            reset_url = generate_confirm_email_token(return_url, token)
+                            reset_url = generate_confirm_email_token_init_registration(return_url, token)
             
                             update_code = User.update_auth_code(business_data["email"], token)
                             

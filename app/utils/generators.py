@@ -35,6 +35,15 @@ def generate_reset_token(base_url, token):
     reset_url = f"{base_url}reset-password?{urllib.parse.urlencode(query_params)}"
     return reset_url
 
+def generate_confirm_email_token_init_registration(return_url, token):
+    # Create a secure random token
+    # Construct the reset URL
+    base_url = os.getenv("BACK_END_BASE_URL")
+    # return_url = os.getenv("FRONT_END_BASE_URL") + '/confirm-account-status'
+    query_params = {"token": token, "return_url": return_url }
+    reset_url = f"{base_url}/confirm-account?{urllib.parse.urlencode(query_params)}"
+    return reset_url
+
 def generate_confirm_email_token(return_url, token):
     # Create a secure random token
     # Construct the reset URL
