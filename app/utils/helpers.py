@@ -1,6 +1,7 @@
 import secrets
 
-from flask import jsonify, g, redirect
+from flask.views import MethodView
+from flask import jsonify, g, redirect, request
 import re, jwt, os, hmac, json, hashlib, unicodedata, phonenumbers
 from datetime import datetime, timedelta
 from bson import ObjectId
@@ -393,7 +394,6 @@ def prepare_billpay_payment_payload(transaction):
         payment_data["mno"] = transaction.get("mno")
     
     return payment_data
-
 
 def send_transaction_status_message(transaction, callbackResponse, log_tag):
     body = callbackResponse
@@ -913,7 +913,6 @@ def make_log_tag(file, resource, method, ip, user_id, role, auth_business_id, ta
 
     return log_tag
 
-
 def sanitize_device_id(device_id: str, max_length: int = 50) -> str:
     """
     Convert a device_id into a safe Redis key component.
@@ -1007,7 +1006,6 @@ def build_receipt_sms(p: dict) -> str:
 
     return sms
 
-
 def env_bool(key: str, default: bool = False) -> bool:
     val = os.getenv(key)
     if val is None:
@@ -1094,6 +1092,43 @@ def _redirect_with_tokens(token_data: dict, return_url: str):
 
     return redirect(f"{base}?auth_key={auth_key}")
 
+
+# =========================================
+# SHARED HELPER
+# =========================================
+def _handle_token_exchange(log_tag: str, provider_name: str):
+    data = request.get_json() or {}
+    auth_key = data.get("auth_key")
+    from ..extensions.redis_conn import redis_client
+
+    if not auth_key:
+        return jsonify({
+            "success": False,
+            "message": "Missing auth_key",
+        }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+    redis_key = f"fb_auth_result:{auth_key}"
+    raw = redis_client.get(redis_key)
+
+    if not raw:
+        Log.warning(f"{log_tag} Invalid or expired auth_key attempted for {provider_name}")
+        return jsonify({
+            "success": False,
+            "message": "Invalid or expired auth_key. Please log in again.",
+        }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+    redis_client.delete(redis_key)  # One-time use
+
+    try:
+        token_data = json.loads(raw)
+    except Exception:
+        return jsonify({
+            "success": False,
+            "message": "Malformed auth session",
+        }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+    Log.info(f"{log_tag} auth_key exchanged successfully for {provider_name}")
+    return jsonify(token_data), HTTP_STATUS_CODES["OK"]
 
 
 

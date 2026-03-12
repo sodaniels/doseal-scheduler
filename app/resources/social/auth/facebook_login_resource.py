@@ -17,7 +17,9 @@ import json
 from ....constants.service_code import HTTP_STATUS_CODES, SYSTEM_USERS
 from ....utils.logger import Log
 from ....utils.helpers import (
-    create_token_response_admin, _redirect_with_tokens
+    create_token_response_admin, 
+    _redirect_with_tokens,
+    _handle_token_exchange
 )
 from ....utils.json_response import prepared_response
 from ....utils.generators import generate_client_id, generate_client_secret
@@ -779,51 +781,22 @@ class FacebookLoginCallbackResource(MethodView):
             }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
 
 
+# =========================================
+# FACEBOOK TOKEN EXCHANGE
+# =========================================
 @blp_facebook_login.route("/auth/facebook/business/token", methods=["POST"])
 class FacebookLoginTokenExchangeResource(MethodView):
     """
-    Frontend calls this immediately after redirect to exchange
-    the opaque auth_key for the real JWT tokens.
+    Exchange opaque auth_key for JWT tokens after Facebook OAuth redirect.
     One-time use, 2-minute TTL.
     """
 
     def post(self):
         client_ip = request.remote_addr
         log_tag = f"[facebook_login_resource.py][FacebookLoginTokenExchangeResource][post][{client_ip}]"
+        return _handle_token_exchange(log_tag, provider_name="facebook")
 
-        data = request.get_json() or {}
-        auth_key = data.get("auth_key")
 
-        if not auth_key:
-            return jsonify({
-                "success": False,
-                "message": "Missing auth_key",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        # Consume — one-time use
-        redis_key = f"fb_auth_result:{auth_key}"
-        raw = redis_client.get(redis_key)
-
-        if not raw:
-            Log.warning(f"{log_tag} Invalid or expired auth_key attempted")
-            return jsonify({
-                "success": False,
-                "message": "Invalid or expired auth_key. Please log in again.",
-            }), HTTP_STATUS_CODES["BAD_REQUEST"]
-
-        redis_client.delete(redis_key)  # Delete immediately after read
-
-        try:
-            token_data = json.loads(raw)
-        except Exception:
-            return jsonify({
-                "success": False,
-                "message": "Malformed auth session",
-            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
-
-        Log.info(f"{log_tag} auth_key exchanged successfully")
-        return jsonify(token_data), HTTP_STATUS_CODES["OK"]
-    
 # =========================================
 # SET PASSWORD (for Facebook users)
 # =========================================
