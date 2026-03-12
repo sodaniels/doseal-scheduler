@@ -168,6 +168,7 @@ def _redirect_to_frontend(path: str, selection_key: str):
 
     return redirect(f"{frontend_url}{path}?selection_key={selection_key}")
 
+
 def _delete_selection(provider: str, selection_key: str):
     key = f"{provider}_select:{selection_key}"
     try:
