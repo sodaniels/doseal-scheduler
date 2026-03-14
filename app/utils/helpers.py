@@ -632,7 +632,8 @@ def create_token_response_admin(user, client_ip, account_type, log_tag):
     business_id = str(user['business_id'])
     cash_session_id = str(user.get("cash_session_id"))
     user_data["business_id"] = business_id
-    user_data["user_id"] = str(user.get("_id"))
+    user_id = str(user.get("_id"))
+    user_data["user_id"] = user_id
     user_data["_id"] = str(user.get("_id"))
     
     if cash_session_id:
@@ -671,11 +672,12 @@ def create_token_response_admin(user, client_ip, account_type, log_tag):
     refresh_time_to_live = os.getenv("ADMIN_LOGIN_REFRESH_TOKEN_TIME_TO_LIVE", 900)
     
     Token.create_token(
-        client_id, 
+        client_id,
+        user_id,
         access_token, 
         refresh_token, 
         access_token_time_to_live, 
-        refresh_time_to_live
+        refresh_time_to_live,
     )
     
      # update last login

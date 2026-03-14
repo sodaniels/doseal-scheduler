@@ -82,7 +82,7 @@ from ....utils.generators import (
 
 from ....utils.helpers import (
     validate_and_format_phone_number, create_token_response_admin, 
-    generate_tokens, safe_decrypt
+    generate_tokens, safe_decrypt, stringify_object_ids
 )
 from ....utils.file_upload import upload_file
 
@@ -362,6 +362,8 @@ class RegisterBusinessResource(MethodView):
         user_data["email"] = business_data.get('email')
         user_data["phone_number"] = business_data.get('business_contact')
         user_data["password"] = business_data.get('password')
+        user_data["device_id"] = business_data.get('device_id')
+        user_data["ip_address"] = client_ip
         user_data["account_type"] = account_type
         
         business_data["password"] = business_data.get('password')
@@ -797,7 +799,10 @@ class LoginBusinessInitiateResource(MethodView):
                 "UNAUTHORIZED",
                 "Invalid email or password",
             )
-
+           
+        business_id = user.get("business_id")
+           
+        
         # Check if the user's credentials are not correct
         if not User.verify_password(email, user_data["password"]):
             Log.info(f"{log_tag} [{client_ip}][{email}]: email and password combination failed")
@@ -981,6 +986,8 @@ class LoginBusinessExecuteResource(MethodView):
             return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
         
         email = user_data.get("email")
+        
+        
     
         # Check if the user exists based on email
         user = User.get_user_by_email(email)
@@ -991,8 +998,8 @@ class LoginBusinessExecuteResource(MethodView):
                 "UNAUTHORIZED",
                 "Invalid email or password",
             )
+           
         try:
-            
             business_id = str(user.get("business_id"))
             business = Business.get_business_by_id(business_id)
             if not business: 
@@ -1028,6 +1035,24 @@ class LoginBusinessExecuteResource(MethodView):
             # remove otp from redis
             remove_redis(redisKey)
             Log.info(f"{log_tag} verification otp applied")
+            
+            
+            #logout from all other devices logged in with this account
+            try:
+                # Delete or invalidate the token from database
+                user_id = str(user.get("_id"))
+                tokens = Token.get_tokens(user_id)
+                for token in tokens:
+                    if token is not None:
+                        access_token = token.get("access_token")
+                        token_deleted = Token.delete_token(access_token)
+                        if token_deleted:
+                            Log.info(f"{log_tag} [{client_ip}]: old token invalidated.")
+                        else:
+                            Log.info(f"{log_tag}[{client_ip}]: token invalidation failed.")
+            except Exception as e:
+                Log.error(f"{log_tag}[{client_ip}]: logout error: {e}")
+                
             
             # proceed to create token when user payload was created
             return create_token_response_admin(

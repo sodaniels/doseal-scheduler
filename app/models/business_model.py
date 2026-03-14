@@ -582,6 +582,7 @@ class Token:
     def create_token(
         cls,
         client_id: str,
+        user_id: str,
         access_token: str,
         refresh_token: str,
         expires_in: int,
@@ -591,6 +592,7 @@ class Token:
             _drop_nones(
                 {
                     "client_id": client_id,
+                    "user_id": user_id,
                     "access_token": access_token,
                     "refresh_token": refresh_token,
                     "expires_in": int(expires_in),
@@ -603,6 +605,11 @@ class Token:
     @classmethod
     def get_token(cls, access_token: str):
         return db.get_collection(cls.collection_name).find_one({"access_token": access_token})
+    
+    @classmethod
+    def get_tokens(cls, user_id: str):
+        cursor = db.get_collection(cls.collection_name).find({"user_id": user_id})
+        return [doc for doc in cursor]
 
     @classmethod
     def delete_token(cls, access_token: str) -> bool:

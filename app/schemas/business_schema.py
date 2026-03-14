@@ -30,6 +30,14 @@ class BusinessSchema(Schema):
             "invalid": "Invalid Tenant ID"
         }
     )
+    
+    device_id = fields.Str(
+        required=True,
+        error_messages={
+            "required": "Device ID is required",
+            "invalid": "Invalid Device ID"
+        }
+    )
 
     business_name = fields.Str(required=True, validate=validate.Length(min=2, max=200))
     start_date = fields.Str(required=False, validate=validate_date_format)

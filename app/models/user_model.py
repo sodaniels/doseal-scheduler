@@ -86,6 +86,15 @@ class User(BaseModel):
         self.status = encrypt_data(status) if status else None
         self.account_type = encrypt_data(account_type) if account_type else None
         self.type = encrypt_data(type) if type else None
+        
+        # ----------------------
+        # DEVICES COLLECTION
+        # ----------------------
+        self.devices = []
+        self.device_id = device_id if device_id else None
+        # If a device_id is provided at registration, add it into devices[]
+        if device_id is not None or ip_address is not None:
+            self.add_device(device_id, ip_address)
 
         # ----------------------
         # CLIENT / LOGIN INFO
