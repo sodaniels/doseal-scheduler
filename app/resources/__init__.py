@@ -105,6 +105,7 @@ from .doseal.admin.trial_subscription_resource import blp_trial_subscription
 from .social.media_management_resource import blp_media_management
 from .doseal.admin.admin_legal_page_resource import blp_legal_admin
 from .social.legal_page_public_resource import blp_legal_public
+from .social.branch_resource import blp_branch
 
 __all__ = [
     #-------------------
@@ -212,6 +213,7 @@ __all__ = [
     "payment_webhook_blp",
     "payment_blp",
     "blp_product_import",
+    "blp_branch",
 ]
 
 

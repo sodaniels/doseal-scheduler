@@ -1133,8 +1133,24 @@ def _handle_token_exchange(log_tag: str, provider_name: str):
     return jsonify(token_data), HTTP_STATUS_CODES["OK"]
 
 
+def _resolve_business_id(user_info, payload_business_id=None):
+    account_type = user_info.get("account_type")
+    auth_business_id = str(user_info.get("business_id"))
+    if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and payload_business_id:
+        return payload_business_id
+    return auth_business_id
 
-
+def _safe_account_type(value):
+    if not value or not isinstance(value, str):
+        return ""
+    if len(value) <= 30:
+        return value.upper()
+    try:
+        from ..utils.crypt import decrypt_data
+        decrypted = decrypt_data(value)
+        return decrypted.upper() if decrypted else ""
+    except:
+        return value.upper()
 
 
 

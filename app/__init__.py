@@ -18,10 +18,7 @@ from .routes import (
     register_admin_routes,
 )
 from .middleware.access_mode import detect_access_mode
-from .utils.error_handlers import (
-    handle_permission_error, handle_validation_error, handle_type_error,
-    handle_rate_limit
-)
+from .utils.error_handlers import register_error_handlers
 from app.config import load_config
 from .middleware.subscription_scheduler import run_scheduled_subscription_activation
 from .jobs.trial_expiration_job import register_trial_commands
@@ -65,11 +62,8 @@ def create_social_app():
     jwt.init_app(app)
     cors.init_app(app)
 
-    # Register custom error handlers
-    app.errorhandler(PermissionError)(handle_permission_error)
-    app.errorhandler(ValidationError)(handle_validation_error)
-    app.errorhandler(TypeError)(handle_type_error)
-    app.errorhandler(RateLimitExceeded)(handle_rate_limit)
+    # Register error handlers
+    register_error_handlers(app)
 
     # Add global middleware
     app.before_request(detect_access_mode)
@@ -141,11 +135,8 @@ def create_mto_admin_app():
         setup_database_indexes()
     
 
-    # Register custom error handlers
-    app.errorhandler(PermissionError)(handle_permission_error)
-    app.errorhandler(ValidationError)(handle_validation_error)
-    app.errorhandler(TypeError)(handle_type_error)
-    app.errorhandler(RateLimitExceeded)(handle_rate_limit)
+    # Register error handlers
+    register_error_handlers(app)
 
     # Add global middleware
     app.before_request(detect_access_mode)
