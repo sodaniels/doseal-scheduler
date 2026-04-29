@@ -106,6 +106,7 @@ from .social.media_management_resource import blp_media_management
 from .doseal.admin.admin_legal_page_resource import blp_legal_admin
 from .social.legal_page_public_resource import blp_legal_public
 from .social.branch_resource import blp_branch
+from .social.integration_resource import blp_integration
 
 __all__ = [
     #-------------------
@@ -214,6 +215,7 @@ __all__ = [
     "payment_blp",
     "blp_product_import",
     "blp_branch",
+    "blp_integration",
 ]
 
 
