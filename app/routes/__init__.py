@@ -55,6 +55,7 @@ from ..resources import (
     blp_product_import,
     blp_branch,
     blp_integration,
+    blp_provider_setting,
 )
 
 
@@ -266,6 +267,7 @@ def register_admin_routes(app, api):
         blp_product_import,
         blp_branch,
         blp_integration,
+        blp_provider_setting,
         
     ]
 

@@ -107,6 +107,7 @@ from .doseal.admin.admin_legal_page_resource import blp_legal_admin
 from .social.legal_page_public_resource import blp_legal_public
 from .social.branch_resource import blp_branch
 from .social.integration_resource import blp_integration
+from .social.provider_setting_resource import blp_provider_setting
 
 __all__ = [
     #-------------------
@@ -216,6 +217,7 @@ __all__ = [
     "blp_product_import",
     "blp_branch",
     "blp_integration",
+    "blp_provider_setting",
 ]
 
 
