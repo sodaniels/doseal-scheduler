@@ -87,6 +87,8 @@ class Package(BaseModel):
         "bulk_schedule_limit",
         "competitor_tracking",
         "history_search_days",
+        "monthly_post_limit",
+        "media_storage_gb", 
     }
 
     def __init__(
@@ -106,6 +108,8 @@ class Package(BaseModel):
         bulk_schedule_limit: Optional[int] = None,
         competitor_tracking: Optional[int] = None,
         history_search_days: Optional[int] = None,
+        monthly_post_limit: Optional[int] = None,
+        media_storage_gb: Optional[int] = None,
 
         # Feature flags
         features: Optional[Dict[str, Any]] = None,
@@ -162,6 +166,12 @@ class Package(BaseModel):
         if status:
             self.status = encrypt_data(status)
             self.hashed_status = hash_data(status)
+            
+        if monthly_post_limit is not None:
+            self.monthly_post_limit = int(monthly_post_limit)
+
+        if media_storage_gb is not None:
+            self.media_storage_gb = int(media_storage_gb)
 
         # -------------------------
         # Pricing (ENCRYPTED)
@@ -360,6 +370,9 @@ class Package(BaseModel):
             "bulk_schedule_limit": getattr(self, "bulk_schedule_limit", None),
             "competitor_tracking": getattr(self, "competitor_tracking", None),
             "history_search_days": getattr(self, "history_search_days", None),
+            
+            "monthly_post_limit": getattr(self, "monthly_post_limit", None),
+            "media_storage_gb":   getattr(self, "media_storage_gb", None),
 
             "features": getattr(self, "features", None),
 

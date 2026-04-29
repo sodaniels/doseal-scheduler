@@ -322,6 +322,18 @@ class SocialAccount(BaseModel):
         return res.acknowledged
 
     @classmethod
+    def delete_by_id(cls, post_id: str, business_id: str) -> bool:
+        try:
+            col = db_ext.get_collection(cls.collection_name)
+            result = col.delete_one({
+                "_id":         ObjectId(post_id),
+                "business_id": str(business_id),
+            })
+            return result.deleted_count > 0
+        except Exception:
+            return False
+    
+    @classmethod
     def ensure_indexes(cls):
         col = db_ext.get_collection(cls.collection_name)
         col.create_index(

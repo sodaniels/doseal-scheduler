@@ -392,6 +392,80 @@ class ListScheduledPostsResource(MethodView):
                 errors=[str(e)],
             )
 
+
+# -------------------------------------------------------------------
+# GET /socials/scheduled_posts
+# -------------------------------------------------------------------
+@blp_social_posts.route("/social/scheduled-posts/<string:post_id>", methods=["DELETE"])
+class UnifiedDeleteScheduledPostResource(MethodView):
+    @token_required
+    def delete(self, post_id):
+        client_ip = request.remote_addr
+        user_info = g.get("current_user", {}) or {}
+
+        auth_user__id   = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        account_type    = user_info.get("account_type")
+
+        log_tag = make_log_tag(
+            "publish_resource.py",
+            "UnifiedDeleteScheduledPostResource",
+            "delete",
+            client_ip,
+            auth_user__id,
+            account_type,
+            auth_business_id,
+            auth_business_id,
+        )
+
+        DELETABLE_STATUSES = {ScheduledPost.STATUS_PENDING, ScheduledPost.STATUS_SCHEDULED, ScheduledPost.STATUS_DRAFT}
+
+        try:
+            Log.info(f"{log_tag} Delete request for post_id={post_id}")
+
+            # ── 1. Fetch the post and verify ownership ──
+            post = ScheduledPost.get_by_id(post_id, auth_business_id)
+            if not post:
+                Log.info(f"{log_tag} Post not found: {post_id}")
+                return jsonify({
+                    "success": False,
+                    "message": "Post not found.",
+                }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+            # ── 2. Guard: only allow deletion of scheduled / draft posts ──
+            current_status = (post.get("status") or "").lower().strip()
+            if current_status not in DELETABLE_STATUSES:
+                Log.info(f"{log_tag} Refusing delete — status is '{current_status}' for post_id={post_id}")
+                return jsonify({
+                    "success": False,
+                    "message": f"Only posts with status 'scheduled' or 'draft' can be deleted. "
+                               f"Current status: '{current_status}'.",
+                }), HTTP_STATUS_CODES["BAD_REQUEST"]
+
+            # ── 3. Delete ──
+            deleted = SocialAccount.delete_by_id(post_id, auth_business_id)
+            if not deleted:
+                Log.info(f"{log_tag} Delete failed for post_id={post_id}")
+                return jsonify({
+                    "success": False,
+                    "message": "Failed to delete post. It may have already been removed.",
+                }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+            Log.info(f"{log_tag} Post deleted successfully: {post_id}")
+            return jsonify({
+                "success": True,
+                "message": "Post deleted successfully.",
+                "data": {"post_id": post_id},
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.info(f"{log_tag} Unexpected error deleting post: {e}")
+            return jsonify({
+                "success": False,
+                "message": "An unexpected error occurred.",
+                "error": str(e),
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
 # -------------------------------------------------------------------
 # POST /social/account-disconnect
 # -------------------------------------------------------------------

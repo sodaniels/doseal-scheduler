@@ -17,7 +17,7 @@ STATUSES = ["Active", "Inactive", "Deprecated"]
 class PackageSchema(Schema):
     """Schema for Package validation (Social Media Management SaaS)."""
     class Meta:
-        unknown = EXCLUDE  # optional: ignore extra fields instead of failing
+        unknown = EXCLUDE
 
     name = fields.Str(
         required=True,
@@ -43,13 +43,11 @@ class PackageSchema(Schema):
         error_messages={"required": "Billing period is required"},
     )
 
-    # NEW: per-user vs flat vs custom
     price_model = fields.Str(
         load_default="per_user",
         validate=validate.OneOf(PRICE_MODELS),
     )
 
-    # Allow Enterprise/custom pricing => price can be null
     price = fields.Float(
         required=False,
         allow_none=True,
@@ -72,36 +70,57 @@ class PackageSchema(Schema):
         validate=lambda x: x >= 0,
     )
 
-    # -----------------------------
-    # UPDATED limits for social app
-    # -----------------------------
-    max_users = fields.Int(required=False, allow_none=True, validate=lambda x: x > 0 if x else True)
+    # ── Limit fields — -1 = unlimited sentinel, null = not set, positive = capped ──
+
+    max_users = fields.Int(
+        required=False,
+        allow_none=True,
+        validate=lambda x: x == -1 or x > 0 if x is not None else True,
+        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
+    )
 
     max_social_accounts = fields.Int(
         required=False,
         allow_none=True,
-        validate=lambda x: x > 0 if x else True,
+        validate=lambda x: x == -1 or x > 0 if x is not None else True,
+        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
     )
 
     bulk_schedule_limit = fields.Int(
         required=False,
         allow_none=True,
-        validate=lambda x: x > 0 if x else True,
+        validate=lambda x: x == -1 or x > 0 if x is not None else True,
+        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
     )
 
     competitor_tracking = fields.Int(
         required=False,
         allow_none=True,
-        validate=lambda x: x > 0 if x else True,
+        validate=lambda x: x == -1 or x > 0 if x is not None else True,
+        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
     )
 
     history_search_days = fields.Int(
         required=False,
         allow_none=True,
-        validate=lambda x: x > 0 if x else True,
+        validate=lambda x: x == -1 or x > 0 if x is not None else True,
+        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
     )
 
-    # Feature flags (kept as dict for flexibility)
+    monthly_post_limit = fields.Int(
+        required=False,
+        allow_none=True,
+        validate=lambda x: x == -1 or x > 0 if x is not None else True,
+        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
+    )
+
+    media_storage_gb = fields.Int(
+        required=False,
+        allow_none=True,
+        validate=lambda x: x == -1 or x > 0 if x is not None else True,
+        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
+    )
+
     features = fields.Dict(required=False, load_default={})
 
     is_popular = fields.Bool(load_default=False)
