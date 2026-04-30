@@ -57,6 +57,7 @@ from ..resources import (
     blp_integration,
     blp_provider_setting,
     blp_admin_discount,
+    blp_form,
     #webhooks
     hubtel_blp,
     asoriba_blp,
@@ -278,6 +279,7 @@ def register_admin_routes(app, api):
         blp_integration,
         blp_provider_setting,
         blp_admin_discount,
+        blp_form,
         #webhooks
         hubtel_blp,
         asoriba_blp,
