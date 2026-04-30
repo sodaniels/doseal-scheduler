@@ -17,6 +17,15 @@ from ..models.social.ad_account import AdAccount, AdCampaign
 from ..models.social.social_auth import SocialAuth
 from ..models.social.password_reset_token import PasswordResetToken
 
+from ..models.admin.paystack_authorization import PaystackAuthorization
+from ..models.social.branch_model import Branch
+from ..models.social.provider_setting_model import ProviderSetting
+from ..models.social.integration_model import Integration
+from ..models.social.integration_model import Webhook
+from ..models.social.form_model import Form
+from ..models.social.payment_method_model import PaymentMethod
+
+
 #helpers
 from ..utils.logger import Log
 
@@ -64,6 +73,15 @@ def setup_database_indexes():
         AdAccount.ensure_indexes()
         SocialAuth.ensure_indexes()
         PasswordResetToken.create_indexes()
+        
+        PaystackAuthorization.create_indexes()
+        Branch.create_indexes()
+        ProviderSetting.create_indexes()
+        Branch.create_indexes()
+        Integration.create_indexes()
+        Webhook.create_indexes()
+        Form.create_indexes()
+        PaymentMethod.create_indexes()
         
         # Mark as completed
         mark_indexes_created()

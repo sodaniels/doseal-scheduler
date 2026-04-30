@@ -113,7 +113,73 @@ class SubscriptionService:
     # ---------------------------------------------------------
     # CREATE SUBSCRIPTION
     # ---------------------------------------------------------
+    @classmethod
 
+    def get_active_subscription(cls, business_id: str) -> Optional[dict]:
+
+        """
+
+        Return the current active/trial subscription for a business.
+
+        This is the method used by other services like StorageQuota.
+
+        """
+
+        log_tag = f"[subscription_service.py][SubscriptionService][get_active_subscription][{business_id}]"
+
+        try:
+
+            if not business_id:
+
+                return None
+
+            current = Subscription.get_current_access_by_business(str(business_id))
+
+            if not current:
+
+                return None
+
+            return cls._normalise_subscription_doc(current)
+
+        except Exception as e:
+
+            Log.error(f"{log_tag} error: {e}", exc_info=True)
+
+            return None
+
+    @classmethod
+
+    def get_latest_subscription(cls, business_id: str) -> Optional[dict]:
+
+        """
+
+        Optional helper if you want a normalized latest subscription too.
+
+        """
+
+        log_tag = f"[subscription_service.py][SubscriptionService][get_latest_subscription][{business_id}]"
+
+        try:
+
+            if not business_id:
+
+                return None
+
+            latest = Subscription.get_latest_by_business(str(business_id))
+
+            if not latest:
+
+                return None
+
+            return cls._normalise_subscription_doc(latest)
+
+        except Exception as e:
+
+            Log.error(f"{log_tag} error: {e}", exc_info=True)
+
+            return None
+       
+        
     @staticmethod
     def create_subscription(
         business_id,
