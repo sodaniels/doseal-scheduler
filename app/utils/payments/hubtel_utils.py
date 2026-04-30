@@ -4,31 +4,62 @@ import base64
 import hmac
 import hashlib
 from flask import request
-from ...utils.logger import Log
+from ..logger import Log
 from ...config import Config
 
 
-def get_hubtel_auth_token():
-    """
-    Generate Hubtel Basic Auth token.
-    Equivalent to: Buffer.from(`${username}:${password}`).toString("base64")
+# def get_hubtel_auth_token():
+#     """
+#     Generate Hubtel Basic Auth token.
+#     Equivalent to: Buffer.from(`${username}:${password}`).toString("base64")
     
-    Returns:
-        String - Base64 encoded auth token
-    """
-    username = Config.HUBTEL_USERNAME
-    password = Config.HUBTEL_PASSWORD
+#     Returns:
+#         String - Base64 encoded auth token
+#     """
+#     username = Config.HUBTEL_USERNAME
+#     password = Config.HUBTEL_PASSWORD
     
-    if not username or not password:
-        Log.error("[get_hubtel_auth_token] Hubtel credentials not configured")
+#     if not username or not password:
+#         Log.error("[get_hubtel_auth_token] Hubtel credentials not configured")
+#         return None
+    
+#     # Create the Base64 encoded string
+#     auth_string = f"{username}:{password}"
+#     auth_bytes = auth_string.encode('utf-8')
+#     auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
+    
+#     return auth_b64
+
+def get_hubtel_auth_token(client_id=None, client_secret=None):
+    """
+    Generate Hubtel Basic auth token.
+
+    Priority:
+      1. explicit credentials passed in
+      2. env fallback
+    """
+    log_tag = "[hubtel_utils.py][get_hubtel_auth_token]"
+
+    try:
+        resolved_client_id = client_id or os.getenv("HUBTEL_CLIENT_ID")
+        resolved_client_secret = client_secret or os.getenv("HUBTEL_CLIENT_SECRET")
+
+        if not resolved_client_id or not resolved_client_secret:
+            Log.error(f"{log_tag} Hubtel client_id/client_secret not configured")
+            return None
+
+        raw = f"{resolved_client_id}:{resolved_client_secret}"
+        token = base64.b64encode(raw.encode("utf-8")).decode("utf-8")
+
+        Log.info(
+            f"{log_tag} Auth token generated successfully using "
+            f"{'passed credentials' if client_id or client_secret else 'env credentials'}"
+        )
+        return token
+
+    except Exception as e:
+        Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
         return None
-    
-    # Create the Base64 encoded string
-    auth_string = f"{username}:{password}"
-    auth_bytes = auth_string.encode('utf-8')
-    auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
-    
-    return auth_b64
 
 def validate_hubtel_callback_amount(callback_amount, expected_amount, tolerance=0.01):
     """
@@ -272,3 +303,4 @@ def get_hubtel_response_code_message(response_code):
         "9999": "Failed - Unknown error",
     }
     return response_codes.get(response_code, f"Unknown response code: {response_code}")
+

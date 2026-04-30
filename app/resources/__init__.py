@@ -108,6 +108,15 @@ from .social.legal_page_public_resource import blp_legal_public
 from .social.branch_resource import blp_branch
 from .social.integration_resource import blp_integration
 from .social.provider_setting_resource import blp_provider_setting
+from .social.discount_resource import blp_admin_discount
+#webhooks
+from .doseal.webhooks.paystack_webhook_resource import paystack_blp
+from .doseal.webhooks.hubtel_webhook_resource import hubtel_blp
+from .doseal.webhooks.asoriba_webhook_resource import asoriba_blp
+from .doseal.webhooks.stripe_webhook_resource import stripe_blp
+from .doseal.webhooks.paypal_webhook_resource import paypal_blp
+from .doseal.webhooks.flutterwave_webhook_resource import flutterwave_blp
+from .doseal.webhooks.mpesa_webhook_resource import mpesa_blp
 
 __all__ = [
     #-------------------
@@ -218,6 +227,14 @@ __all__ = [
     "blp_branch",
     "blp_integration",
     "blp_provider_setting",
+    "blp_admin_discount",
+    #webwooks
+    "hubtel_blp",
+    "asoriba_blp",
+    "stripe_blp",
+    "paypal_blp",
+    "flutterwave_blp",
+    "mpesa_blp",
 ]
 
 

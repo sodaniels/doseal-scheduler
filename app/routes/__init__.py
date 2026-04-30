@@ -56,6 +56,14 @@ from ..resources import (
     blp_branch,
     blp_integration,
     blp_provider_setting,
+    blp_admin_discount,
+    #webhooks
+    hubtel_blp,
+    asoriba_blp,
+    stripe_blp,
+    paypal_blp,
+    flutterwave_blp,
+    mpesa_blp,
 )
 
 
@@ -268,6 +276,14 @@ def register_admin_routes(app, api):
         blp_branch,
         blp_integration,
         blp_provider_setting,
+        blp_admin_discount,
+        #webhooks
+        hubtel_blp,
+        asoriba_blp,
+        stripe_blp,
+        paypal_blp,
+        flutterwave_blp,
+        mpesa_blp,
         
     ]
 

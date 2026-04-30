@@ -1152,7 +1152,21 @@ def _safe_account_type(value):
     except:
         return value.upper()
 
+def _require_system_owner():
+    user_info = g.get("current_user", {}) or {}
+    account_type = user_info.get("account_type", "")
+    if account_type and len(account_type) > 30:
+        try:
+            account_type = decrypt_data(account_type)
+        except Exception:
+            pass
+    if (account_type or "").upper() != "SYSTEM_OWNER":
+        return prepared_response(False, "FORBIDDEN", "Only System Owner can manage promo codes.")
+    return None
 
+def _is_system_billing_payment(purchase_type):
+    """System billing (subscription/storage) vs church collection (donation/offering/event)."""
+    return purchase_type in ("subscription", "storage_addon")
 
 
 
