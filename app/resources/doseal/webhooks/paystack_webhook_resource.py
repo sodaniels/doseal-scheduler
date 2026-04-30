@@ -40,7 +40,7 @@ paystack_blp = Blueprint(
 def _is_system_billing_payment(purchase_type):
     """
     Determine if this payment is a system billing transaction (subscription/storage)
-    vs a church collection (donation, offering, event, etc.)
+    vs a social collection (donation, offering, event, etc.)
     """
     return purchase_type in ("subscription", "storage_addon")
 
@@ -141,7 +141,7 @@ def _record_discount_redemption(metadata, ps_metadata, business_id, user__id, su
 
     if discount_id and discount_amount_saved > 0:
         try:
-            from ....models.church.discount_model import Discount
+            from ....models.social.discount_model import Discount
 
             Discount.record_redemption(
                 discount_id=discount_id,
@@ -160,7 +160,7 @@ def _save_card_from_paystack(data, business_id, user_id, user__id, log_tag):
         return
 
     try:
-        from ....models.church.payment_method_model import PaymentMethod
+        from ....models.social.payment_method_model import PaymentMethod
 
         PaymentMethod.save_from_paystack(
             business_id=str(business_id),
@@ -189,7 +189,7 @@ def _save_card_from_paystack(data, business_id, user_id, user__id, log_tag):
 
 def _process_storage_addon_purchase(payment, metadata, amount_detail, business_id, user__id, reference, log_tag):
     try:
-        from ....models.church.form_model import StorageQuota
+        from ....models.social.form_model import StorageQuota
 
         storage_addon_gb = (
             (metadata or {}).get("storage_addon_gb")

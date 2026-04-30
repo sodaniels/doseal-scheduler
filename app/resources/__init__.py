@@ -235,6 +235,7 @@ __all__ = [
     "paypal_blp",
     "flutterwave_blp",
     "mpesa_blp",
+    "paystack_blp",
 ]
 
 

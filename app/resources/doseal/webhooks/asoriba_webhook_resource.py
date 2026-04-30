@@ -75,7 +75,7 @@ def _record_discount_redemption(metadata, asoriba_metadata, business_id, user__i
 
     if discount_id and discount_amount_saved > 0:
         try:
-            from ....models.church.discount_model import Discount
+            from ....models.social.discount_model import Discount
             Discount.record_redemption(
                 discount_id=discount_id,
                 business_id=str(business_id),
@@ -362,7 +362,7 @@ class AsoribaWebhook(MethodView):
 
                     if purchase_type == "storage_addon":
                         try:
-                            from ....models.church.form_model import StorageQuota
+                            from ....models.social.form_model import StorageQuota
 
                             addon_gb = int(storage_addon_gb or 0)
                             if addon_gb > 0:

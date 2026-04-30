@@ -64,6 +64,7 @@ from ..resources import (
     paypal_blp,
     flutterwave_blp,
     mpesa_blp,
+    paystack_blp,
 )
 
 
@@ -284,6 +285,7 @@ def register_admin_routes(app, api):
         paypal_blp,
         flutterwave_blp,
         mpesa_blp,
+        paystack_blp,
         
     ]
 

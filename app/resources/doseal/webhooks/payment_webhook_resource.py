@@ -101,7 +101,7 @@ def _record_discount_redemption(metadata, ps_metadata, business_id, user__id, su
 
     if discount_id and discount_amount_saved > 0:
         try:
-            from ....models.church.discount_model import Discount
+            from ....models.social.discount_model import Discount
 
             Discount.record_redemption(
                 discount_id=discount_id,
@@ -129,7 +129,7 @@ def _save_card_from_paystack(data, business_id, user_id, user__id, log_tag):
         return
 
     try:
-        from ....models.church.payment_method_model import PaymentMethod
+        from ....models.social.payment_method_model import PaymentMethod
 
         saved_method = PaymentMethod.save_from_paystack(
             business_id=str(business_id),
@@ -174,7 +174,7 @@ def _process_storage_addon_purchase(payment, metadata, amount_detail, business_i
     Returns: (success: bool, result: dict|None, error: str|None)
     """
     try:
-        from ....models.church.form_model import StorageQuota
+        from ....models.social.form_model import StorageQuota
 
         purchase_type = (
             (metadata or {}).get("purchase_type")

@@ -87,7 +87,7 @@ def _record_discount_redemption(metadata, business_id, user__id, subscription_id
 
     if discount_id and discount_amount_saved > 0:
         try:
-            from ....models.church.discount_model import Discount
+            from ....models.social.discount_model import Discount
             Discount.record_redemption(
                 discount_id=discount_id,
                 business_id=str(business_id),
@@ -101,7 +101,7 @@ def _record_discount_redemption(metadata, business_id, user__id, subscription_id
 
 def _process_storage_addon_purchase(payment, metadata, amount_detail, business_id, user__id, reference, log_tag):
     try:
-        from ....models.church.form_model import StorageQuota
+        from ....models.social.form_model import StorageQuota
 
         storage_addon_gb = (
             (metadata or {}).get("storage_addon_gb")

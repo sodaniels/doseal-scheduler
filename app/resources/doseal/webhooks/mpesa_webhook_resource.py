@@ -10,7 +10,7 @@ M-Pesa (Daraja API) Webhook & Utility Endpoints
 5. POST /webhooks/payment/mpesa/reversal-result  - Reversal result
 6. POST /webhooks/payment/mpesa/reversal-timeout - Reversal timeout
 
-M-Pesa is church-facing (collections) — no subscription logic.
+M-Pesa is social-facing (collections) — no subscription logic.
 """
 
 import json
