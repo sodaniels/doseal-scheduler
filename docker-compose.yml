@@ -10,12 +10,14 @@ services:
       dockerfile: docker/app.Dockerfile
 
     ports:
-      - "127.0.0.1:9090:9090"
+      - "${APP_BIND_HOST:-127.0.0.1}:${HOST_PORT:-9090}:${CONTAINER_PORT:-9090}"
 
     env_file:
       - .env
 
     environment:
+      APP_ENV: ${APP_ENV}
+
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_CLUSTER: ${DB_CLUSTER}
@@ -25,25 +27,22 @@ services:
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379/0
 
-      # ✅ Ollama (Docker-internal hostname)
-      # OLLAMA_HOST: http://ollama:11434
-
       APP_LOG_DIR: /app/storage/logs
-      PORT: 9090
+      PORT: ${CONTAINER_PORT:-9091}
+
+      # OLLAMA_HOST: ${OLLAMA_HOST}
 
     depends_on:
       redis:
         condition: service_healthy
-      # ollama:
-      #   condition: service_healthy
 
     command: >
       sh -c "
       gunicorn wsgi:application
-      -b 0.0.0.0:9090
-      --workers 4
-      --timeout 120
-      --log-level info
+      -b 0.0.0.0:${CONTAINER_PORT:-9091}
+      --workers ${GUNICORN_WORKERS:-4}
+      --timeout ${GUNICORN_TIMEOUT:-120}
+      --log-level ${GUNICORN_LOG_LEVEL:-info}
       --access-logfile -
       --error-logfile -
       --forwarded-allow-ips='*'
@@ -67,6 +66,8 @@ services:
       - .env
 
     environment:
+      APP_ENV: ${APP_ENV}
+
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_CLUSTER: ${DB_CLUSTER}
@@ -76,19 +77,16 @@ services:
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379/0
 
-      # ✅ Ollama
-      # OLLAMA_HOST: http://ollama:11434
-
       APP_LOG_DIR: /app/storage/logs
+
+      # OLLAMA_HOST: ${OLLAMA_HOST}
 
     depends_on:
       redis:
         condition: service_healthy
-      # ollama:
-      #   condition: service_healthy
 
     command: >
-      sh -c "rq worker publish --url redis://redis:6379/0"
+      sh -c "rq worker ${RQ_QUEUE:-publish} --url redis://redis:6379/0"
 
     volumes:
       - ./storage/logs:/app/storage/logs
@@ -108,20 +106,17 @@ services:
       - .env
 
     environment:
+      APP_ENV: ${APP_ENV}
       REDIS_URL: redis://redis:6379/0
       REDIS_HOST: redis
       REDIS_PORT: 6379
-
-      # ✅ Ollama
-      # OLLAMA_HOST: http://ollama:11434
-
       APP_LOG_DIR: /app/storage/logs
+
+      # OLLAMA_HOST: ${OLLAMA_HOST}
 
     depends_on:
       redis:
         condition: service_healthy
-      # ollama:
-      #   condition: service_healthy
 
     command: >
       sh -c "rqscheduler --url redis://redis:6379/0"
@@ -151,31 +146,24 @@ services:
 
 
   # ----------------------------
-  # OLLAMA (LLM ENGINE)
+  # OLLAMA (OPTIONAL)
   # ----------------------------
   # ollama:
   #   image: ollama/ollama:latest
   #   container_name: doseal_ollama
-
-  #   # 🔐 Bind only to localhost (safe)
   #   ports:
-  #     - "127.0.0.1:11434:11434"
-
+  #     - "${OLLAMA_BIND_HOST:-127.0.0.1}:${OLLAMA_HOST_PORT:-11434}:11434"
   #   volumes:
   #     - ollama_data:/root/.ollama
-
   #   environment:
-  #     OLLAMA_HOST: 0.0.0.0:11434 
-
+  #     OLLAMA_HOST: 0.0.0.0:11434
   #   restart: unless-stopped
-
   #   healthcheck:
   #     test: ["CMD", "curl", "-f", "http://localhost:11434/v1/models"]
   #     interval: 10s
   #     timeout: 5s
   #     retries: 30
 
-
 volumes:
   redis_data:
-  # ollama_data: //uncomment if using Ollama with local storage
+  # ollama_data:
