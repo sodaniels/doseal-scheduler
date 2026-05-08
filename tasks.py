@@ -8,7 +8,7 @@ from app.utils.logger import Log
 load_dotenv()
 
 MAILGUN_API_KEY   = os.getenv("MAILGUN_API_KEY")
-MAILGUN_DOMAIN    = os.getenv("INSTNTMNY_MAILGUN_DOMAIN")   # e.g. mg.example.com
+MAILGUN_DOMAIN    = os.getenv("MAILGUN_DOMAIN")   # e.g. mg.example.com
 SENDER_EMAIL      = os.getenv("SENDER_EMAIL")                   # e.g. info@mg.example.com
 MAIL_NAME         = os.getenv("MAIL_NAME", "Instntmny Transfer")
 MAILGUN_API_HOST  = os.getenv("MAILGUN_API_HOST", "api.mailgun.net")  # use "api.eu.mailgun.net" if EU region

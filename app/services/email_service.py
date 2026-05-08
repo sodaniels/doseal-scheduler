@@ -55,7 +55,7 @@ def load_email_config() -> EmailConfig:
         from_name=from_name,
         templates_dir=templates_dir,
         mailgun_api_key=os.getenv("MAILGUN_API_KEY"),
-        mailgun_domain=os.getenv("INSTNTMNY_MAILGUN_DOMAIN"),
+        mailgun_domain=os.getenv("MAILGUN_DOMAIN"),
         mailgun_api_host=os.getenv("MAILGUN_API_HOST", "api.mailgun.net"),
         smtp_host=os.getenv("SMTP_HOST"),
         smtp_port=int(os.getenv("SMTP_PORT", "587")),

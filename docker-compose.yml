@@ -16,7 +16,7 @@ services:
       - .env
 
     environment:
-      APP_ENV: ${APP_ENV}
+      APP_ENV: ${APP_ENV:-production}
 
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
@@ -28,7 +28,7 @@ services:
       REDIS_URL: redis://redis:6379/0
 
       APP_LOG_DIR: /app/storage/logs
-      PORT: ${CONTAINER_PORT:-9091}
+      PORT: ${CONTAINER_PORT:-9090}
 
       # OLLAMA_HOST: ${OLLAMA_HOST}
 
@@ -39,7 +39,7 @@ services:
     command: >
       sh -c "
       gunicorn wsgi:application
-      -b 0.0.0.0:${CONTAINER_PORT:-9091}
+      -b 0.0.0.0:${CONTAINER_PORT:-9090}
       --workers ${GUNICORN_WORKERS:-4}
       --timeout ${GUNICORN_TIMEOUT:-120}
       --log-level ${GUNICORN_LOG_LEVEL:-info}
@@ -66,7 +66,7 @@ services:
       - .env
 
     environment:
-      APP_ENV: ${APP_ENV}
+      APP_ENV: ${APP_ENV:-production}
 
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
@@ -106,10 +106,12 @@ services:
       - .env
 
     environment:
-      APP_ENV: ${APP_ENV}
+      APP_ENV: ${APP_ENV:-production}
+
       REDIS_URL: redis://redis:6379/0
       REDIS_HOST: redis
       REDIS_PORT: 6379
+
       APP_LOG_DIR: /app/storage/logs
 
       # OLLAMA_HOST: ${OLLAMA_HOST}
@@ -146,11 +148,11 @@ services:
 
 
   # ----------------------------
-  # OLLAMA (OPTIONAL)
+  # OLLAMA OPTIONAL
   # ----------------------------
   # ollama:
   #   image: ollama/ollama:latest
-  #   container_name: doseal_ollama
+  #   container_name: scheduler_doseal_ollama
   #   ports:
   #     - "${OLLAMA_BIND_HOST:-127.0.0.1}:${OLLAMA_HOST_PORT:-11434}:11434"
   #   volumes:
